@@ -32,10 +32,13 @@ import {
   Outlet,
 } from '@tanstack/react-router'
 import type { Workflow } from '@agent-workflow/shared'
+import { WORKFLOW_NAME_RE, WORKGROUP_NAME_RE } from '@agent-workflow/shared'
 import { setBaseUrl, setToken } from '../src/stores/auth'
 import {
   EMPTY_WORKFLOW_DEFINITION,
   buildQuickCreateWorkflowPayload,
+  workflowNameError,
+  workflowRenameError,
 } from '../src/lib/workflow-form'
 import { zhCN } from '../src/i18n/zh-CN'
 import { enUS } from '../src/i18n/en-US'
@@ -166,15 +169,34 @@ async function renderPage(initialEntry: string) {
   return router
 }
 
-describe('buildQuickCreateWorkflowPayload (pure)', () => {
-  test('empty name is not ok (Create button stays disabled)', () => {
-    expect(buildQuickCreateWorkflowPayload({ name: '', description: 'x' }).ok).toBe(false)
+describe('workflow name rules (pure) — unified with workgroup naming (用户 2026-07-10)', () => {
+  test('WORKFLOW_NAME_RE is the SAME regex object as WORKGROUP_NAME_RE (alias, cannot drift)', () => {
+    expect(WORKFLOW_NAME_RE).toBe(WORKGROUP_NAME_RE)
   })
 
-  test('overlong name (>256) is caught by the schema net', () => {
-    expect(buildQuickCreateWorkflowPayload({ name: 'a'.repeat(257), description: '' }).ok).toBe(
-      false,
-    )
+  test('workflowNameError matrix: empty / malformed / overlong / valid', () => {
+    expect(workflowNameError('')).toBe('workflows.errors.nameRequired')
+    expect(workflowNameError('Bad Name!')).toBe('workflows.errors.nameInvalid')
+    expect(workflowNameError('-leading-dash')).toBe('workflows.errors.nameInvalid')
+    expect(workflowNameError('a'.repeat(129))).toBe('workflows.errors.nameInvalid')
+    expect(workflowNameError('a'.repeat(128))).toBeNull()
+    expect(workflowNameError('code-audit_2')).toBeNull()
+  })
+
+  test('workflowRenameError: an UNCHANGED legacy free-form name never blocks (grandfather)', () => {
+    expect(workflowRenameError('My Legacy Flow', 'My Legacy Flow')).toBeNull()
+    expect(workflowRenameError('still bad', 'My Legacy Flow')).toBe('workflows.errors.nameInvalid')
+    expect(workflowRenameError('', 'My Legacy Flow')).toBe('workflows.errors.nameRequired')
+    expect(workflowRenameError('new-slug', 'My Legacy Flow')).toBeNull()
+  })
+
+  test('builder: empty name → nameRequired; malformed → nameInvalid (raw i18n keys)', () => {
+    const empty = buildQuickCreateWorkflowPayload({ name: '', description: 'x' })
+    expect(empty.ok).toBe(false)
+    if (!empty.ok) expect(empty.errors.name).toBe('workflows.errors.nameRequired')
+    const bad = buildQuickCreateWorkflowPayload({ name: 'Bad Name!', description: '' })
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.errors.name).toBe('workflows.errors.nameInvalid')
   })
 
   test('valid draft assembles name + description + the EMPTY definition', () => {
@@ -255,6 +277,18 @@ describe('/workflows quick-create dialog', () => {
     await screen.findByText(/boom happened/)
     expect(screen.getByTestId('workflow-create-dialog')).toBeTruthy()
     expect(router.state.location.pathname).toBe('/workflows')
+  })
+
+  test('a malformed name shows the inline error and keeps Create disabled', async () => {
+    installFetch({ workflows: [], calls: [] })
+    await renderPage('/workflows')
+
+    fireEvent.click(await screen.findByTestId('workflow-new-button'))
+    fireEvent.change(await screen.findByTestId('workflow-create-name'), {
+      target: { value: 'Bad Name!' },
+    })
+    expect(screen.getByText(enUS.workflows.errors.nameInvalid)).toBeTruthy()
+    expect((screen.getByTestId('workflow-create-confirm') as HTMLButtonElement).disabled).toBe(true)
   })
 
   test('dismissing the dialog while the POST is pending suppresses the late navigation', async () => {
@@ -376,5 +410,21 @@ describe('/workflows/new removal wiring', () => {
     // 用户 2026-07-10：快速创建的名称输入不要占位符——两个弹窗都不许有。
     expect(readSrc('routes/workflows.tsx')).not.toContain('placeholder=')
     expect(readSrc('routes/workgroups.tsx')).not.toContain('placeholder="review-squad"')
+  })
+
+  test('naming unification wiring: error keys in both bundles + editor rename gate', () => {
+    // 用户 2026-07-10：工作流与工作组命名规则一致（放行存量，只卡新名）。
+    expect(zhCN.workflows.errors.nameRequired.length).toBeGreaterThan(0)
+    expect(zhCN.workflows.errors.nameInvalid.length).toBeGreaterThan(0)
+    expect(enUS.workflows.errors.nameRequired.length).toBeGreaterThan(0)
+    expect(enUS.workflows.errors.nameInvalid.length).toBeGreaterThan(0)
+    expect(zhCN.errors['workflow-name-invalid']?.length ?? 0).toBeGreaterThan(0)
+    expect(enUS.errors['workflow-name-invalid']?.length ?? 0).toBeGreaterThan(0)
+    // Editor: rename gate wired into BOTH the field error and the auto-save
+    // guard (unchanged legacy names must keep saving — see workflowRenameError).
+    const edit = readSrc('routes/workflows.edit.tsx')
+    const hits = edit.match(/workflowRenameError\(/g) ?? []
+    expect(hits.length).toBeGreaterThanOrEqual(2)
+    expect(edit).toContain("import { workflowRenameError } from '@/lib/workflow-form'")
   })
 })

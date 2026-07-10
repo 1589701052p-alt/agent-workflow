@@ -234,13 +234,22 @@ function WorkflowsPage() {
           </>
         }
       >
-        {/* Required-ness is conveyed by the disabled Create button — a
-            workflow name has no format rules, so there is no inline error. */}
-        <Field label={t('editor.fieldName')} required hint={t('workflows.fieldNameHint')}>
+        <Field
+          label={t('editor.fieldName')}
+          required
+          hint={t('workflows.fieldNameHint')}
+          // Required-ness is conveyed by the disabled Create button; only a
+          // malformed (non-empty) name earns an inline error (workgroup 同款).
+          error={
+            createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
+              ? t(builtCreate.errors.name)
+              : undefined
+          }
+        >
           <TextInput
             value={createName}
             onChange={setCreateName}
-            maxLength={256}
+            maxLength={128}
             required
             data-testid="workflow-create-name"
           />

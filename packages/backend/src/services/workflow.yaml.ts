@@ -11,7 +11,7 @@
 //   - if no id is provided, always insert as a new workflow
 
 import type { Workflow, WorkflowDefinition } from '@agent-workflow/shared'
-import { WorkflowDefinitionSchema } from '@agent-workflow/shared'
+import { WorkflowDefinitionSchema, WorkflowNameSchema } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { Actor } from '@/auth/actor'
@@ -81,6 +81,18 @@ export function previewWorkflowYaml(yamlText: string): Omit<YamlImportPreview, '
   const name = typeof obj.name === 'string' && obj.name.length > 0 ? obj.name : null
   if (name === null) {
     throw new ValidationError('workflow-yaml-invalid', 'YAML missing required field: name')
+  }
+  // 2026-07-10 naming unification: an import always mints a NEW name, so the
+  // workgroup slug rules apply flat — old exports carrying a legacy free-form
+  // name get an explicit 422 (edit the YAML's name line and retry). Decided
+  // over auto-slugging to avoid silent renames.
+  const nameOk = WorkflowNameSchema.safeParse(name)
+  if (!nameOk.success) {
+    throw new ValidationError(
+      'workflow-name-invalid',
+      'workflow name must start with [a-z0-9] and contain only [a-z0-9_-] (max 128 chars)',
+      { issues: nameOk.error.issues },
+    )
   }
   const id = typeof obj.id === 'string' && obj.id.length > 0 ? obj.id : null
   const description = typeof obj.description === 'string' ? obj.description : ''

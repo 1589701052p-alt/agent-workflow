@@ -970,6 +970,10 @@ export interface Resources {
     colName: string
     colVersion: string
     colId: string
+    errors: {
+      nameRequired: string
+      nameInvalid: string
+    }
   }
   // RFC-164 — workgroup resource pages (list + quick-create dialog / detail).
   workgroups: {
@@ -3682,7 +3686,7 @@ export const zhCN: Resources = {
     title: '工作流',
     newButton: '+ 新建工作流',
     createButton: '创建工作流',
-    fieldNameHint: '自由命名，至多 256 字符；之后可在编辑器中随时改名。',
+    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]，至多 128 字。',
     importButton: '导入 YAML',
     emptyList: '还没有工作流。',
     importedAsNew: '已作为新工作流导入。',
@@ -3692,6 +3696,10 @@ export const zhCN: Resources = {
     colName: '名称',
     colVersion: '版本',
     colId: 'ID',
+    errors: {
+      nameRequired: '名称必填。',
+      nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
+    },
   },
   // RFC-164 — 工作组资源页（列表 + 快速新建弹窗 / 详情管理页）。
   workgroups: {
@@ -4867,6 +4875,7 @@ export const zhCN: Resources = {
     'task-not-resumable': '该任务还在运行或未失败，无法 resume。',
     'task-still-running': '任务还在运行，请先取消。',
     'workflow-import-conflict': '导入冲突：已存在同 id 的工作流。',
+    'workflow-name-invalid': '工作流名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
     'config-invalid': '配置不合法。',
     'task-invalid': '任务输入不合法。',
     'skill-source-path-missing': '路径不存在。',

@@ -17,6 +17,7 @@ import { syncInputDefs } from '@/components/canvas/syncInputDefs'
 import { clearWrapperSize } from '@/components/canvas/wrapperOps'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasSelection } from '@/components/canvas/nodes/types'
+import { workflowRenameError } from '@/lib/workflow-form'
 import { AclDialogButton } from '@/components/AclPanel'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { Field, TextInput } from '@/components/Form'
@@ -159,9 +160,15 @@ function WorkflowEditPage() {
       ),
   })
 
+  // 2026-07-10 naming unification: renames follow the workgroup slug rules.
+  // An UNCHANGED (possibly legacy free-form) name never blocks — only an
+  // actual rename to an invalid value parks auto-save with a field error.
+  const renameError = workflowRenameError(name, lastSaved.current?.name ?? name)
+
   // Auto-save when the user pauses for >1s after a change (design.md §4.1).
   useEffect(() => {
     if (!dirty || draft === null) return
+    if (workflowRenameError(name, lastSaved.current?.name ?? name) !== null) return
     const tt = setTimeout(() => save.mutate(), 1000)
     return () => clearTimeout(tt)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,7 +272,11 @@ function WorkflowEditPage() {
       </header>
 
       <div className="form-grid form-grid--cols-2">
-        <Field label={t('editor.fieldName')} required>
+        <Field
+          label={t('editor.fieldName')}
+          required
+          error={renameError !== null ? t(renameError) : undefined}
+        >
           <TextInput
             value={name}
             onChange={(v) => {

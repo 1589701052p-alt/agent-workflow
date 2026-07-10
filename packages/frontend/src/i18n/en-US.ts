@@ -1028,7 +1028,7 @@ export const enUS: Resources = {
     title: 'Workflows',
     newButton: '+ New workflow',
     createButton: 'Create workflow',
-    fieldNameHint: 'Free-form, up to 256 characters; rename anytime in the editor.',
+    fieldNameHint: 'Starts with a lowercase letter / digit; only [a-z0-9_-], at most 128 chars.',
     importButton: 'Import YAML',
     emptyList: 'No workflows yet.',
     importedAsNew: 'Imported as new workflow.',
@@ -1039,6 +1039,11 @@ export const enUS: Resources = {
     colName: 'Name',
     colVersion: 'Version',
     colId: 'ID',
+    errors: {
+      nameRequired: 'Name is required.',
+      nameInvalid:
+        'Name must start with a lowercase letter / digit, only [a-z0-9_-], at most 128 chars.',
+    },
   },
   // RFC-164 — workgroup resource pages (list + quick-create dialog / detail).
   workgroups: {
@@ -2267,6 +2272,8 @@ export const enUS: Resources = {
     'task-not-resumable': 'Task is still running or has not failed; cannot resume.',
     'task-still-running': 'Task is still running; cancel it first.',
     'workflow-import-conflict': 'Import conflict: a workflow with the same id already exists.',
+    'workflow-name-invalid':
+      'Workflow name must start with a lowercase letter / digit, only [a-z0-9_-], at most 128 chars.',
     'config-invalid': 'Invalid config.',
     'task-invalid': 'Invalid task payload.',
     'skill-source-path-missing': 'Path does not exist.',

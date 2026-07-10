@@ -5,7 +5,7 @@
 // the React tree so the validation matrix is unit-testable without rendering.
 
 import type { CreateWorkflow, WorkflowDefinition } from '@agent-workflow/shared'
-import { CreateWorkflowSchema } from '@agent-workflow/shared'
+import { CreateWorkflowSchema, WORKFLOW_NAME_RE } from '@agent-workflow/shared'
 
 /** Definition a quick-created workflow starts with. Written as v1-empty on
  *  purpose — the backend GET path transparently upgrades schema versions, so
@@ -22,22 +22,41 @@ export interface QuickCreateWorkflowInput {
   description: string
 }
 
-/** Unlike workgroup names there are no slug rules here (free-form 1..256
- *  chars), so the not-ok branch carries no per-field error record: the empty
- *  name just keeps the Create button disabled and the input's maxLength stops
- *  overlong names before the schema net could ever reject them. */
-export type BuiltQuickCreateWorkflow = { ok: true; payload: CreateWorkflow } | { ok: false }
+/**
+ * 2026-07-10 naming unification: workflow names follow the workgroup slug
+ * rules (shared WORKFLOW_NAME_RE alias, ≤128). Error values are raw i18n keys
+ * ('workflows.errors.*') — widgets translate at render time, same contract as
+ * the workgroup builder.
+ */
+export function workflowNameError(name: string): string | null {
+  if (name.length === 0) return 'workflows.errors.nameRequired'
+  if (name.length > 128 || !WORKFLOW_NAME_RE.test(name)) return 'workflows.errors.nameInvalid'
+  return null
+}
+
+/** Editor rename gate — an UNCHANGED name is always savable, even a stored
+ *  legacy free-form one (grandfather; the backend PUT mirrors this rule and
+ *  validates only changed names). */
+export function workflowRenameError(next: string, savedName: string): string | null {
+  if (next === savedName) return null
+  return workflowNameError(next)
+}
+
+export type BuiltQuickCreateWorkflow =
+  | { ok: true; payload: CreateWorkflow }
+  | { ok: false; errors: Record<string, string> }
 
 export function buildQuickCreateWorkflowPayload(
   input: QuickCreateWorkflowInput,
 ): BuiltQuickCreateWorkflow {
-  if (input.name.length === 0) return { ok: false }
+  const nameError = workflowNameError(input.name)
+  if (nameError !== null) return { ok: false, errors: { name: nameError } }
   // Wire-shape net: the same schema the server parses (defaults fill in).
   const parsed = CreateWorkflowSchema.safeParse({
     name: input.name,
     description: input.description,
     definition: EMPTY_WORKFLOW_DEFINITION,
   })
-  if (!parsed.success) return { ok: false }
+  if (!parsed.success) return { ok: false, errors: {} }
   return { ok: true, payload: parsed.data }
 }
