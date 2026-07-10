@@ -229,14 +229,14 @@ function WorkflowsPage() {
               }}
               data-testid="workflow-create-confirm"
             >
-              {create.isPending ? t('editor.creating') : t('editor.create')}
+              {create.isPending ? t('common.creating') : t('workflows.createButton')}
             </button>
           </>
         }
       >
         {/* Required-ness is conveyed by the disabled Create button — a
             workflow name has no format rules, so there is no inline error. */}
-        <Field label={t('editor.fieldName')} required>
+        <Field label={t('editor.fieldName')} required hint={t('workflows.fieldNameHint')}>
           <TextInput
             value={createName}
             onChange={setCreateName}

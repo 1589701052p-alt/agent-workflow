@@ -1027,6 +1027,8 @@ export const enUS: Resources = {
   workflows: {
     title: 'Workflows',
     newButton: '+ New workflow',
+    createButton: 'Create workflow',
+    fieldNameHint: 'Free-form, up to 256 characters; rename anytime in the editor.',
     importButton: 'Import YAML',
     emptyList: 'No workflows yet.',
     importedAsNew: 'Imported as new workflow.',
@@ -1477,8 +1479,6 @@ export const enUS: Resources = {
   },
   editor: {
     newTitle: 'New workflow',
-    create: 'Create',
-    creating: 'Creating…',
     fieldName: 'Name',
     fieldDescription: 'Description',
     loadingWorkflow: 'Loading workflow…',

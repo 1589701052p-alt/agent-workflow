@@ -959,6 +959,8 @@ export interface Resources {
   workflows: {
     title: string
     newButton: string
+    createButton: string
+    fieldNameHint: string
     importButton: string
     emptyList: string
     importedAsNew: string
@@ -1393,8 +1395,6 @@ export interface Resources {
   }
   editor: {
     newTitle: string
-    create: string
-    creating: string
     fieldName: string
     fieldDescription: string
     loadingWorkflow: string
@@ -3608,6 +3608,8 @@ export const zhCN: Resources = {
   workflows: {
     title: '工作流',
     newButton: '+ 新建工作流',
+    createButton: '创建工作流',
+    fieldNameHint: '自由命名，至多 256 字符；之后可在编辑器中随时改名。',
     importButton: '导入 YAML',
     emptyList: '还没有工作流。',
     importedAsNew: '已作为新工作流导入。',
@@ -4041,8 +4043,6 @@ export const zhCN: Resources = {
   },
   editor: {
     newTitle: '新建工作流',
-    create: '创建',
-    creating: '创建中…',
     fieldName: '名称',
     fieldDescription: '描述',
     loadingWorkflow: '加载工作流中…',

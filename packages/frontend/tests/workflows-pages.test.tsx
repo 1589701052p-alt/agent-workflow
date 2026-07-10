@@ -37,6 +37,8 @@ import {
   EMPTY_WORKFLOW_DEFINITION,
   buildQuickCreateWorkflowPayload,
 } from '../src/lib/workflow-form'
+import { zhCN } from '../src/i18n/zh-CN'
+import { enUS } from '../src/i18n/en-US'
 import '../src/i18n'
 
 const TEST_DIR = path.dirname(new URL(import.meta.url).pathname)
@@ -205,6 +207,13 @@ describe('/workflows quick-create dialog', () => {
     expect(confirm.disabled).toBe(true) // empty name
     // a11y: required must live on the control, not only as the label asterisk.
     expect((screen.getByTestId('workflow-create-name') as HTMLInputElement).required).toBe(true)
+    // Workgroup-dialog parity (用户 2026-07-10): name hint + dedicated create
+    // label, and no placeholder on the name input.
+    expect(screen.getByText(enUS.workflows.fieldNameHint)).toBeTruthy()
+    expect(confirm.textContent).toBe(enUS.workflows.createButton)
+    expect(
+      (screen.getByTestId('workflow-create-name') as HTMLInputElement).getAttribute('placeholder'),
+    ).toBeNull()
 
     fireEvent.change(screen.getByTestId('workflow-create-name'), {
       target: { value: 'code-audit' },
@@ -353,5 +362,19 @@ describe('/workflows/new removal wiring', () => {
     expect(list).toContain("import { Dialog } from '@/components/Dialog'")
     expect(list).toContain('buildQuickCreateWorkflowPayload')
     expect(list).toContain('NewRedirectRoute')
+  })
+
+  test('dialog copy matches the workgroup pattern in BOTH bundles; retired editor keys are gone', () => {
+    // 用户 2026-07-10：工作流弹窗提示要和工作组一样（含 name hint）。
+    expect(zhCN.workflows.createButton).toBe('创建工作流')
+    expect(enUS.workflows.createButton).toBe('Create workflow')
+    expect(zhCN.workflows.fieldNameHint.length).toBeGreaterThan(0)
+    expect(enUS.workflows.fieldNameHint.length).toBeGreaterThan(0)
+    // The full-page creator's button keys retired with it (no dead keys).
+    expect('create' in zhCN.editor).toBe(false)
+    expect('creating' in zhCN.editor).toBe(false)
+    // 用户 2026-07-10：快速创建的名称输入不要占位符——两个弹窗都不许有。
+    expect(readSrc('routes/workflows.tsx')).not.toContain('placeholder=')
+    expect(readSrc('routes/workgroups.tsx')).not.toContain('placeholder="review-squad"')
   })
 })
