@@ -244,13 +244,16 @@ function resolveLeaderMemberId(
   memberValues: ReadonlyArray<typeof workgroupMembers.$inferInsert>,
 ): string | null {
   if (input.mode !== 'leader_worker') return null
-  // Zod superRefine already guaranteed presence + agent-member; re-check
+  // 决策 #21 quick create: a leaderless leader_worker group is SAVE-valid;
+  // launch enforces readiness via workgroupLaunchReadiness.
+  if (input.leaderDisplayName === undefined) return null
+  // Zod superRefine already guaranteed agent-member when provided; re-check
   // defensively for service-layer callers that bypass the route schema.
   const leader = memberValues.find((m) => m.displayName === input.leaderDisplayName)
   if (leader === undefined || leader.memberType !== 'agent') {
     throw new ValidationError(
       'workgroup-leader-invalid',
-      'leader_worker mode requires leaderDisplayName matching an agent member',
+      'leaderDisplayName must match an agent member',
     )
   }
   return leader.id

@@ -141,7 +141,13 @@ const workgroupConfigFields = {
     .max(WORKGROUP_MAX_ROUNDS_LIMIT)
     .default(WORKGROUP_MAX_ROUNDS_DEFAULT),
   completionGate: z.boolean().default(false),
-  members: z.array(WorkgroupMemberInputSchema).min(1, 'at least one member').max(64),
+  /**
+   * 快速创建（用户 2026-07-10 拍板 #21）：members MAY be empty at save time —
+   * groups are created light and members are managed card-by-card on the
+   * detail page. Launch-readiness (≥1 agent member; lw needs a designated
+   * leader) is enforced at LAUNCH time via workgroupLaunchReadiness, not here.
+   */
+  members: z.array(WorkgroupMemberInputSchema).max(64).default([]),
 }
 
 function validateGroupShape(
@@ -156,11 +162,10 @@ function validateGroupShape(
   if (new Set(names).size !== names.length) {
     ctx.addIssue({ code: 'custom', message: 'member displayName must be unique within the group' })
   }
-  if (g.mode === 'leader_worker') {
-    if (g.leaderDisplayName === undefined) {
-      ctx.addIssue({ code: 'custom', message: 'leader_worker mode requires leaderDisplayName' })
-      return
-    }
+  // A designated leader (when provided) must resolve to an agent member.
+  // Leaderless leader_worker groups are SAVE-valid (quick create) and only
+  // rejected at launch (workgroupLaunchReadiness).
+  if (g.leaderDisplayName !== undefined) {
     const leader = g.members.find((m) => m.displayName === g.leaderDisplayName)
     if (leader === undefined) {
       ctx.addIssue({ code: 'custom', message: 'leaderDisplayName does not match any member' })
@@ -191,6 +196,31 @@ export const RenameWorkgroupSchema = z.object({
 export type RenameWorkgroup = z.infer<typeof RenameWorkgroupSchema>
 
 /**
+ * Launch-readiness oracle (决策 #21 — save is lenient, launch is strict).
+ * The launch gate (PR-3) and the detail-page banner both consume this.
+ */
+export interface WorkgroupLaunchReadiness {
+  ready: boolean
+  reasons: Array<'no-agent-member' | 'leader-missing'>
+}
+
+export function workgroupLaunchReadiness(group: {
+  mode: WorkgroupMode
+  leaderMemberId: string | null
+  members: ReadonlyArray<{ id: string; memberType: WorkgroupMemberType }>
+}): WorkgroupLaunchReadiness {
+  const reasons: WorkgroupLaunchReadiness['reasons'] = []
+  const agentMembers = group.members.filter((m) => m.memberType === 'agent')
+  if (agentMembers.length === 0) reasons.push('no-agent-member')
+  if (group.mode === 'leader_worker') {
+    const leaderOk =
+      group.leaderMemberId !== null && agentMembers.some((m) => m.id === group.leaderMemberId)
+    if (!leaderOk) reasons.push('leader-missing')
+  }
+  return { ready: reasons.length === 0, reasons }
+}
+
+/**
  * Effective switch view (design §1.1): free_collab collaborates through the
  * shared list + room, so all three switches read as ON regardless of storage.
  */
@@ -203,3 +233,33 @@ export function resolveWorkgroupSwitches(
   }
   return stored
 }
+
+// ---------------------------------------------------------------------------
+// Launch body (POST /api/workgroups/:name/tasks, design §3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Workgroup launch body — repo/collaborator/limit fields mirror StartTask.
+ * Deliberately SHAPE-lenient: the service composes a full StartTask candidate
+ * (workflowId = builtin host, inputs = {}) and runs StartTaskSchema on it, so
+ * the repo-source cross-field rules stay single-sourced in schemas/task.ts.
+ */
+export const StartWorkgroupTaskSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  /** The group's mission statement — injected every turn (决策 #12 goal). */
+  goal: z.string().trim().min(1).max(65536),
+  repoPath: z.string().min(1).optional(),
+  repoUrl: z.string().min(1).optional(),
+  ref: z.string().min(1).optional(),
+  baseBranch: z.string().min(1).optional(),
+  repos: z.array(z.unknown()).min(1).max(16).optional(),
+  fetchBeforeLaunch: z.boolean().optional(),
+  collaboratorUserIds: z.array(z.string().min(1)).max(64).optional(),
+  gitUserName: z.string().max(255).optional(),
+  gitUserEmail: z.string().max(255).optional(),
+  workingBranch: z.string().optional(),
+  autoCommitPush: z.boolean().optional(),
+  maxDurationMs: z.number().int().positive().optional(),
+  maxTotalTokens: z.number().int().positive().optional(),
+})
+export type StartWorkgroupTask = z.infer<typeof StartWorkgroupTaskSchema>

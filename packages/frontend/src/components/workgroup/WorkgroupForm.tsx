@@ -1,73 +1,39 @@
-// RFC-164 PR-1 — workgroup form shared by /workgroups/new and
-// /workgroups/$name (same create/edit parity contract as McpFields).
-// Four sections: basics / mode / members / collaboration switches.
+// RFC-164 PR-1 — workgroup CONFIG form (detail page edit surface). Members
+// are managed by the card zone (<WorkgroupMemberCards>) with immediate PUTs;
+// this form only edits the config fields and the page passes the group's
+// current members through on save (PUT is full-replace).
 //
 // free_collab forces the three collaboration switches to read as ON
 // (disabled controls + notice) WITHOUT mutating the stored values — the
 // shared resolveWorkgroupSwitches defines fc as all-on regardless of
 // storage, so flipping back to leader_worker restores the user's choices.
 
-import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { Agent, UserPublic, WorkgroupMode } from '@agent-workflow/shared'
-import { WORKGROUP_MAX_ROUNDS_LIMIT, WORKGROUP_NAME_RE } from '@agent-workflow/shared'
-import { api } from '@/api/client'
+import type { WorkgroupMode } from '@agent-workflow/shared'
+import { WORKGROUP_MAX_ROUNDS_LIMIT } from '@agent-workflow/shared'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
 import { FormSection } from '@/components/FormSection'
 import { Segmented } from '@/components/Segmented'
-import { WorkgroupMemberEditor } from '@/components/workgroup/WorkgroupMemberEditor'
-import type { WorkgroupFormState } from '@/lib/workgroup-form'
+import type { WorkgroupConfigDraft } from '@/lib/workgroup-form'
 
 export interface WorkgroupFormProps {
-  value: WorkgroupFormState
-  onChange: (next: WorkgroupFormState) => void
-  /** Edit mode locks the name field — renames go through the header dialog. */
-  nameLocked?: boolean
+  value: WorkgroupConfigDraft
+  onChange: (next: WorkgroupConfigDraft) => void
   /** Raw i18n error keys from the payload builder. */
   errors: Record<string, string>
 }
 
-export function WorkgroupForm({ value, onChange, nameLocked, errors }: WorkgroupFormProps) {
+export function WorkgroupForm({ value, onChange, errors }: WorkgroupFormProps) {
   const { t } = useTranslation()
-  const set = <K extends keyof WorkgroupFormState>(k: K, v: WorkgroupFormState[K]): void => {
+  const set = <K extends keyof WorkgroupConfigDraft>(k: K, v: WorkgroupConfigDraft[K]): void => {
     onChange({ ...value, [k]: v })
   }
-
-  const agentsQ = useQuery<Agent[]>({
-    queryKey: ['agents'],
-    queryFn: ({ signal }) => api.get('/api/agents', undefined, signal),
-  })
-  // users:search is the every-user endpoint (GET /api/users needs the admin
-  // users:read permission — a non-admin creating a workgroup would 403).
-  const usersQ = useQuery<UserPublic[]>({
-    queryKey: ['users', 'search-all'],
-    queryFn: ({ signal }) => api.get('/api/users/search', { limit: 100 }, signal),
-    staleTime: 30_000,
-  })
 
   const fc = value.mode === 'free_collab'
 
   return (
     <div className="workgroup-form">
       <FormSection title={t('workgroups.sectionBasics')}>
-        <Field
-          label={t('workgroups.fieldName')}
-          required
-          hint={t('workgroups.fieldNameHint')}
-          error={errors.name !== undefined ? t(errors.name) : undefined}
-        >
-          <TextInput
-            value={value.name}
-            onChange={(v) => set('name', v)}
-            placeholder="review-squad"
-            disabled={nameLocked === true}
-            required
-            pattern={WORKGROUP_NAME_RE.source}
-            maxLength={128}
-            data-testid="workgroup-field-name"
-          />
-        </Field>
-
         <Field label={t('workgroups.fieldDescription')}>
           <TextInput
             value={value.description}
@@ -111,30 +77,6 @@ export function WorkgroupForm({ value, onChange, nameLocked, errors }: Workgroup
             ]}
           />
         </Field>
-      </FormSection>
-
-      <FormSection title={t('workgroups.sectionMembers')}>
-        {errors.members !== undefined && (
-          <span className="form-field__error" role="alert">
-            {t(errors.members)}
-          </span>
-        )}
-        {errors.leader !== undefined && (
-          <span className="form-field__error" role="alert">
-            {t(errors.leader)}
-          </span>
-        )}
-        <WorkgroupMemberEditor
-          members={value.members}
-          mode={value.mode}
-          leaderKey={value.leaderKey}
-          onChange={(next) =>
-            onChange({ ...value, members: next.members, leaderKey: next.leaderKey })
-          }
-          agentNames={(agentsQ.data ?? []).map((a) => a.name)}
-          users={usersQ.data ?? []}
-          errors={errors}
-        />
       </FormSection>
 
       <FormSection title={t('workgroups.sectionSwitches')}>

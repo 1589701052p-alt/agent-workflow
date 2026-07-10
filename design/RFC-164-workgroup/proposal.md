@@ -142,6 +142,8 @@ LangGraph supervisor/swarm；本仓的差异化立足点仍是立项初衷——
 | 19 | 英文命名 | workgroup（/workgroups、workgroups 表） |
 | 20 | worker 转派 | v1 禁止（建议走消息回 leader） |
 
+| 21 | 建组体验（实现期补拍，2026-07-10） | **快速创建 + 详情页卡片式成员管理**：创建=弹窗，只填名称+描述；模式/章程/开关/成员全部在详情页编辑；成员以卡片增删改、卡上设 leader（multica Members 风格）。成员就绪校验（≥1 agent 成员、lw 须有 leader）**推迟到启动时**（`workgroupLaunchReadiness`），保存恒宽松、详情页横幅提示 |
+
 另有四条已声明未被推翻的默认假设：成员=引用既有 agent + 组内 role 描述；同一 agent 允许同轮
 多单并行；leader 跨轮上下文 session 续接优先、重注入兜底；workgroup 进 RFC-099 ACL 第六类资源、
 组任务照任务成员制私有。

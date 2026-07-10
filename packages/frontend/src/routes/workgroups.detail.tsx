@@ -1,24 +1,36 @@
-// RFC-164 PR-1 — /workgroups/$name. Matches /mcps/$name shape: shared
-// <DetailHeaderActions> header (ACL + Save + Delete), shared <WorkgroupForm>
-// body with the name field locked. Renames go through the header's Rename
-// button + <Dialog> (POST /api/workgroups/:name/rename — PUT cannot change
-// the name).
+// RFC-164 PR-1 — /workgroups/$name: the workgroup management surface.
+//   1. Launch-readiness banner (shared workgroupLaunchReadiness oracle —
+//      save is lenient, launch is strict; the banner explains what's missing).
+//   2. Config form (description / mode / instructions / switches / rounds /
+//      gate) — a draft saved via the header Save; the PUT passes the group's
+//      CURRENT members through unchanged (full-document replace).
+//   3. Member cards (<WorkgroupMemberCards>) — add / edit / remove /
+//      set-leader commit immediately: read current → pure change → PUT.
+// Header keeps the /mcps/$name action shape: ACL + Save + Delete, plus the
+// Rename button + <Dialog> (POST …/rename — PUT cannot change the name).
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { UpdateWorkgroup, Workgroup } from '@agent-workflow/shared'
-import { WORKGROUP_NAME_RE } from '@agent-workflow/shared'
+import { WORKGROUP_NAME_RE, workgroupLaunchReadiness } from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { useDraftFromQuery } from '@/hooks/useDraftFromQuery'
 import { describeApiError } from '@/i18n'
 import { DetailHeaderActions } from '@/components/DetailHeaderActions'
 import { Dialog } from '@/components/Dialog'
 import { Field, TextInput } from '@/components/Form'
+import { FormSection } from '@/components/FormSection'
 import { LoadingState } from '@/components/LoadingState'
 import { WorkgroupForm } from '@/components/workgroup/WorkgroupForm'
-import { buildUpdateWorkgroupPayload, workgroupToForm } from '@/lib/workgroup-form'
+import { WorkgroupMemberCards } from '@/components/workgroup/WorkgroupMemberCards'
+import {
+  buildConfigUpdatePayload,
+  buildMembersUpdatePayload,
+  workgroupToConfigDraft,
+  type WorkgroupMembersState,
+} from '@/lib/workgroup-form'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -38,20 +50,52 @@ function WorkgroupDetailPage() {
     queryFn: ({ signal }) =>
       api.get(`/api/workgroups/${encodeURIComponent(name)}`, undefined, signal),
   })
+  const group = query.data
 
-  // RFC-151 PR-4 — hydrate-once draft (stale-race contract: save.onSuccess
-  // eagerly setQueryData's the fresh row).
-  const { draft: form, setDraft: setForm, loaded } = useDraftFromQuery(query.data, workgroupToForm)
+  // RFC-151 PR-4 — hydrate-once CONFIG draft (members live outside the draft:
+  // the card zone renders them straight from the query row, so its immediate
+  // PUTs can never clobber pending config edits).
+  const {
+    draft: form,
+    setDraft: setForm,
+    loaded,
+  } = useDraftFromQuery(group, workgroupToConfigDraft)
+
+  function putWorkgroup(payload: UpdateWorkgroup): Promise<Workgroup> {
+    return api.put<Workgroup>(`/api/workgroups/${encodeURIComponent(name)}`, payload)
+  }
 
   const save = useMutation({
-    mutationFn: (payload: UpdateWorkgroup): Promise<Workgroup> =>
-      api.put<Workgroup>(`/api/workgroups/${encodeURIComponent(name)}`, payload),
+    mutationFn: putWorkgroup,
     onSuccess: (w) => {
       void qc.invalidateQueries({ queryKey: ['workgroups'] })
       qc.setQueryData(['workgroups', name], w)
       navigate({ to: '/workgroups' })
     },
   })
+
+  // Member-card operations share one PUT channel; the fresh row is written
+  // back eagerly so the cards re-render from server truth.
+  const membersMut = useMutation({
+    mutationFn: putWorkgroup,
+    onSuccess: (w) => {
+      void qc.invalidateQueries({ queryKey: ['workgroups'] })
+      qc.setQueryData(['workgroups', name], w)
+    },
+  })
+
+  async function applyMembers(next: WorkgroupMembersState): Promise<boolean> {
+    if (group === undefined) return false
+    const built = buildMembersUpdatePayload(group, next)
+    if (!built.ok) return false
+    try {
+      await membersMut.mutateAsync(built.payload)
+      return true
+    } catch {
+      // Surfaced via membersMut.error (header error row + dialog footer).
+      return false
+    }
+  }
 
   const del = useMutation({
     mutationFn: () => api.delete(`/api/workgroups/${encodeURIComponent(name)}`),
@@ -77,8 +121,12 @@ function WorkgroupDetailPage() {
   })
   const renameValid = newName.length > 0 && newName.length <= 128 && WORKGROUP_NAME_RE.test(newName)
 
-  // Live pre-validation — same contract as /workgroups/new.
-  const built = form !== undefined ? buildUpdateWorkgroupPayload(form) : undefined
+  // Live pre-validation — the config draft blocks Save only on real field
+  // errors (决策 #21: no leader / no members are launch problems, not save
+  // problems — the readiness banner communicates them instead).
+  const built =
+    form !== undefined && group !== undefined ? buildConfigUpdatePayload(form, group) : undefined
+  const readiness = group !== undefined ? workgroupLaunchReadiness(group) : null
 
   if (query.isLoading)
     return (
@@ -123,20 +171,46 @@ function WorkgroupDetailPage() {
             {t('workgroups.renameButton')}
           </button>
         }
-        errors={[save.error, del.error, rename.error]}
+        errors={[save.error, del.error, rename.error, membersMut.error]}
       >
         <div>
           <h1>{name}</h1>
         </div>
       </DetailHeaderActions>
 
+      {readiness !== null && !readiness.ready && (
+        <div
+          className="info-box info-box--muted workgroup-readiness"
+          role="status"
+          data-testid="workgroup-readiness-banner"
+        >
+          {readiness.reasons.map((reason) => (
+            <span key={reason}>
+              {reason === 'no-agent-member'
+                ? t('workgroups.readiness.noAgentMember')
+                : t('workgroups.readiness.leaderMissing')}
+            </span>
+          ))}
+        </div>
+      )}
+
       {form !== undefined && (
         <WorkgroupForm
           value={form}
           onChange={(next) => setForm(next)}
-          nameLocked
           errors={built !== undefined && !built.ok ? built.errors : {}}
         />
+      )}
+
+      {group !== undefined && (
+        <FormSection title={t('workgroups.sectionMembers')}>
+          <WorkgroupMemberCards
+            group={group}
+            applying={membersMut.isPending}
+            applyError={membersMut.error}
+            onApply={applyMembers}
+          />
+        </FormSection>
       )}
 
       <Dialog

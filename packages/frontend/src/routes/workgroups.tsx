@@ -1,20 +1,29 @@
 // RFC-164 PR-1 — /workgroups list page. Mirrors /mcps and /workflows shape:
-// header row with title + primary "New" Link, data-table, no inline editor.
-// Create + edit live on separate routes (`/workgroups/new`, `/workgroups/$name`).
+// header row with title + primary "New" button, data-table, no inline editor.
+// Creation is a QUICK-CREATE dialog (name + description only — everything
+// else has backend defaults); members/config are managed on the detail page.
 // Delete confirms through the shared <Dialog> (per RFC-164 proposal, instead
 // of the two-click ConfirmButton the older lists use).
 
-import { Link, createRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link, createRoute, useNavigate } from '@tanstack/react-router'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workgroup } from '@agent-workflow/shared'
+import { api } from '@/api/client'
 import { useResourceList } from '@/hooks/useResourceList'
+import { describeApiError } from '@/i18n'
 import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
+import { Field, TextInput } from '@/components/Form'
 import { LoadingState } from '@/components/LoadingState'
 import { ResourceNameCell } from '@/components/ResourceNameCell'
-import { workgroupLeaderDisplayName } from '@/lib/workgroup-form'
+import {
+  buildQuickCreatePayload,
+  workgroupLeaderDisplayName,
+  type QuickCreateWorkgroupBody,
+} from '@/lib/workgroup-form'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -25,6 +34,8 @@ export const Route = createRoute({
 
 function WorkgroupsPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
   // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
   const { data, isLoading, error, del, owners } = useResourceList<Workgroup>({
     queryKey: ['workgroups'],
@@ -45,15 +56,49 @@ function WorkgroupsPage() {
     }
   }
 
+  // Quick create — name + description only; navigate to the detail page
+  // (where members and the rest of the config are managed) on success.
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createDescription, setCreateDescription] = useState('')
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const create = useMutation({
+    mutationFn: (body: QuickCreateWorkgroupBody): Promise<Workgroup> =>
+      api.post<Workgroup>('/api/workgroups', body),
+    onSuccess: (w) => {
+      void qc.invalidateQueries({ queryKey: ['workgroups'] })
+      qc.setQueryData(['workgroups', w.name], w)
+      setCreateOpen(false)
+      navigate({ to: '/workgroups/$name', params: { name: w.name } })
+    },
+  })
+  const builtCreate = buildQuickCreatePayload({
+    name: createName,
+    description: createDescription,
+  })
+
+  function openCreate(): void {
+    setCreateName('')
+    setCreateDescription('')
+    create.reset()
+    setCreateOpen(true)
+  }
+
   return (
     <div className="page">
       <header className="page__header page__header--row">
         <div>
           <h1>{t('workgroups.title')}</h1>
         </div>
-        <Link to="/workgroups/new" className="btn btn--primary">
+        <button
+          type="button"
+          className="btn btn--primary"
+          ref={createTriggerRef}
+          onClick={openCreate}
+          data-testid="workgroup-new-button"
+        >
           {t('workgroups.newButton')}
-        </Link>
+        </button>
       </header>
 
       {isLoading && <LoadingState data-testid="workgroups-loading" />}
@@ -152,6 +197,64 @@ function WorkgroupsPage() {
         }
       >
         <p>{t('workgroups.deleteBody', { name: pendingDelete?.name ?? '' })}</p>
+      </Dialog>
+
+      <Dialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title={t('workgroups.newTitle')}
+        size="sm"
+        triggerRef={createTriggerRef}
+        data-testid="workgroup-create-dialog"
+        footer={
+          <>
+            {create.error !== null && create.error !== undefined && (
+              <span className="form-actions__error">{describeApiError(create.error)}</span>
+            )}
+            <button type="button" className="btn" onClick={() => setCreateOpen(false)}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={create.isPending || !builtCreate.ok}
+              onClick={() => {
+                if (builtCreate.ok) create.mutate(builtCreate.payload)
+              }}
+              data-testid="workgroup-create-confirm"
+            >
+              {create.isPending ? t('common.creating') : t('workgroups.createButton')}
+            </button>
+          </>
+        }
+      >
+        <Field
+          label={t('workgroups.fieldName')}
+          required
+          hint={t('workgroups.fieldNameHint')}
+          // Required-ness is conveyed by the disabled Create button; only a
+          // malformed (non-empty) name earns an inline error.
+          error={
+            createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
+              ? t(builtCreate.errors.name)
+              : undefined
+          }
+        >
+          <TextInput
+            value={createName}
+            onChange={setCreateName}
+            maxLength={128}
+            data-testid="workgroup-create-name"
+          />
+        </Field>
+        <Field label={t('workgroups.fieldDescription')}>
+          <TextInput
+            value={createDescription}
+            onChange={setCreateDescription}
+            maxLength={4096}
+            data-testid="workgroup-create-description"
+          />
+        </Field>
       </Dialog>
     </div>
   )

@@ -404,14 +404,19 @@ mode/leader/repo）。写 `workgroup_config_json` 副本 + 系统消息。语义
 
 ## 10. 前端
 
-### 10.1 资源页 `/workgroups`
+### 10.1 资源页 `/workgroups`（决策 #21 修订）
 
-- 列表（workflows.tsx 骨架）+ 详情编辑 `/workgroups/$id`：Field/TextInput/TextArea/Select/
-  ChipsInput/`.segmented`（mode 两态）/Switch（三开关+确认门）/NumberInput（max_rounds）；
-  成员编辑器 = 行式列表（agent 选择器复用 agents 查询 + 人类成员用户选择器复用 collaborator
-  picker 先例）+ role_desc 行内输入 + leader 单选标记。nav：`NAV_GROUPS` 的 `agents` 组后新
-  `workgroups` 组或并入 `workflows` 组（nav.ts:28-62；取并入 `workflows` 组——同为「可启动
-  编排物」，避免一级导航膨胀）。
+- 列表（workflows.tsx 骨架）；**创建=弹窗**，只填名称+描述（其余字段走 schema 默认值），
+  成功即跳详情。
+- 详情页 `/workgroups/$name` = 配置编辑 + **卡片式成员管理**（multica Members 风格）：
+  就绪度横幅（`workgroupLaunchReadiness` 的 no-agent-member / leader-missing 提示）+
+  配置区（description/`.segmented` mode/instructions/三开关〔fc disabled 显 on〕/
+  NumberInput max_rounds/确认门 Switch）+ 成员卡片区（每成员一卡：类型 chip、引用、
+  role_desc；卡上编辑/移除/lw 设为 leader；「添加 agent 成员」「添加人类成员」各自 Dialog，
+  agent 引用可自由输入〔悬空引用启动时才校验〕、human 走用户搜索）。传输仍是 PUT 全文档
+  替换（前端纯函数 add/remove/setLeader/patch 组合后整体保存）。**保存恒宽松**：lw 无
+  leader / 零成员均可存，启动门与横幅共用 `workgroupLaunchReadiness` 单一事实源。
+  nav：并入 `workflows` 组（同为「可启动编排物」，避免一级导航膨胀）。
 - 启动页 `/workgroups/launch?workgroupId=`：goal 多行输入 + repo source picker 复用 + 名称。
 
 ### 10.2 聊天室（组任务详情主视图）

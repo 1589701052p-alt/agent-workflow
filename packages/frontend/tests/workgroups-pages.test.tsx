@@ -1,22 +1,28 @@
-// RFC-164 PR-1 — /workgroups {list,new,detail} route pages + wiring locks.
+// RFC-164 PR-1 — /workgroups {list, detail} route pages + wiring locks.
 //
 // Locks:
-//   1. List page: empty state, row rendering (name link / mode chip / member
-//      count / leader displayName with fc em dash), delete via the shared
-//      <Dialog> confirm firing DELETE.
-//   2. New page: live validation disables Create while invalid; a completed
-//      draft POSTs the built payload and navigates to the detail route.
-//   3. Detail page: seeds the form from GET, PUT strips the name, rename
-//      dialog POSTs /rename.
-//   4. Wiring: router registers new-before-$name, nav lists /workgroups in
-//      the workflows group, zh-CN + en-US both carry the workgroups keys
-//      (same style as mcps-page-wiring).
+//   1. List page: empty state, row rendering (name link / mode chip / leader
+//      displayName with fc em dash), delete via the shared <Dialog> confirm.
+//   2. Quick create: the "+ New workgroup" button opens a name+description
+//      dialog; Create stays disabled while the name is invalid and POSTs
+//      EXACTLY {name, description} (backend defaults the rest), then
+//      navigates to the detail page.
+//   3. Detail page: launch-readiness banner renders per reason
+//      ('no-agent-member' / 'leader-missing') and hides when ready; the
+//      config save PUTs the draft with the CURRENT members passed through;
+//      leaderless lw groups still save (决策 #21); rename dialog POSTs
+//      /rename.
+//   4. Member cards: one card per member (role assertions), leader badge,
+//      set-leader / remove / add-agent flows each fire a full-document PUT.
+//   5. Wiring: router registers list + detail only (no /new route), nav
+//      lists /workgroups in the workflows group, zh/en bundles carry the
+//      RFC-164 keys (and dropped the obsolete strict-save error keys).
 
 import { readFileSync } from 'node:fs'
 import path, { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -44,6 +50,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Unmount React BEFORE clearing the body: an open <Dialog> portals into
+  // document.body, and blowing the DOM away first makes React's portal
+  // removal throw (happy-dom removeChild DOMException).
+  cleanup()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
@@ -78,6 +88,15 @@ function wg(name: string, overrides: Partial<Workgroup> = {}): Workgroup {
         roleDesc: 'reviews',
         sortOrder: 1,
       },
+      {
+        id: 'mem_3',
+        memberType: 'agent',
+        agentName: 'auditor',
+        userId: null,
+        displayName: 'Auditor',
+        roleDesc: '',
+        sortOrder: 2,
+      },
     ],
     ownerUserId: null,
     visibility: 'public',
@@ -107,7 +126,17 @@ function installFetch(state: { workgroups: Workgroup[] } & Recorded): void {
 
       if (url.includes('/api/agents')) return json([{ name: 'coder' }, { name: 'auditor' }])
       if (url.includes('/api/users/search')) return json([])
-      if (url.includes('/api/users/lookup')) return json([])
+      if (url.includes('/api/users/lookup')) {
+        return json([
+          {
+            id: 'u1',
+            username: 'alice',
+            displayName: 'Alice Wang',
+            role: 'user',
+            status: 'active',
+          },
+        ])
+      }
       const rename = url.match(/\/api\/workgroups\/([^/]+)\/rename$/)
       if (rename !== null && method === 'POST') {
         const from = decodeURIComponent(rename[1]!)
@@ -123,10 +152,7 @@ function installFetch(state: { workgroups: Workgroup[] } & Recorded): void {
         }
         if (method === 'PUT') {
           const row = state.workgroups.find((w) => w.name === name)
-          return json({
-            ...(row ?? wg(name)),
-            description: (body as { description: string }).description,
-          })
+          return json(row ?? wg(name))
         }
         if (method === 'DELETE') return new Response(null, { status: 204 })
       }
@@ -141,7 +167,6 @@ function installFetch(state: { workgroups: Workgroup[] } & Recorded): void {
 
 async function renderPage(initialEntry: string) {
   const list = await import('../src/routes/workgroups')
-  const create = await import('../src/routes/workgroups.new')
   const detail = await import('../src/routes/workgroups.detail')
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const listRoute = createRoute({
@@ -149,18 +174,13 @@ async function renderPage(initialEntry: string) {
     path: '/workgroups',
     component: list.Route.options.component,
   })
-  const newRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/workgroups/new',
-    component: create.Route.options.component,
-  })
   const detailRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/workgroups/$name',
     component: detail.Route.options.component,
   })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([listRoute, newRoute, detailRoute]),
+    routeTree: rootRoute.addChildren([listRoute, detailRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -178,14 +198,19 @@ describe('/workgroups list page', () => {
     installFetch({ workgroups: [], calls: [] })
     await renderPage('/workgroups')
     await screen.findByTestId('workgroups-empty')
-    expect(screen.getByRole('link', { name: '+ New workgroup' })).toBeTruthy()
+    expect(screen.getByTestId('workgroup-new-button')).toBeTruthy()
   })
 
-  test('renders rows: name link, mode chip, member count, leader (fc → em dash)', async () => {
+  test('renders rows: name link, mode chip, leader (fc → em dash)', async () => {
     installFetch({
       workgroups: [
         wg('review-squad'),
-        wg('brainstorm', { mode: 'free_collab', leaderMemberId: null, description: '' }),
+        wg('brainstorm', {
+          mode: 'free_collab',
+          leaderMemberId: null,
+          members: [],
+          description: '',
+        }),
       ],
       calls: [],
     })
@@ -196,7 +221,7 @@ describe('/workgroups list page', () => {
     const lwRow = screen.getByTestId('workgroup-row-review-squad')
     expect(lwRow.textContent).toContain('Leader-Worker')
     expect(lwRow.textContent).toContain('Coder') // leader displayName
-    expect(lwRow.textContent).toContain('2') // member count
+    expect(lwRow.textContent).toContain('3') // member count
 
     const fcRow = screen.getByTestId('workgroup-row-brainstorm')
     expect(fcRow.textContent).toContain('Free collaboration')
@@ -224,70 +249,95 @@ describe('/workgroups list page', () => {
   })
 })
 
-describe('/workgroups/new page', () => {
-  test('invalid draft disables Create and shows inline errors; a valid draft POSTs and navigates', async () => {
+describe('/workgroups quick-create dialog', () => {
+  test('invalid name disables Create; a valid draft POSTs {name, description} and navigates', async () => {
     const state = { workgroups: [], calls: [] as Recorded['calls'] }
     installFetch(state)
-    const router = await renderPage('/workgroups/new')
+    const router = await renderPage('/workgroups')
 
-    const save = (await screen.findByTestId('workgroup-save-button')) as HTMLButtonElement
-    // Fresh draft (one empty agent row, no name) is invalid → disabled.
-    expect(save.disabled).toBe(true)
-    expect(screen.getByText('Agent members need an agent name.')).toBeTruthy()
+    fireEvent.click(await screen.findByTestId('workgroup-new-button'))
+    const confirm = (await screen.findByTestId('workgroup-create-confirm')) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true) // empty name
 
-    fireEvent.change(screen.getByTestId('workgroup-field-name'), {
+    fireEvent.change(screen.getByTestId('workgroup-create-name'), {
+      target: { value: 'Bad Name!' },
+    })
+    expect((screen.getByTestId('workgroup-create-confirm') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+    // Malformed (non-empty) name earns the inline error.
+    expect(
+      screen.getByText(
+        'Name must start with a lowercase letter / digit, only [a-z0-9_-], at most 128 chars.',
+      ),
+    ).toBeTruthy()
+
+    fireEvent.change(screen.getByTestId('workgroup-create-name'), {
       target: { value: 'review-squad' },
     })
-    fireEvent.change(screen.getByTestId('workgroup-member-agent-0'), {
-      target: { value: 'coder' },
+    fireEvent.change(screen.getByTestId('workgroup-create-description'), {
+      target: { value: 'audits PRs' },
     })
-    fireEvent.change(screen.getByTestId('workgroup-member-displayname-0'), {
-      target: { value: 'Coder' },
-    })
-    // Still invalid: leader_worker without a leader.
-    expect((screen.getByTestId('workgroup-save-button') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText('Leader-Worker mode requires one agent member as leader.')).toBeTruthy()
+    const enabled = screen.getByTestId('workgroup-create-confirm') as HTMLButtonElement
+    expect(enabled.disabled).toBe(false)
+    fireEvent.click(enabled)
 
-    fireEvent.click(screen.getByTestId('workgroup-member-leader-0'))
-    const enabledSave = screen.getByTestId('workgroup-save-button') as HTMLButtonElement
-    expect(enabledSave.disabled).toBe(false)
-
-    fireEvent.click(enabledSave)
     await waitFor(() => {
       const post = state.calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/workgroups'))
       expect(post).toBeTruthy()
-      expect(post?.body).toMatchObject({
-        name: 'review-squad',
-        mode: 'leader_worker',
-        leaderDisplayName: 'Coder',
-        members: [{ memberType: 'agent', agentName: 'coder', displayName: 'Coder' }],
-      })
+      // EXACTLY the two quick-create fields — everything else is a backend default.
+      expect(post?.body).toEqual({ name: 'review-squad', description: 'audits PRs' })
     })
-    // Create navigates to the new resource's detail page.
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/workgroups/review-squad')
     })
   })
 })
 
-describe('/workgroups/$name detail page', () => {
-  test('seeds the form from the stored row and PUTs without a name field', async () => {
+describe('/workgroups/$name — readiness banner', () => {
+  test('a memberless leader_worker group shows BOTH reasons', async () => {
+    installFetch({
+      workgroups: [wg('empty-squad', { members: [], leaderMemberId: null })],
+      calls: [],
+    })
+    await renderPage('/workgroups/empty-squad')
+    const banner = await screen.findByTestId('workgroup-readiness-banner')
+    expect(banner.textContent).toContain('No agent members yet — the group cannot launch.')
+    expect(banner.textContent).toContain(
+      'Leader-Worker mode needs one agent member designated as leader.',
+    )
+  })
+
+  test('a memberless free_collab group shows only the no-agent reason', async () => {
+    installFetch({
+      workgroups: [wg('brainstorm', { mode: 'free_collab', members: [], leaderMemberId: null })],
+      calls: [],
+    })
+    await renderPage('/workgroups/brainstorm')
+    const banner = await screen.findByTestId('workgroup-readiness-banner')
+    expect(banner.textContent).toContain('No agent members yet')
+    expect(banner.textContent).not.toContain('Leader-Worker mode needs')
+  })
+
+  test('a ready group renders no banner', async () => {
+    installFetch({ workgroups: [wg('review-squad')], calls: [] })
+    await renderPage('/workgroups/review-squad')
+    await screen.findByRole('heading', { name: 'review-squad' })
+    expect(screen.queryByTestId('workgroup-readiness-banner')).toBeNull()
+  })
+})
+
+describe('/workgroups/$name — config editing', () => {
+  test('config save PUTs the draft with the current members passed through (no name)', async () => {
     const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
     installFetch(state)
     await renderPage('/workgroups/review-squad')
 
-    await screen.findByRole('heading', { name: 'review-squad' })
     await waitFor(() => {
-      expect((screen.getByTestId('workgroup-field-name') as HTMLInputElement).value).toBe(
-        'review-squad',
+      expect((screen.getByTestId('workgroup-field-description') as HTMLInputElement).value).toBe(
+        'audits PRs',
       )
     })
-    const nameInput = screen.getByTestId('workgroup-field-name') as HTMLInputElement
-    expect(nameInput.disabled).toBe(true)
-    expect((screen.getByTestId('workgroup-member-displayname-0') as HTMLInputElement).value).toBe(
-      'Coder',
-    )
-
     fireEvent.change(screen.getByTestId('workgroup-field-description'), {
       target: { value: 'updated desc' },
     })
@@ -297,9 +347,30 @@ describe('/workgroups/$name detail page', () => {
         (c) => c.method === 'PUT' && c.url.endsWith('/api/workgroups/review-squad'),
       )
       expect(put).toBeTruthy()
-      expect(put?.body).toMatchObject({ description: 'updated desc' })
-      expect((put?.body as Record<string, unknown>).name).toBeUndefined()
+      const body = put?.body as Record<string, unknown>
+      expect(body.description).toBe('updated desc')
+      expect(body.name).toBeUndefined()
+      expect(body.leaderDisplayName).toBe('Coder')
+      expect(body.members).toEqual([
+        { memberType: 'agent', agentName: 'coder', displayName: 'Coder', roleDesc: 'writes code' },
+        { memberType: 'human', userId: 'u1', displayName: 'Alice', roleDesc: 'reviews' },
+        { memberType: 'agent', agentName: 'auditor', displayName: 'Auditor', roleDesc: '' },
+      ])
     })
+  })
+
+  test('a leaderless leader_worker group keeps Save ENABLED (lenient save contract)', async () => {
+    installFetch({
+      workgroups: [wg('review-squad', { leaderMemberId: null })],
+      calls: [],
+    })
+    await renderPage('/workgroups/review-squad')
+    await waitFor(() => {
+      expect((screen.getByTestId('workgroup-field-description') as HTMLInputElement).value).toBe(
+        'audits PRs',
+      )
+    })
+    expect((screen.getByTestId('workgroup-save-button') as HTMLButtonElement).disabled).toBe(false)
   })
 
   test('rename button opens a Dialog and POSTs /rename with the new name', async () => {
@@ -310,15 +381,11 @@ describe('/workgroups/$name detail page', () => {
     fireEvent.click(await screen.findByTestId('workgroup-rename-button'))
     const input = (await screen.findByTestId('workgroup-rename-input')) as HTMLInputElement
     expect(input.value).toBe('review-squad')
-
-    // Unchanged name keeps the confirm disabled.
     expect((screen.getByTestId('workgroup-rename-confirm') as HTMLButtonElement).disabled).toBe(
       true,
     )
     fireEvent.change(input, { target: { value: 'audit-squad' } })
-    const confirm = screen.getByTestId('workgroup-rename-confirm') as HTMLButtonElement
-    expect(confirm.disabled).toBe(false)
-    fireEvent.click(confirm)
+    fireEvent.click(screen.getByTestId('workgroup-rename-confirm'))
 
     await waitFor(() => {
       const post = state.calls.find(
@@ -330,6 +397,135 @@ describe('/workgroups/$name detail page', () => {
   })
 })
 
+describe('/workgroups/$name — member cards', () => {
+  test('renders one card per member with title / type chip / leader badge / reference', async () => {
+    installFetch({ workgroups: [wg('review-squad')], calls: [] })
+    await renderPage('/workgroups/review-squad')
+
+    await screen.findByTestId('workgroup-card-Coder')
+    const cards = screen.getAllByRole('listitem')
+    expect(cards).toHaveLength(3)
+    expect(screen.getByRole('heading', { name: 'Coder', level: 3 })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Alice', level: 3 })).toBeTruthy()
+
+    // Leader badge only on the leader card; set-leader only on NON-leader agents.
+    const coder = screen.getByTestId('workgroup-card-Coder')
+    expect(within(coder).getByTestId('workgroup-leader-badge')).toBeTruthy()
+    expect(within(coder).queryByTestId('workgroup-set-leader-Coder')).toBeNull()
+    const auditor = screen.getByTestId('workgroup-card-Auditor')
+    expect(within(auditor).getByTestId('workgroup-set-leader-Auditor')).toBeTruthy()
+    const alice = screen.getByTestId('workgroup-card-Alice')
+    expect(within(alice).queryByTestId('workgroup-set-leader-Alice')).toBeNull()
+    // Human card shows the resolved platform user name, never the raw id.
+    await waitFor(() => expect(alice.textContent).toContain('Alice Wang'))
+  })
+
+  test('set-leader PUTs the full document with the new leaderDisplayName', async () => {
+    const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
+    installFetch(state)
+    await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-set-leader-Auditor'))
+    await waitFor(() => {
+      const put = state.calls.find((c) => c.method === 'PUT')
+      expect(put).toBeTruthy()
+      const body = put?.body as Record<string, unknown>
+      expect(body.leaderDisplayName).toBe('Auditor')
+      expect((body.members as unknown[]).length).toBe(3)
+    })
+  })
+
+  test('remove confirms (two-click) then PUTs without the member; removing the leader clears it', async () => {
+    const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
+    installFetch(state)
+    await renderPage('/workgroups/review-squad')
+    const coder = await screen.findByTestId('workgroup-card-Coder')
+    const remove = within(coder).getByRole('button', { name: 'Remove' })
+    fireEvent.click(remove) // arm
+    fireEvent.click(within(coder).getByRole('button', { name: 'Confirm?' }))
+    await waitFor(() => {
+      const put = state.calls.find((c) => c.method === 'PUT')
+      expect(put).toBeTruthy()
+      const body = put?.body as Record<string, unknown>
+      expect(body.leaderDisplayName).toBeUndefined() // leader removed → flag cleared
+      expect(body.members).toEqual([
+        { memberType: 'human', userId: 'u1', displayName: 'Alice', roleDesc: 'reviews' },
+        { memberType: 'agent', agentName: 'auditor', displayName: 'Auditor', roleDesc: '' },
+      ])
+    })
+  })
+
+  test('edit dialog patches displayName/roleDesc and PUTs', async () => {
+    const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
+    installFetch(state)
+    await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-member-edit-Alice'))
+    const input = (await screen.findByTestId(
+      'workgroup-member-displayname-input',
+    )) as HTMLInputElement
+    expect(input.value).toBe('Alice')
+    fireEvent.change(input, { target: { value: 'Alicia' } })
+    fireEvent.click(screen.getByTestId('workgroup-edit-member-confirm'))
+    await waitFor(() => {
+      const put = state.calls.find((c) => c.method === 'PUT')
+      expect(put).toBeTruthy()
+      const members = (put?.body as { members: Array<{ displayName: string }> }).members
+      expect(members.map((m) => m.displayName)).toEqual(['Coder', 'Alicia', 'Auditor'])
+    })
+  })
+
+  test('add-agent dialog defaults the alias to the agent name and PUTs the appended member', async () => {
+    const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
+    installFetch(state)
+    await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-add-agent-member'))
+
+    const confirm = (await screen.findByTestId('workgroup-add-agent-confirm')) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true) // empty draft
+
+    fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
+      target: { value: 'reviewer' },
+    })
+    // Alias followed the agent name (editable default).
+    expect(
+      (screen.getByTestId('workgroup-member-displayname-input') as HTMLInputElement).value,
+    ).toBe('reviewer')
+    expect((screen.getByTestId('workgroup-add-agent-confirm') as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+    fireEvent.click(screen.getByTestId('workgroup-add-agent-confirm'))
+
+    await waitFor(() => {
+      const put = state.calls.find((c) => c.method === 'PUT')
+      expect(put).toBeTruthy()
+      const body = put?.body as Record<string, unknown>
+      expect(body.leaderDisplayName).toBe('Coder') // preserved
+      expect(body.members).toEqual([
+        { memberType: 'agent', agentName: 'coder', displayName: 'Coder', roleDesc: 'writes code' },
+        { memberType: 'human', userId: 'u1', displayName: 'Alice', roleDesc: 'reviews' },
+        { memberType: 'agent', agentName: 'auditor', displayName: 'Auditor', roleDesc: '' },
+        { memberType: 'agent', agentName: 'reviewer', displayName: 'reviewer', roleDesc: '' },
+      ])
+    })
+  })
+
+  test('duplicate alias in the add dialog blocks the confirm with an inline error', async () => {
+    installFetch({ workgroups: [wg('review-squad')], calls: [] })
+    await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-add-agent-member'))
+    await screen.findByTestId('workgroup-add-agent-dialog')
+    fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
+      target: { value: 'coder' },
+    })
+    fireEvent.change(screen.getByTestId('workgroup-member-displayname-input'), {
+      target: { value: 'Coder' },
+    })
+    expect(screen.getByText('Display names must be unique within the group.')).toBeTruthy()
+    expect((screen.getByTestId('workgroup-add-agent-confirm') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+  })
+})
+
 describe('RFC-164 /workgroups wiring', () => {
   test('sidebar nav exposes /workgroups inside the workflows group', () => {
     const nav = readSrc('lib/nav.ts')
@@ -338,31 +534,33 @@ describe('RFC-164 /workgroups wiring', () => {
     expect(workflowsGroup).toContain("to: '/workgroups'")
   })
 
-  test('router registers list + new + detail routes (literal before $param)', () => {
+  test('router registers list + detail routes only (creation is a dialog, no /new route)', () => {
     const router = readSrc('router.tsx')
     expect(router).toContain("import { Route as workgroupsRoute } from '@/routes/workgroups'")
     expect(router).toContain(
       "import { Route as workgroupDetailRoute } from '@/routes/workgroups.detail'",
     )
-    expect(router).toContain("import { Route as workgroupNewRoute } from '@/routes/workgroups.new'")
-    const newIdx = router.indexOf('workgroupNewRoute,')
+    expect(router).not.toContain('workgroups.new')
     const detailIdx = router.indexOf('workgroupDetailRoute,')
-    expect(newIdx).toBeGreaterThan(0)
-    expect(detailIdx).toBeGreaterThan(newIdx)
+    const listIdx = router.indexOf('workgroupsRoute,')
+    expect(detailIdx).toBeGreaterThan(0)
+    expect(listIdx).toBeGreaterThan(detailIdx)
   })
 
-  test('new + detail pages share the WorkgroupForm widget (visual parity)', () => {
-    const create = readSrc('routes/workgroups.new.tsx')
+  test('detail page composes the shared form + member cards + header actions', () => {
     const edit = readSrc('routes/workgroups.detail.tsx')
-    expect(create).toContain("import { WorkgroupForm } from '@/components/workgroup/WorkgroupForm'")
     expect(edit).toContain("import { WorkgroupForm } from '@/components/workgroup/WorkgroupForm'")
-    expect(create).toContain('btn btn--primary')
+    expect(edit).toContain(
+      "import { WorkgroupMemberCards } from '@/components/workgroup/WorkgroupMemberCards'",
+    )
     expect(edit).toContain('DetailHeaderActions')
+    expect(edit).toContain('workgroupLaunchReadiness')
+    const list = readSrc('routes/workgroups.tsx')
+    expect(list).toContain('buildQuickCreatePayload')
+    expect(list).toContain('btn btn--primary')
   })
 
-  test('zh-CN and en-US both define the workgroups i18n section (key symmetry)', () => {
-    // The global i18n-keys-symmetry test guards zh↔en drift; this pins the
-    // RFC-164 keys themselves so a rename in one bundle can't slip through.
+  test('zh-CN and en-US both define the RFC-164 keys (and dropped the strict-save errors)', () => {
     const mustExist = [
       'title',
       'newButton',
@@ -373,8 +571,16 @@ describe('RFC-164 /workgroups wiring', () => {
       'modeFreeCollab',
       'deleteTitle',
       'renameTitle',
+      'membersEmpty',
+      'memberEdit',
+      'memberRemove',
+      'setLeaderButton',
+      'leaderBadge',
       'addAgentMember',
       'addHumanMember',
+      'addAgentTitle',
+      'addHumanTitle',
+      'editMemberTitle',
       'fcSwitchesNotice',
       'fieldMaxRounds',
       'fieldCompletionGate',
@@ -383,28 +589,30 @@ describe('RFC-164 /workgroups wiring', () => {
       expect(zhCN.workgroups[key].length, `zh-CN workgroups.${key}`).toBeGreaterThan(0)
       expect(enUS.workgroups[key].length, `en-US workgroups.${key}`).toBeGreaterThan(0)
     }
+    expect(zhCN.workgroups.readiness.noAgentMember.length).toBeGreaterThan(0)
+    expect(zhCN.workgroups.readiness.leaderMissing.length).toBeGreaterThan(0)
+    expect(enUS.workgroups.readiness.noAgentMember.length).toBeGreaterThan(0)
+    expect(enUS.workgroups.readiness.leaderMissing.length).toBeGreaterThan(0)
     const errorKeys = [
       'nameRequired',
       'nameInvalid',
-      'membersRequired',
       'agentNameRequired',
       'userRequired',
       'displayNameRequired',
       'displayNameInvalid',
       'displayNameTooLong',
       'displayNameDuplicate',
-      'leaderRequired',
       'leaderMustBeAgent',
       'maxRoundsInvalid',
     ] as const
     for (const key of errorKeys) {
-      expect(zhCN.workgroups.errors[key].length, `zh-CN workgroups.errors.${key}`).toBeGreaterThan(
-        0,
-      )
-      expect(enUS.workgroups.errors[key].length, `en-US workgroups.errors.${key}`).toBeGreaterThan(
-        0,
-      )
+      expect(zhCN.workgroups.errors[key].length, `zh-CN errors.${key}`).toBeGreaterThan(0)
+      expect(enUS.workgroups.errors[key].length, `en-US errors.${key}`).toBeGreaterThan(0)
     }
+    // 决策 #21: the strict-save error keys are GONE — leaderless lw groups
+    // and empty member sets are save-valid now.
+    expect('leaderRequired' in zhCN.workgroups.errors).toBe(false)
+    expect('membersRequired' in zhCN.workgroups.errors).toBe(false)
     expect(zhCN.nav.workgroups).toBe('工作组')
     expect(enUS.nav.workgroups).toBe('Workgroups')
   })

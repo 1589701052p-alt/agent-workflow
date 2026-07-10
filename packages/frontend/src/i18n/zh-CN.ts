@@ -971,7 +971,7 @@ export interface Resources {
     colVersion: string
     colId: string
   }
-  // RFC-164 — workgroup resource pages (list / new / detail).
+  // RFC-164 — workgroup resource pages (list + quick-create dialog / detail).
   workgroups: {
     title: string
     newButton: string
@@ -1003,23 +1003,33 @@ export interface Resources {
     fieldMode: string
     modeHintLeaderWorker: string
     modeHintFreeCollab: string
-    memberColType: string
-    memberColRef: string
-    memberColDisplayName: string
-    memberColRole: string
-    memberColLeader: string
+    // Launch-readiness banner (shared workgroupLaunchReadiness reasons).
+    readiness: {
+      noAgentMember: string
+      leaderMissing: string
+    }
+    // Member cards zone (detail page).
+    membersEmpty: string
     memberTypeAgent: string
     memberTypeHuman: string
-    memberTypeAria: string
-    memberUserAria: string
+    memberEdit: string
+    memberRemove: string
+    setLeaderButton: string
+    leaderBadge: string
+    addAgentMember: string
+    addHumanMember: string
+    addAgentTitle: string
+    addHumanTitle: string
+    editMemberTitle: string
+    addMemberConfirm: string
+    memberFieldAgent: string
+    memberFieldUser: string
+    memberFieldDisplayName: string
+    memberFieldRole: string
     memberAgentPlaceholder: string
     memberUserPlaceholder: string
     memberDisplayNamePlaceholder: string
     memberRolePlaceholder: string
-    memberFallbackLabel: string
-    leaderRadioAria: string
-    addAgentMember: string
-    addHumanMember: string
     fieldShareOutputs: string
     fieldShareOutputsHint: string
     fieldDirectMessages: string
@@ -1034,14 +1044,12 @@ export interface Resources {
     errors: {
       nameRequired: string
       nameInvalid: string
-      membersRequired: string
       agentNameRequired: string
       userRequired: string
       displayNameRequired: string
       displayNameInvalid: string
       displayNameTooLong: string
       displayNameDuplicate: string
-      leaderRequired: string
       leaderMustBeAgent: string
       maxRoundsInvalid: string
     }
@@ -3620,7 +3628,7 @@ export const zhCN: Resources = {
     colVersion: '版本',
     colId: 'ID',
   },
-  // RFC-164 — 工作组资源页（列表 / 新建 / 详情）。
+  // RFC-164 — 工作组资源页（列表 + 快速新建弹窗 / 详情管理页）。
   workgroups: {
     title: '工作组',
     newButton: '+ 新建工作组',
@@ -3650,25 +3658,33 @@ export const zhCN: Resources = {
     fieldInstructions: '工作组章程',
     fieldInstructionsHint: '可选。每一轮都会注入给每个成员的公共指令。',
     fieldMode: '模式',
-    modeHintLeaderWorker: 'Leader 逐轮派活给 worker，需指定一名 agent 成员为 leader。',
+    modeHintLeaderWorker: 'Leader 逐轮派活给 worker，启动前需指定一名 agent 成员为 leader。',
     modeHintFreeCollab: '无 leader 的自由协作，三个协作开关强制全开。',
-    memberColType: '类型',
-    memberColRef: '引用',
-    memberColDisplayName: '显示名',
-    memberColRole: '职责',
-    memberColLeader: 'Leader',
+    readiness: {
+      noAgentMember: '还没有 agent 成员，无法启动。',
+      leaderMissing: 'Leader-Worker 模式需要指定一名 agent 成员为 leader。',
+    },
+    membersEmpty: '还没有成员。用下方按钮添加 agent 或人类成员。',
     memberTypeAgent: '代理',
     memberTypeHuman: '人类',
-    memberTypeAria: '成员 {{index}} 类型',
-    memberUserAria: '成员 {{index}} 平台用户',
-    memberAgentPlaceholder: '代理名（可填入尚不存在的名字）',
-    memberUserPlaceholder: '选择平台用户',
-    memberDisplayNamePlaceholder: '组内唯一，禁止 @、逗号、空白',
-    memberRolePlaceholder: '组内职责说明（选人依据）',
-    memberFallbackLabel: '成员 {{index}}',
-    leaderRadioAria: '设 {{name}} 为 leader',
+    memberEdit: '编辑',
+    memberRemove: '移除',
+    setLeaderButton: '设为 leader',
+    leaderBadge: 'Leader',
     addAgentMember: '+ 添加 agent 成员',
     addHumanMember: '+ 添加人类成员',
+    addAgentTitle: '添加 agent 成员',
+    addHumanTitle: '添加人类成员',
+    editMemberTitle: '编辑成员',
+    addMemberConfirm: '添加',
+    memberFieldAgent: '代理名',
+    memberFieldUser: '平台用户',
+    memberFieldDisplayName: '显示名',
+    memberFieldRole: '职责',
+    memberAgentPlaceholder: '可填入尚不存在的代理名（启动时才校验）。',
+    memberUserPlaceholder: '搜索并选择平台用户',
+    memberDisplayNamePlaceholder: '组内唯一，禁止 @、逗号、空白。',
+    memberRolePlaceholder: '组内职责说明（选人依据），可选。',
     fieldShareOutputs: '产出互见',
     fieldShareOutputsHint: '把同伴已完成任务的结果摘要注入给每个成员。',
     fieldDirectMessages: '定向消息',
@@ -3683,14 +3699,12 @@ export const zhCN: Resources = {
     errors: {
       nameRequired: '名称必填。',
       nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
-      membersRequired: '至少需要一名成员。',
       agentNameRequired: 'agent 成员必须填写代理名。',
       userRequired: '人类成员必须选择平台用户。',
       displayNameRequired: '显示名必填。',
       displayNameInvalid: '显示名不能包含 @、逗号或空白字符。',
       displayNameTooLong: '显示名最长 64 个字符。',
       displayNameDuplicate: '显示名在组内必须唯一。',
-      leaderRequired: 'Leader-Worker 模式必须指定一名 agent 成员为 leader。',
       leaderMustBeAgent: 'Leader 只能是 agent 成员。',
       maxRoundsInvalid: '最大轮数须为 1–500 的整数。',
     },

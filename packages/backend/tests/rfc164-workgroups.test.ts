@@ -18,6 +18,7 @@ import { resolve } from 'node:path'
 import {
   CreateWorkgroupSchema,
   resolveWorkgroupSwitches,
+  workgroupLaunchReadiness,
   type CreateWorkgroup,
 } from '@agent-workflow/shared'
 import { createSession } from '../src/auth/sessionStore'
@@ -57,12 +58,22 @@ function groupInput(overrides: Partial<CreateWorkgroup> = {}): CreateWorkgroup {
 }
 
 describe('RFC-164 — CreateWorkgroupSchema shape', () => {
-  test('leader_worker without leaderDisplayName is rejected', () => {
+  test('quick create (决策 #21): name+description alone is a valid body — everything defaults', () => {
+    const r = CreateWorkgroupSchema.safeParse({ name: 'g1', description: 'light' })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.members).toEqual([])
+      expect(r.data.mode).toBe('leader_worker')
+      expect(r.data.leaderDisplayName).toBeUndefined()
+    }
+  })
+
+  test('leader_worker WITHOUT leader is save-valid (readiness is launch-time)', () => {
     const r = CreateWorkgroupSchema.safeParse({
       name: 'g1',
       members: [{ memberType: 'agent', agentName: 'a', displayName: 'a' }],
     })
-    expect(r.success).toBe(false)
+    expect(r.success).toBe(true)
   })
 
   test('leader must be an agent member (human leader rejected)', () => {
@@ -125,6 +136,36 @@ describe('RFC-164 — CreateWorkgroupSchema shape', () => {
         members: [{ memberType: 'human', userId: 'u', agentName: 'x', displayName: 'h' }],
       }).success,
     ).toBe(false)
+  })
+
+  test('workgroupLaunchReadiness: no-agent-member / leader-missing / ready', () => {
+    const human = { id: 'h1', memberType: 'human' as const }
+    const agentA = { id: 'a1', memberType: 'agent' as const }
+    expect(
+      workgroupLaunchReadiness({ mode: 'leader_worker', leaderMemberId: null, members: [human] }),
+    ).toEqual({ ready: false, reasons: ['no-agent-member', 'leader-missing'] })
+    expect(
+      workgroupLaunchReadiness({ mode: 'leader_worker', leaderMemberId: null, members: [agentA] }),
+    ).toEqual({ ready: false, reasons: ['leader-missing'] })
+    // leader id pointing at a non-agent member is NOT ready
+    expect(
+      workgroupLaunchReadiness({
+        mode: 'leader_worker',
+        leaderMemberId: 'h1',
+        members: [human, agentA],
+      }),
+    ).toEqual({ ready: false, reasons: ['leader-missing'] })
+    expect(
+      workgroupLaunchReadiness({
+        mode: 'leader_worker',
+        leaderMemberId: 'a1',
+        members: [human, agentA],
+      }),
+    ).toEqual({ ready: true, reasons: [] })
+    // free_collab only needs an agent member
+    expect(
+      workgroupLaunchReadiness({ mode: 'free_collab', leaderMemberId: null, members: [agentA] }),
+    ).toEqual({ ready: true, reasons: [] })
   })
 
   test('free_collab needs no leader and resolves switches as all-on', () => {
@@ -338,7 +379,7 @@ describe('RFC-164 — workgroups route ACL (RFC-099 D1/D4/D15/D18)', () => {
 
     const bad = await req(alice.token, '/api/workgroups', {
       method: 'POST',
-      body: JSON.stringify({ name: 'x', members: [] }),
+      body: JSON.stringify({ name: 'BAD NAME!' }),
     })
     expect(bad.status).toBe(422)
     expect(((await bad.json()) as { code: string }).code).toBe('workgroup-invalid')

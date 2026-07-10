@@ -35,7 +35,6 @@ import {
 } from '@/routes/workflows'
 import { Route as workgroupsRoute } from '@/routes/workgroups'
 import { Route as workgroupDetailRoute } from '@/routes/workgroups.detail'
-import { Route as workgroupNewRoute } from '@/routes/workgroups.new'
 import { EditRoute as workflowEditRoute } from '@/routes/workflows.edit'
 import { LaunchRoute as workflowLaunchRoute } from '@/routes/workflows.launch'
 import { ReposRoute as reposRoute } from '@/routes/repos'
@@ -68,8 +67,7 @@ const routeTree = rootRoute.addChildren([
   workflowLaunchRoute,
   workflowEditRoute,
   workflowsRoute,
-  // RFC-164: '/workgroups/new' literal must precede '/workgroups/$name'.
-  workgroupNewRoute,
+  // RFC-164: creation is a list-page dialog — only list + detail routes.
   workgroupDetailRoute,
   workgroupsRoute,
   // RFC-105: '/tasks/$id/preview' (longer literal) before '/tasks/$id'.
