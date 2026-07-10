@@ -121,6 +121,23 @@ export async function ensureWorkgroupHostWorkflow(db: DbClient): Promise<void> {
 }
 
 /**
+ * PR-5 (T24): the task collaborators for a workgroup launch = explicitly-passed
+ * collaborators ∪ the group's human members (so the room / answer boundary
+ * includes them, proposal 目标 6). Deduped; order-stable (explicit first).
+ * Pure — unit-tested without a real launch (which would need a repo source and
+ * couple the test to the concurrent RFC-165 space-schema migration).
+ */
+export function resolveWorkgroupCollaborators(
+  explicit: readonly string[] | undefined,
+  members: ReadonlyArray<{ memberType: 'agent' | 'human'; userId: string | null }>,
+): string[] {
+  const humanUserIds = members
+    .filter((m) => m.memberType === 'human' && m.userId !== null)
+    .map((m) => m.userId as string)
+  return [...new Set([...(explicit ?? []), ...humanUserIds])]
+}
+
+/**
  * Launch a workgroup task. ACL: the launcher must be able to VIEW the group
  * (missing and invisible are the identical 404, D1); the member-agent closure
  * is implicitly authorized (RFC-099 D3 — same rule as workflow launches).
@@ -146,14 +163,11 @@ export async function startWorkgroupTask(
     })
   }
 
-  // PR-5 (T24): human members are first-class — they auto-join the task as
-  // collaborators so the room/answer boundary includes them (proposal 目标 6).
-  const humanUserIds = group.members
-    .filter((m) => m.memberType === 'human' && m.userId !== null)
-    .map((m) => m.userId as string)
-  const collaboratorUserIds = [
-    ...new Set([...(input.collaboratorUserIds ?? []), ...humanUserIds]),
-  ]
+  // PR-5 (T24): human members auto-join as task collaborators (proposal 目标 6).
+  const collaboratorUserIds = resolveWorkgroupCollaborators(
+    input.collaboratorUserIds,
+    group.members,
+  )
 
   await ensureWorkgroupHostWorkflow(db)
   const config = buildWorkgroupRuntimeConfig(group, input.goal)
