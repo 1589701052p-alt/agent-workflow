@@ -334,6 +334,15 @@ export const ClarifyNodeSchema = z
      * resolved to `'isolated'` (preserves RFC-023 behavior byte-for-byte).
      */
     sessionMode: ClarifySessionModeSchema.optional(),
+    /**
+     * RFC-165 (F12): 'optional' relaxes the clarify channel from "must ask
+     * first" to a dual-envelope directive — the agent may EITHER emit
+     * clarify questions OR finish directly with its normal output; every
+     * rerun of the same node (initial / retry / post-answer) stays optional.
+     * `undefined` keeps the pre-RFC-165 mandatory/suppressed semantics
+     * byte-for-byte (additive-field precedent: sessionMode above).
+     */
+    clarifyMode: z.enum(['optional']).optional(),
   })
   .passthrough()
 export type ClarifyNode = z.infer<typeof ClarifyNodeSchema>

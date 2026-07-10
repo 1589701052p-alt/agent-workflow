@@ -146,7 +146,17 @@ export type ClarifyChannel =
   | { kind: 'none' }
   | {
       kind: 'self' | 'cross'
-      directive: 'mandatory' | 'suppressed' | 'stopped'
+      /**
+       * RFC-165 (F12) adds 'optional': the clarify channel is OFFERED, not
+       * enforced — the agent may reply with EITHER a `<workflow-clarify>`
+       * envelope (opens a round) or a `<workflow-output>` (finalizes), and
+       * every rerun of the node (initial / retry / post-answer) stays
+       * optional. Runner enforcement: 'optional' trips NEITHER the
+       * clarify-required gate NOR the clarify-forbidden gate. Precedence
+       * when the scheduler composes the value: stopped > optional >
+       * mandatory/suppressed.
+       */
+      directive: 'mandatory' | 'suppressed' | 'stopped' | 'optional'
       injectStopNotice: boolean
     }
 
@@ -357,6 +367,10 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   const channel = input.clarifyChannel
   const mandatoryAskBack =
     channel !== undefined && channel.kind !== 'none' && channel.directive === 'mandatory'
+  // RFC-165 (F12): optional ask-back renders the DUAL-envelope protocol —
+  // both formats, agent's choice; enforcement stays off in the runner.
+  const optionalAskBack =
+    channel !== undefined && channel.kind !== 'none' && channel.directive === 'optional'
   const stopNotice =
     channel !== undefined && channel.kind !== 'none' && channel.injectStopNotice === true
   const tpl = input.promptTemplate ?? ''
@@ -552,6 +566,16 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     trailing = inlineMode
       ? buildClarifyInlineReminder()
       : buildMandatoryClarifyPreamble() + buildClarifyProtocolBlock()
+  } else if (optionalAskBack) {
+    // RFC-165 (F12): optional ask-back — the agent sees BOTH envelope
+    // formats and picks one. Inline (post-answer / same-session) rounds get
+    // a short dual-choice reminder; the full formats already live in the
+    // session transcript from the first round.
+    trailing = inlineMode
+      ? buildOptionalClarifyInlineReminder()
+      : buildOptionalClarifyPreamble() +
+        buildClarifyProtocolBlock() +
+        buildProtocolBlock(input.agentOutputs, input.agentOutputKinds)
   } else if (input.workgroupProtocolBlock !== undefined) {
     // RFC-164: workgroup runs replace (never extend) the agent-outputs block.
     trailing = input.workgroupProtocolBlock
@@ -730,6 +754,37 @@ export function buildClarifyInlineReminder(): string {
     'This node stays in MANDATORY ask-back mode until the user clicks "Stop clarifying" — your next reply MUST be another `<workflow-clarify>` envelope. ' +
     'Do not emit `<workflow-output>`; it will be rejected. ' +
     'The full clarify format and asking-back rules from earlier in this session still apply and have not been re-emitted.'
+  )
+}
+
+/**
+ * RFC-165 (F12) — the OPTIONAL ask-back preamble. Unlike the mandatory
+ * variant it explicitly offers BOTH outcomes and is followed by BOTH format
+ * blocks (clarify + output); the agent must pick exactly one envelope.
+ * Returns a leading `\n\n` like its mandatory sibling.
+ */
+export function buildOptionalClarifyPreamble(): string {
+  return (
+    '\n\n---\n' +
+    '**This node has an OPTIONAL clarify channel.** If anything material to doing this task correctly is unclear — scope, contracts, naming, acceptance criteria, unfamiliar terms — ask the user FIRST by replying with a `<workflow-clarify>` envelope (format below). If the task is already unambiguous, skip asking and produce the final `<workflow-output>` directly.\n\n' +
+    '- Reply with EXACTLY ONE envelope: either `<workflow-clarify>` or `<workflow-output>`, never both.\n' +
+    '- Prefer asking over assuming: an unstated detail you cannot resolve from the inputs / repository yourself is worth a question, not a guess.\n' +
+    '- Do not pad with low-stakes confirmations — if you ask, ask only the decisions that change the outcome.\n' +
+    '- Ask in the same language as the inputs / the user.'
+  )
+}
+
+/**
+ * RFC-165 (F12) — the optional-mode inline (same-session) reminder: the user
+ * answered the previous round; the agent may ask again OR finalize now. The
+ * full formats from the first round still stand in the session transcript.
+ */
+export function buildOptionalClarifyInlineReminder(): string {
+  return (
+    '\n\n---\n' +
+    'The user has answered your previous `<workflow-clarify>` round (see "Clarify Q&A — User Answers (Current Round)" above). ' +
+    'This node remains in OPTIONAL ask-back mode: if something material is still unclear, reply with another `<workflow-clarify>` envelope; otherwise produce the final `<workflow-output>` now. ' +
+    'Reply with exactly one of the two envelopes — the formats from earlier in this session still apply and have not been re-emitted.'
   )
 }
 

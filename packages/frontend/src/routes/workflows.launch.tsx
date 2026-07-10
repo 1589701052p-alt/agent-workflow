@@ -139,6 +139,9 @@ function LaunchPage() {
     seededRef.current = true
     const p = scheduleQ.data.launchPayload
     if (p === null) return // RFC-165: degraded row — leave the form blank for repair
+    // RFC-165 §9b: agent/workgroup schedules get kind-aware editing in the
+    // PR-3 wizard; this legacy form only understands the workflow arm.
+    if (!('workflowId' in p)) return
     setTaskName(p.name)
     setRepos(bodyToRepoSources(p))
     setWorkingBranch(p.workingBranch ?? '')

@@ -112,6 +112,7 @@ const S3_RESURRECT_REVIEW: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.S3.resurrectReviewRun.desc',
   risk: 'low',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
     const gate = schedulerLivenessGate(rc)
@@ -195,6 +196,7 @@ const S3_RESURRECT_CLARIFY: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.S3.resurrectClarifyRun.desc',
   risk: 'low',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
     const gate = schedulerLivenessGate(rc)
@@ -278,6 +280,7 @@ const S3_DEMOTE_TASK: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.S3.demoteTask.desc',
   risk: 'medium',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
     const gate = schedulerLivenessGate(rc)

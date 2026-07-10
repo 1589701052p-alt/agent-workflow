@@ -125,6 +125,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'PUT', path: '/api/agents/:name' },
   { method: 'DELETE', path: '/api/agents/:name' },
   { method: 'POST', path: '/api/agents/:name/rename' },
+  // RFC-165 §4: single-agent launch (service-level entry; tasks:launch gate).
+  { method: 'POST', path: '/api/agents/:name/tasks' },
   {
     method: 'GET',
     path: '/api/agents/:name/closure',

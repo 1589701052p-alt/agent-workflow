@@ -16,7 +16,7 @@
 // The actual resume is injected so this stays unit-testable without the full
 // launch machinery; start.ts passes a thunk that calls resumeTask with real deps.
 
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { DAEMON_RESTART_ERROR_SUMMARY } from '@agent-workflow/shared'
 
 import type { DbClient } from '@/db/client'
@@ -61,7 +61,16 @@ export async function autoResumeInterruptedTasks(
     .select({ id: tasks.id })
     .from(tasks)
     .where(
-      and(eq(tasks.status, 'interrupted'), eq(tasks.errorSummary, DAEMON_RESTART_ERROR_SUMMARY)),
+      and(
+        eq(tasks.status, 'interrupted'),
+        eq(tasks.errorSummary, DAEMON_RESTART_ERROR_SUMMARY),
+        // RFC-165 (F13-r5): generic resumeTask does not apply to workgroup
+        // host tasks (the engine adopts only pending rows; recovery is
+        // RFC-164 engine re-entry territory) — until that lands, workgroup
+        // tasks stay `interrupted` after a daemon restart (known limitation,
+        // design §12). Single-agent host tasks are REAL DAGs → included.
+        isNull(tasks.workgroupId),
+      ),
     )
 
   const resumed: string[] = []

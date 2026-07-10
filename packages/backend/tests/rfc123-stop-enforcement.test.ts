@@ -231,9 +231,11 @@ describe('RFC-123 D: stop-enforcement wiring guards', () => {
     )
     // RFC-148: the threading is no longer a scattered `clarifyStopped: true`
     // opt — the explicit stop lands as the ClarifyChannel ADT's 'stopped'
-    // directive (mandatory / suppressed being the other two arms).
+    // directive. RFC-165 (F12) slotted 'optional' between stopped and the
+    // mandatory/suppressed pair (precedence stopped > optional >
+    // mandatory/suppressed) — the lock follows the new ladder.
     expect(norm(schedulerSrc)).toContain(
-      "directive: clarifyStopped ? ('stopped' as const) : effectiveHasClarifyChannel ? ('mandatory' as const) : ('suppressed' as const)",
+      "directive: clarifyStopped ? ('stopped' as const) : clarifyOptional ? ('optional' as const) : effectiveHasClarifyChannel ? ('mandatory' as const) : ('suppressed' as const)",
     )
   })
 

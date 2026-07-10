@@ -97,17 +97,20 @@ function ScheduledDetailPage() {
               the best-effort workflowId hint (edit form seeds blank; saving PUTs
               a full replacement payload). Only a payload whose workflowId is
               unrecoverable (corrupt JSON) loses the entry. */}
-          {(s.launchPayload?.workflowId ?? s.launchPayloadWorkflowId ?? null) !== null && (
-            <Link
-              to="/workflows/$id/launch"
-              params={{ id: s.launchPayload?.workflowId ?? s.launchPayloadWorkflowId ?? '' }}
-              search={{ editScheduled: s.id }}
-              className="btn"
-              data-testid="scheduled-edit-config"
-            >
-              {t('scheduled.editConfig')}
-            </Link>
-          )}
+          {(s.launchKind ?? 'workflow') === 'workflow' &&
+            (workflowPayloadId(s.launchPayload) ?? s.launchPayloadWorkflowId ?? null) !== null && (
+              <Link
+                to="/workflows/$id/launch"
+                params={{
+                  id: workflowPayloadId(s.launchPayload) ?? s.launchPayloadWorkflowId ?? '',
+                }}
+                search={{ editScheduled: s.id }}
+                className="btn"
+                data-testid="scheduled-edit-config"
+              >
+                {t('scheduled.editConfig')}
+              </Link>
+            )}
           <button
             type="button"
             className="btn"
@@ -245,4 +248,17 @@ function ScheduledDetailPage() {
       )}
     </div>
   )
+}
+
+/**
+ * RFC-165 §9b: launchPayload is a three-kind union — the edit-config deep
+ * link (and its repair fallback) only applies to workflow schedules until
+ * the PR-3 wizard takes over kind-aware editing.
+ */
+function workflowPayloadId(p: unknown): string | null {
+  if (typeof p === 'object' && p !== null && 'workflowId' in p) {
+    const id = (p as { workflowId?: unknown }).workflowId
+    return typeof id === 'string' && id.length > 0 ? id : null
+  }
+  return null
 }

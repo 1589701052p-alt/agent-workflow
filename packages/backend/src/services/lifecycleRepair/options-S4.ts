@@ -22,6 +22,7 @@ const S4_KICK_TASK: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.S4.kickTask.desc',
   risk: 'low',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   // RFC-108 T13 (AR-07): the v1 auto-apply starter — kicking a pending task the
   // scheduler missed is a pure reversible re-poke (its only alternative,
   // S4.cancel-task, is high/destructive), so it is unambiguously safe to

@@ -155,19 +155,37 @@ describe('RFC-165 T2a — scratch-space materialization', () => {
   })
 
   test('S8 task_repos insert failure rolls back the task row (no ghost pending row)', async () => {
-    // Implementation-gate P2: a DB error AFTER the tasks insert used to leave
-    // a committed pending row whose scratch dir the catch had just deleted —
-    // ownerless, workspaceless, invisible to the scheduler. Poison the
-    // task_repos insert to force that exact window.
+    // Implementation-gate P2 (upgraded to F17-r3 dbTxSync): a DB error AFTER
+    // the tasks insert used to leave a committed pending row — ownerless,
+    // workspaceless, invisible to the scheduler. The launch writes are now a
+    // single transaction; poison the task_repos insert INSIDE it and assert
+    // the rollback is total. The poison wraps `transaction` so the tx handle
+    // the launch sees rejects the taskRepos table.
     h = buildHarness()
     const realDb = h.db
+    type TxFn = (tx: unknown) => unknown
     const poisoned = new Proxy(realDb, {
       get(target, prop, receiver) {
-        if (prop === 'insert') {
-          return (table: unknown) => {
-            if (table === taskRepos) throw new Error('boom-task-repos-insert')
-            return (target as unknown as { insert: (t: unknown) => unknown }).insert(table)
-          }
+        if (prop === 'transaction') {
+          return (fn: TxFn) =>
+            (target as unknown as { transaction: (f: TxFn) => unknown }).transaction(
+              (tx: unknown) => {
+                const poisonedTx = new Proxy(tx as object, {
+                  get(txTarget, txProp, txReceiver) {
+                    if (txProp === 'insert') {
+                      return (table: unknown) => {
+                        if (table === taskRepos) throw new Error('boom-task-repos-insert')
+                        return (txTarget as unknown as { insert: (t: unknown) => unknown }).insert(
+                          table,
+                        )
+                      }
+                    }
+                    return Reflect.get(txTarget, txProp, txReceiver)
+                  },
+                })
+                return fn(poisonedTx)
+              },
+            )
         }
         return Reflect.get(target, prop, receiver)
       },
@@ -177,8 +195,9 @@ describe('RFC-165 T2a — scratch-space materialization', () => {
       'boom-task-repos-insert',
     )
 
-    // No half-created row survives, the per-task scratch dir is cleaned
-    // (the empty `scratch/` parent may remain), lease freed.
+    // The transaction rolled back — no task row survives, the per-task
+    // scratch dir is cleaned (the empty `scratch/` parent may remain),
+    // lease freed.
     const rows = await realDb.select().from(tasks)
     expect(rows.length).toBe(0)
     expect(readdirSync(join(h.appHome, 'scratch'))).toEqual([])

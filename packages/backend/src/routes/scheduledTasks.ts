@@ -61,6 +61,15 @@ async function loadVisible(deps: AppDeps, actor: Actor, id: string): Promise<Sch
   return row
 }
 
+/** RFC-165 (N1-r3): the launch-arming operations gate. */
+function requireLaunchPermission(actor: Actor): void {
+  if (!actor.permissions.has('tasks:launch')) {
+    throw new ForbiddenError('forbidden', 'missing permission: tasks:launch', {
+      requiredPermission: 'tasks:launch',
+    })
+  }
+}
+
 export function mountScheduledTaskRoutes(app: Hono, deps: AppDeps): void {
   app.get('/api/scheduled-tasks', async (c) => {
     const actor = actorOf(c)
@@ -73,6 +82,9 @@ export function mountScheduledTaskRoutes(app: Hono, deps: AppDeps): void {
   })
 
   app.post('/api/scheduled-tasks', async (c) => {
+    // RFC-165 (N1-r3): creating a schedule arms future launches — same
+    // delegation as launching, so the same tasks:launch permission.
+    requireLaunchPermission(actorOf(c))
     const rawBody = await safeJson(c.req.raw)
     // RFC-165 (F1): reject retired path-mode keys inside the stored payload
     // BEFORE parsing (non-strict zod would silently strip them and persist a
@@ -136,6 +148,8 @@ export function mountScheduledTaskRoutes(app: Hono, deps: AppDeps): void {
   // (does NOT touch next_run_at / last_* / streak). Owner/admin only. Works even on
   // a disabled schedule (manual override). Launch failures surface as HTTP errors.
   app.post('/api/scheduled-tasks/:id/run-now', async (c) => {
+    // RFC-165 (N1-r3): run-now IS a launch.
+    requireLaunchPermission(actorOf(c))
     const actor = actorOf(c)
     const existing = await loadVisible(deps, actor, c.req.param('id'))
     requireWriteAccess(actor, existing)

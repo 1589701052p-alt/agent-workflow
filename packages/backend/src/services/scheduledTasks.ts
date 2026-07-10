@@ -8,15 +8,15 @@ import type {
   CreateScheduledTask,
   ScheduledTask,
   ScheduleSpec,
-  StartTask,
   UpdateScheduledTask,
 } from '@agent-workflow/shared'
 import {
+  ScheduleSpecSchema,
+  ScheduledTaskSchema,
   computeNextRunAt,
   rejectRetiredStartTaskKeys,
-  ScheduledTaskSchema,
-  ScheduleSpecSchema,
-  StartTaskSchema,
+  scheduledPayloadSchemaFor,
+  type ScheduledLaunchKind,
   wallClockAt,
 } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
@@ -28,12 +28,24 @@ import { buildActor, type Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { scheduledTasks, users } from '@/db/schema'
 import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
-import { NotFoundError, ValidationError } from '@/util/errors'
+import { canViewResource } from '@/services/resourceAcl'
+import { assertNotBuiltin } from '@/services/systemResources'
+import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 import { runGit } from '@/util/git'
 import { SCHEDULED_TASK_CHANNEL, scheduledTaskBroadcaster } from '@/ws/broadcaster'
 
 /** Injected launch — `(body) => startTask(body, deps)`, closed over owner + scheduledTaskId. */
-export type ScheduleLaunch = (payload: StartTask) => Promise<{ id: string }>
+/**
+ * RFC-165 §9b: the launch closure now dispatches by launch kind. `payload` is
+ * the kind-enveloped body ALREADY validated via scheduledPayloadSchemaFor;
+ * `actor` is the owner actor fireSchedule rebuilt (agent/workgroup launches
+ * run their own ACL gates against it).
+ */
+export type ScheduleLaunch = (
+  kind: ScheduledLaunchKind,
+  payload: Record<string, unknown>,
+  actor: Actor,
+) => Promise<{ id: string }>
 export type BuildScheduleLaunch = (ownerUserId: string, scheduledTaskId: string) => ScheduleLaunch
 
 type Row = typeof scheduledTasks.$inferSelect
@@ -76,9 +88,10 @@ function parseJsonField<T>(
 }
 
 function rowToScheduledTask(row: Row): ScheduledTask {
+  const kind = (row.launchKind ?? 'workflow') as ScheduledLaunchKind
   const payload = parseJsonField(
     row.launchPayload,
-    StartTaskSchema,
+    scheduledPayloadSchemaFor(kind),
     (json) => rejectRetiredStartTaskKeys(json) !== null,
   )
   const spec = parseJsonField(row.scheduleSpec, ScheduleSpecSchema)
@@ -100,6 +113,7 @@ function rowToScheduledTask(row: Row): ScheduledTask {
     id: row.id,
     name: row.name,
     ownerUserId: row.ownerUserId,
+    launchKind: kind,
     launchPayload: payload.value,
     scheduleSpec: spec.value,
     migrationNeeded: payload.legacy,
@@ -156,16 +170,61 @@ export async function getScheduledTaskRow(db: DbClient, id: string): Promise<Row
   return rows[0] ?? null
 }
 
+/**
+ * RFC-165 §9b create/repair-time LIGHT gate per kind: the target must exist,
+ * be visible to the actor, and not be builtin. Full launch validation
+ * (host snapshot / readiness / space rules) runs at fire time via the
+ * kind's launch service.
+ */
+async function assertScheduledTargetUsable(
+  db: DbClient,
+  actor: Actor,
+  kind: ScheduledLaunchKind,
+  body: Record<string, unknown>,
+): Promise<void> {
+  if (kind === 'workflow') {
+    const wf = await assertWorkflowLaunchable(db, actor, body['workflowId'] as string)
+    assertNoRequiredUploadInput(wf)
+    return
+  }
+  if (kind === 'agent') {
+    const { getAgent } = await import('@/services/agent')
+    const agent = await getAgent(db, body['agentName'] as string)
+    if (agent === null || !(await canViewResource(db, actor, 'agent', agent))) {
+      throw new NotFoundError('agent-not-found', `agent '${String(body['agentName'])}' not found`)
+    }
+    assertNotBuiltin('agent', agent)
+    return
+  }
+  const { getWorkgroup } = await import('@/services/workgroups')
+  const group = await getWorkgroup(db, body['workgroupName'] as string)
+  if (group === null || !(await canViewResource(db, actor, 'workgroup', group))) {
+    throw new NotFoundError(
+      'workgroup-not-found',
+      `workgroup '${String(body['workgroupName'])}' not found`,
+    )
+  }
+}
+
 export async function createScheduledTask(
   db: DbClient,
   input: CreateScheduledTask,
   opts: { actor: Actor },
 ): Promise<ScheduledTask> {
-  const body = StartTaskSchema.parse(input.launchPayload) // guarantee replayable
-  // Create-time gate (R2-b): invisible / built-in / deleted workflow → 404 now,
-  // not silently at fire time. Fire still re-checks (access can be revoked).
-  const wf = await assertWorkflowLaunchable(db, opts.actor, body.workflowId)
-  assertNoRequiredUploadInput(wf)
+  const kind = input.launchKind
+  // RFC-165 §9b: kind-enveloped validation — the ONE selector shared by
+  // save/edit/fire/run-now. Guarantees the stored payload is replayable.
+  const body = scheduledPayloadSchemaFor(kind).parse(input.launchPayload)
+  // Create-time gate (R2-b): invisible / built-in / deleted target → 404 now,
+  // not silently at fire time. Fire still re-checks (access can be revoked);
+  // agent/workgroup rows get the LIGHT existence/visibility check here and
+  // the full launch validation (host snapshot, readiness) at fire time.
+  await assertScheduledTargetUsable(
+    db,
+    opts.actor,
+    kind,
+    body as unknown as Record<string, unknown>,
+  )
   const spec = ScheduleSpecSchema.parse(input.scheduleSpec)
   const now = Date.now()
   const id = ulid()
@@ -173,6 +232,7 @@ export async function createScheduledTask(
     id,
     name: input.name,
     ownerUserId: opts.actor.user.id,
+    launchKind: kind,
     launchPayload: JSON.stringify(body),
     scheduleSpec: JSON.stringify(spec),
     enabled: input.enabled,
@@ -208,9 +268,17 @@ export async function updateScheduledTask(
   // enabled needs a valid payload (workflow gate) and a valid spec
   // (next_run_at). Plain rename / disable of a degraded row must stay
   // possible — otherwise a corrupt schedule can't even be stopped.
+  // RFC-165 §9b: the subject kind is immutable — repointing a schedule at a
+  // different face is a delete+recreate, not a PUT.
+  if (patch.launchKind !== undefined && patch.launchKind !== existing.launchKind) {
+    throw new ValidationError(
+      'scheduled-kind-immutable',
+      `launchKind is immutable (existing '${existing.launchKind}'); delete and recreate to change the subject`,
+    )
+  }
   const patchedPayload =
     patch.launchPayload !== undefined
-      ? StartTaskSchema.parse(patch.launchPayload)
+      ? scheduledPayloadSchemaFor(existing.launchKind).parse(patch.launchPayload)
       : existing.launchPayload
   const patchedSpec =
     patch.scheduleSpec !== undefined
@@ -233,12 +301,31 @@ export async function updateScheduledTask(
     }
   }
 
+  // RFC-165 (N1-r3) — tasks:launch is required for every operation that arms
+  // or re-arms future launches: payload replacement, enabling, and changing
+  // the cadence WHILE enabled (a narrow PAT turning a monthly schedule into
+  // every-minute is the same delegation escalation as launching). Plain
+  // rename / disable / disabled-state spec edits stay open.
+  const armsLaunch =
+    patch.launchPayload !== undefined ||
+    (patch.enabled === true && !existing.enabled) ||
+    (patch.scheduleSpec !== undefined && enabled)
+  if (armsLaunch && !opts.actor.permissions.has('tasks:launch')) {
+    throw new ForbiddenError('forbidden', 'missing permission: tasks:launch', {
+      requiredPermission: 'tasks:launch',
+    })
+  }
+
   // R3-1: re-gate whenever the RESULT is enabled (spec-only / re-enable / payload
   // change). Skip when the result is disabled so a user can still stop/clean up a
-  // schedule whose workflow vanished.
+  // schedule whose target vanished.
   if (enabled && patchedPayload !== null) {
-    const wf = await assertWorkflowLaunchable(db, opts.actor, patchedPayload.workflowId)
-    assertNoRequiredUploadInput(wf)
+    await assertScheduledTargetUsable(
+      db,
+      opts.actor,
+      existing.launchKind,
+      patchedPayload as unknown as Record<string, unknown>,
+    )
   }
 
   const now = Date.now()
@@ -307,9 +394,13 @@ export async function fireSchedule(
   buildLaunch: BuildScheduleLaunch,
   now: number,
 ): Promise<{ taskId: string }> {
-  const body = StartTaskSchema.parse(JSON.parse(row.launchPayload))
+  const kind = (row.launchKind ?? 'workflow') as ScheduledLaunchKind
+  const body = scheduledPayloadSchemaFor(kind).parse(JSON.parse(row.launchPayload))
   const spec = ScheduleSpecSchema.parse(JSON.parse(row.scheduleSpec))
-  const bodyWithName: StartTask = { ...body, name: decorateTaskName(body.name, spec, now) }
+  const bodyWithName = {
+    ...(body as Record<string, unknown>),
+    name: decorateTaskName((body as { name: string }).name, spec, now),
+  }
 
   const owner = (await db.select().from(users).where(eq(users.id, row.ownerUserId)).limit(1))[0]
   if (!owner || owner.status !== 'active') {
@@ -325,10 +416,19 @@ export async function fireSchedule(
     },
     source: 'daemon',
   })
-  await assertWorkflowLaunchable(db, actor, bodyWithName.workflowId)
+  // RFC-165 §9b: workflow rows keep the explicit fire-time gate; agent /
+  // workgroup rows are fully re-validated inside their launch services
+  // (ACL 404 / builtin 403 / readiness 422) — the dispatcher below.
+  if (kind === 'workflow') {
+    await assertWorkflowLaunchable(
+      db,
+      actor,
+      (bodyWithName as unknown as { workflowId: string }).workflowId,
+    )
+  }
 
   const launch = buildLaunch(row.ownerUserId, row.id)
-  const task = await launch(bodyWithName)
+  const task = await launch(kind, bodyWithName, actor)
   return { taskId: task.id }
 }
 

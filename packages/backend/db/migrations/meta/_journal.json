@@ -603,6 +603,13 @@
       "when": 1785510000005,
       "tag": "0086_rfc166_agent_inputs",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
+      "when": 1785510000006,
+      "tag": "0087_rfc165_scheduled_launch_kind",
+      "breakpoints": true
     }
   ]
 }

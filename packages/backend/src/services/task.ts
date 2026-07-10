@@ -40,6 +40,7 @@ import { basename, join } from 'node:path'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
 import {
+  agents,
   clarifyRounds,
   docVersions,
   lifecycleAlerts,
@@ -49,8 +50,11 @@ import {
   taskCollaborators,
   taskRepos,
   tasks,
+  users,
   workflows,
 } from '@/db/schema'
+import { dbTxSync } from '@/db/txSync'
+import { buildLaunchCollabRows } from '@/services/taskCollab'
 import { getWorkflow } from '@/services/workflow'
 import { buildWorkflowValidationContext, validateWorkflowDef } from '@/services/workflow.validator'
 import { materializingSpaces } from '@/services/gc'
@@ -240,6 +244,16 @@ export interface StartTaskDeps {
    * Stamped atomically with the task INSERT like scheduledTaskId.
    */
   workgroupLaunch?: { workgroupId: string; configJson: string; snapshotJson: string }
+  /**
+   * RFC-165 §4: single-agent launch payload. `snapshotJson` (the synthesized
+   * `__agent_host__` snapshot) replaces the FK-anchor row's stub definition
+   * as the frozen workflow_snapshot; `agentName` lands in
+   * `tasks.source_agent_name` (taskExecutionKind's 'agent' discriminator).
+   * The launch transaction re-checks the agent still exists (F17) — a
+   * concurrent delete between the service-level 404 gate and the INSERT
+   * must fail the launch, not mint a task for a ghost agent.
+   */
+  agentLaunch?: { agentName: string; snapshotJson: string }
 }
 
 /**
@@ -1085,146 +1099,160 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
   const headBaseCommit = head?.baseCommit ?? baseCommit
 
   const now = Date.now()
-  // Codex P1 (rollback scope): the catch below may only roll back rows THIS
-  // launch inserted — if the insert itself failed (e.g. a handed-off taskId
-  // already exists), deleting by taskId would destroy the pre-existing task.
-  let taskRowInserted = false
   try {
-    await deps.db.insert(tasks).values({
-      id: taskId,
-      // RFC-037: required name (StartTaskSchema already trimmed + length-validated).
-      name: input.name,
-      workflowId: workflow.id,
-      workflowSnapshot: deps.workgroupLaunch?.snapshotJson ?? JSON.stringify(workflow.definition),
-      workflowVersion: workflow.version, // RFC-109: record the version this snapshot froze
-      repoPath: headRepoPath,
-      // RFC-054 W3-4 KNOWN_GAP fix: never persist the credentialed URL.
-      // gitRepoCache has already used the cleartext form to clone (line
-      // 197 above); from this point onward the daemon only needs the
-      // redacted form (for display, WS broadcast, error messages). The
-      // cleartext URL is reachable only ephemerally via the cache key
-      // hash, so even DB-level access can't reconstruct it.
-      repoUrl: headRepoUrl !== null ? redactGitUrl(headRepoUrl) : null,
-      worktreePath,
-      baseBranch: headBaseBranch,
-      branch: headBranch !== '' ? headBranch : `agent-workflow/${taskId}`,
-      baseCommit: headBaseCommit,
-      status: earlyError === null ? 'pending' : 'failed',
-      inputs: JSON.stringify(input.inputs),
-      maxDurationMs: input.maxDurationMs ?? null,
-      maxTotalTokens: input.maxTotalTokens ?? null,
-      // RFC-067: per-task Git commit identity (NULL when omitted or only
-      // half-set; runner.ts skips env injection when these are NULL).
-      gitUserName: persistedGitUserName,
-      gitUserEmail: persistedGitUserEmail,
-      // RFC-075: user-specified working branch (NULL → isolation branch) +
-      // the auto commit&push toggle (false → legacy, no commit/push).
-      workingBranch: input.workingBranch ?? null,
-      autoCommitPush: input.autoCommitPush ?? false,
-      // RFC-066: count of `task_repos` rows. Single-repo path always = 1;
-      // multi-repo populates with the materialized count (zero only when the
-      // first repo failed before any task_repos row was minted).
-      repoCount: Math.max(1, materializedRepos.length),
-      startedAt: now,
-      finishedAt: earlyError === null ? null : now,
-      errorSummary: earlyError !== null ? `worktree creation failed: ${earlyError}` : null,
-      errorMessage: earlyError,
-      // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
-      ownerUserId: deps.actorUserId ?? null,
-      // RFC-159: the scheduled_tasks row that auto-launched this task (NULL =
-      // manual). Stamped atomically with the row so the schedule's run history is
-      // durable regardless of any later bookkeeping write.
-      scheduledTaskId: deps.scheduledTaskId ?? null,
-      // RFC-164: workgroup link + runtime config copy (NULL = not a workgroup task).
-      workgroupId: deps.workgroupLaunch?.workgroupId ?? null,
-      workgroupConfigJson: deps.workgroupLaunch?.configJson ?? null,
-      // RFC-165: execution-space kind. 'local' is transitional (path mode, until
-      // its public retirement lands within this PR); 'internal' is stamped via
-      // the internalSource dep (fusion) once that migration lands.
-      spaceKind: space.spaceKind,
-      // RFC-165 (R3-2-r4): a materialize-failure row has NO revivable workspace —
-      // stamp the tombstone atomically with the row so retry / sync-workflow can
-      // never CAS it back to pending against a missing directory.
-      workspacePrunedAt: earlyError !== null && worktreePath === '' ? now : null,
-    })
-    taskRowInserted = true
-
-    // RFC-066: persist per-repo metadata. Single-repo tasks land one row at
-    // repo_index=0 mirroring the legacy columns above; multi-repo tasks land
-    // N rows sorted by repo_index. The list view's `repoCount` chip is driven
-    // by `tasks.repo_count`; the detail page's `Task.repos[]` array is hydrated
-    // from this table by `getTask`.
-    if (materializedRepos.length > 0) {
-      await deps.db.insert(taskRepos).values(
-        materializedRepos.map((r) => ({
-          taskId,
-          repoIndex: r.repoIndex,
-          repoPath: r.repoPath,
-          repoUrl: r.repoUrl !== null ? redactGitUrl(r.repoUrl) : null,
-          baseBranch: r.baseBranch,
-          branch: r.branch,
-          // RFC-075: the single working-branch name is applied to every repo
-          // (NULL → this repo uses the isolation branch in `branch`).
+    // RFC-165 (F17-r3): the task row + its per-repo rows + the launch
+    // collaborator rows + the single-agent existence RE-check land in ONE
+    // dbTxSync transaction — atomicity replaces the old best-effort manual
+    // rollback (which, per Codex P1, could even delete a PRE-EXISTING task
+    // when a handed-off taskId collided). Synchronous surface only inside.
+    dbTxSync(deps.db, (tx) => {
+      // F17: a concurrent agent delete between the service-level 404 gate and
+      // this insert must fail the launch — never mint a task for a ghost.
+      if (deps.agentLaunch !== undefined) {
+        const live = tx
+          .select({ name: agents.name })
+          .from(agents)
+          .where(eq(agents.name, deps.agentLaunch.agentName))
+          .get()
+        if (live === undefined) {
+          throw new NotFoundError(
+            'agent-not-found',
+            `agent '${deps.agentLaunch.agentName}' was deleted during launch`,
+          )
+        }
+      }
+      tx.insert(tasks)
+        .values({
+          id: taskId,
+          // RFC-037: required name (StartTaskSchema already trimmed + length-validated).
+          name: input.name,
+          workflowId: workflow.id,
+          workflowSnapshot:
+            deps.workgroupLaunch?.snapshotJson ??
+            deps.agentLaunch?.snapshotJson ??
+            JSON.stringify(workflow.definition),
+          workflowVersion: workflow.version, // RFC-109: record the version this snapshot froze
+          repoPath: headRepoPath,
+          // RFC-054 W3-4 KNOWN_GAP fix: never persist the credentialed URL.
+          // gitRepoCache has already used the cleartext form to clone (line
+          // 197 above); from this point onward the daemon only needs the
+          // redacted form (for display, WS broadcast, error messages). The
+          // cleartext URL is reachable only ephemerally via the cache key
+          // hash, so even DB-level access can't reconstruct it.
+          repoUrl: headRepoUrl !== null ? redactGitUrl(headRepoUrl) : null,
+          worktreePath,
+          baseBranch: headBaseBranch,
+          branch: headBranch !== '' ? headBranch : `agent-workflow/${taskId}`,
+          baseCommit: headBaseCommit,
+          status: earlyError === null ? 'pending' : 'failed',
+          inputs: JSON.stringify(input.inputs),
+          maxDurationMs: input.maxDurationMs ?? null,
+          maxTotalTokens: input.maxTotalTokens ?? null,
+          // RFC-067: per-task Git commit identity (NULL when omitted or only
+          // half-set; runner.ts skips env injection when these are NULL).
+          gitUserName: persistedGitUserName,
+          gitUserEmail: persistedGitUserEmail,
+          // RFC-075: user-specified working branch (NULL → isolation branch) +
+          // the auto commit&push toggle (false → legacy, no commit/push).
           workingBranch: input.workingBranch ?? null,
-          baseCommit: r.baseCommit,
-          worktreePath: r.worktreePath,
-          worktreeDirName: r.worktreeDirName,
-          hasSubmodules: r.hasSubmodules,
-          submoduleInitOk: r.submoduleInitOk,
-          submoduleInitError: r.submoduleInitError,
-          schemaVersion: 1,
-        })),
-      )
-    }
-
-    // RFC-067 NOTE: an earlier draft of this RFC also wrote `user.name` /
-    // `user.email` into the worktree's local `.git/config` as a defense-in-
-    // depth fallback for git invocations that bypass the runner's spawn env.
-    // We dropped that path: by default `git config <key> <value>` inside a
-    // worktree writes to the PARENT repo's shared `.git/config`, so two
-    // concurrent tasks against the same source repo race-overwrite each
-    // other's identity. Per-worktree config via `extensions.worktreeConfig=
-    // true` would have to be enabled on the parent repo (a global flag we do
-    // not own). Pure spawn-env injection (in services/runner.ts) is therefore
-    // the single source of truth for task identity; agents that bypass the
-    // runner fall back to the parent repo's default user, matching
-    // pre-RFC-067 behaviour.
-
-    // RFC-036/RFC-099: record owner + collaborators (assignments removed, D6).
-    if (deps.actorUserId) {
-      const { recordLaunchContext } = await import('@/services/taskCollab')
-      try {
-        await recordLaunchContext(deps.db, {
-          taskId,
-          ownerUserId: deps.actorUserId,
-          collaboratorUserIds: input.collaboratorUserIds ?? [],
-          now,
+          autoCommitPush: input.autoCommitPush ?? false,
+          // RFC-066: count of `task_repos` rows. Single-repo path always = 1;
+          // multi-repo populates with the materialized count (zero only when the
+          // first repo failed before any task_repos row was minted).
+          repoCount: Math.max(1, materializedRepos.length),
+          startedAt: now,
+          finishedAt: earlyError === null ? null : now,
+          errorSummary: earlyError !== null ? `worktree creation failed: ${earlyError}` : null,
+          errorMessage: earlyError,
+          // RFC-036: launcher identity (NULL = legacy / __system__ fallback).
+          ownerUserId: deps.actorUserId ?? null,
+          // RFC-159: the scheduled_tasks row that auto-launched this task (NULL =
+          // manual). Stamped atomically with the row so the schedule's run history is
+          // durable regardless of any later bookkeeping write.
+          scheduledTaskId: deps.scheduledTaskId ?? null,
+          // RFC-164: workgroup link + runtime config copy (NULL = not a workgroup task).
+          workgroupId: deps.workgroupLaunch?.workgroupId ?? null,
+          workgroupConfigJson: deps.workgroupLaunch?.configJson ?? null,
+          // RFC-165 §4: single-agent soft link (taskExecutionKind 'agent' discriminator).
+          sourceAgentName: deps.agentLaunch?.agentName ?? null,
+          // RFC-165: execution-space kind. 'local' is transitional (path mode, until
+          // its public retirement lands within this PR); 'internal' is stamped via
+          // the internalSource dep (fusion) once that migration lands.
+          spaceKind: space.spaceKind,
+          // RFC-165 (R3-2-r4): a materialize-failure row has NO revivable workspace —
+          // stamp the tombstone atomically with the row so retry / sync-workflow can
+          // never CAS it back to pending against a missing directory.
+          workspacePrunedAt: earlyError !== null && worktreePath === '' ? now : null,
         })
-      } catch (err) {
-        // Roll back the task row so the caller sees a clean 422 with no
-        // half-created row in /api/tasks.
-        await deps.db.delete(tasks).where(eq(tasks.id, taskId))
-        throw err
+        .run()
+
+      // RFC-066: persist per-repo metadata. Single-repo tasks land one row at
+      // repo_index=0 mirroring the legacy columns above; multi-repo tasks land
+      // N rows sorted by repo_index. The list view's `repoCount` chip is driven
+      // by `tasks.repo_count`; the detail page's `Task.repos[]` array is hydrated
+      // from this table by `getTask`.
+      if (materializedRepos.length > 0) {
+        tx.insert(taskRepos)
+          .values(
+            materializedRepos.map((r) => ({
+              taskId,
+              repoIndex: r.repoIndex,
+              repoPath: r.repoPath,
+              repoUrl: r.repoUrl !== null ? redactGitUrl(r.repoUrl) : null,
+              baseBranch: r.baseBranch,
+              branch: r.branch,
+              // RFC-075: the single working-branch name is applied to every repo
+              // (NULL → this repo uses the isolation branch in `branch`).
+              workingBranch: input.workingBranch ?? null,
+              baseCommit: r.baseCommit,
+              worktreePath: r.worktreePath,
+              worktreeDirName: r.worktreeDirName,
+              hasSubmodules: r.hasSubmodules,
+              submoduleInitOk: r.submoduleInitOk,
+              submoduleInitError: r.submoduleInitError,
+              schemaVersion: 1,
+            })),
+          )
+          .run()
       }
-    }
+
+      // RFC-067 NOTE: an earlier draft of this RFC also wrote `user.name` /
+      // `user.email` into the worktree's local `.git/config` as a defense-in-
+      // depth fallback for git invocations that bypass the runner's spawn env.
+      // We dropped that path: by default `git config <key> <value>` inside a
+      // worktree writes to the PARENT repo's shared `.git/config`, so two
+      // concurrent tasks against the same source repo race-overwrite each
+      // other's identity. Per-worktree config via `extensions.worktreeConfig=
+      // true` would have to be enabled on the parent repo (a global flag we do
+      // not own). Pure spawn-env injection (in services/runner.ts) is therefore
+      // the single source of truth for task identity; agents that bypass the
+      // runner fall back to the parent repo's default user, matching
+      // pre-RFC-067 behaviour.
+
+      // RFC-036/RFC-099: record owner + collaborators (assignments removed,
+      // D6) inside the SAME transaction — a validation throw (inactive user)
+      // rolls back the task + task_repos rows atomically.
+      if (deps.actorUserId) {
+        const userRows = tx.select({ id: users.id, status: users.status }).from(users).all()
+        const collabRows = buildLaunchCollabRows(
+          {
+            taskId,
+            ownerUserId: deps.actorUserId,
+            collaboratorUserIds: input.collaboratorUserIds ?? [],
+            now,
+          },
+          userRows,
+        )
+        if (collabRows.length > 0) {
+          tx.insert(taskCollaborators).values(collabRows).run()
+        }
+      }
+    })
   } catch (err) {
-    // Implementation-gate P2 fix: a failure AFTER the tasks insert (the
-    // task_repos batch, or a rethrown collaborator error) must not leave a
-    // half-created pending row the caller was told failed — it would sit
-    // ownerless with no workspace/tombstone/scheduler. Best-effort delete;
-    // a row that never landed (insert itself threw) makes this a no-op, and
-    // recordLaunchContext's own rollback just makes it idempotent.
-    if (taskRowInserted) {
-      try {
-        await deps.db.delete(taskRepos).where(eq(taskRepos.taskId, taskId))
-        await deps.db.delete(tasks).where(eq(tasks.id, taskId))
-      } catch {
-        /* best-effort */
-      }
-    }
-    // RFC-165 (F9): a scratch dir whose row failed to commit (insert error or
-    // collaborator rollback above) is unreachable from any task row — the
-    // launch flow owns its cleanup, best-effort, before rethrowing.
+    // The transaction rolled back — no task/task_repos/collaborator rows
+    // survive. RFC-165 (F9): a scratch dir whose row failed to commit is
+    // unreachable from any task row — the launch flow owns its cleanup,
+    // best-effort, before rethrowing.
     if (isScratch && worktreePath !== '') {
       await rm(worktreePath, { recursive: true, force: true }).catch(() => {})
     }

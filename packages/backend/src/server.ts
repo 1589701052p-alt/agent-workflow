@@ -120,8 +120,24 @@ export function createApp(deps: AppDeps): Hono {
   // permitted actor (e.g. a regular-user session token) is rejected with 403
   // before any service-layer code runs. The gates pick the permission point
   // from the request method (GET → :read, mutating verbs → :write).
-  app.use('/api/agents', resourcePermissionGate('agents'))
-  app.use('/api/agents/*', resourcePermissionGate('agents'))
+  // RFC-165 (F15/N1): launching is a TASK operation on every subject face —
+  // all three launch endpoints gate on tasks:launch uniformly, and the agent
+  // launch path is exempt from the agents:write method gate below.
+  app.on('POST', '/api/tasks', requirePermission('tasks:launch'))
+  app.on('POST', '/api/workgroups/:name/tasks', requirePermission('tasks:launch'))
+  app.on('POST', '/api/agents/:name/tasks', requirePermission('tasks:launch'))
+  app.use(
+    '/api/agents',
+    resourcePermissionGate('agents', {
+      skip: (method, path) => method === 'POST' && /^\/api\/agents\/[^/]+\/tasks$/.test(path),
+    }),
+  )
+  app.use(
+    '/api/agents/*',
+    resourcePermissionGate('agents', {
+      skip: (method, path) => method === 'POST' && /^\/api\/agents\/[^/]+\/tasks$/.test(path),
+    }),
+  )
   app.use('/api/skills', resourcePermissionGate('skills'))
   app.use('/api/skills/*', resourcePermissionGate('skills'))
   app.use('/api/skill-sources', resourcePermissionGate('skills'))

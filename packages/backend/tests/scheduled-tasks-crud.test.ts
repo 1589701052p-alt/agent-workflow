@@ -5,6 +5,7 @@
 // initial next_run_at; update re-gates when the result is enabled + recomputes
 // next_run_at + resets consecutive_failures; row corruption is caught.
 import { beforeEach, describe, expect, test } from 'bun:test'
+import type { StartTask } from '@agent-workflow/shared'
 import { eq } from 'drizzle-orm'
 import { resolve } from 'node:path'
 
@@ -56,7 +57,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
   test('create: validates body, gates workflow, computes next_run_at, owner=actor', async () => {
     const created = await createScheduledTask(
       db,
-      { name: 'daily audit', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: true },
+      {
+        name: 'daily audit',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: true,
+      },
       { actor: actor('alice') },
     )
     expect(created.ownerUserId).toBe('alice')
@@ -64,13 +71,19 @@ describe('RFC-159 scheduled-task CRUD', () => {
     expect(created.nextRunAt).toBeGreaterThan(Date.now())
     expect(created.consecutiveFailures).toBe(0)
     expect(created.launchPayload).not.toBe(null)
-    expect(created.launchPayload!.workflowId).toBe(wfId)
+    expect((created.launchPayload as StartTask).workflowId).toBe(wfId)
   })
 
   test('create: disabled schedule has null next_run_at', async () => {
     const created = await createScheduledTask(
       db,
-      { name: 'x', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: false },
+      {
+        name: 'x',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: false,
+      },
       { actor: actor('alice') },
     )
     expect(created.enabled).toBe(false)
@@ -84,6 +97,7 @@ describe('RFC-159 scheduled-task CRUD', () => {
         // no repo source → StartTaskSchema superRefine fails (still invalid despite inputs)
         {
           name: 'x',
+          launchKind: 'workflow' as const,
           launchPayload: { workflowId: wfId, name: 'x', inputs: {} },
           scheduleSpec: SPEC,
           enabled: true,
@@ -103,7 +117,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
     await expect(
       createScheduledTask(
         db,
-        { name: 'x', launchPayload: launchBody(priv.id), scheduleSpec: SPEC, enabled: true },
+        {
+          name: 'x',
+          launchKind: 'workflow' as const,
+          launchPayload: launchBody(priv.id),
+          scheduleSpec: SPEC,
+          enabled: true,
+        },
         { actor: actor('alice') },
       ),
     ).rejects.toBeInstanceOf(NotFoundError)
@@ -115,7 +135,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
     try {
       await createScheduledTask(
         db,
-        { name: 'x', launchPayload: launchBody(up.id), scheduleSpec: SPEC, enabled: true },
+        {
+          name: 'x',
+          launchKind: 'workflow' as const,
+          launchPayload: launchBody(up.id),
+          scheduleSpec: SPEC,
+          enabled: true,
+        },
         { actor: actor('alice') },
       )
     } catch (e) {
@@ -128,7 +154,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
   test('update: re-enabling recomputes next_run_at and resets consecutive_failures', async () => {
     const created = await createScheduledTask(
       db,
-      { name: 'x', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: false },
+      {
+        name: 'x',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: false,
+      },
       { actor: actor('alice') },
     )
     // simulate a prior failure streak on the disabled row
@@ -150,7 +182,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
   test('update: disabling clears next_run_at', async () => {
     const created = await createScheduledTask(
       db,
-      { name: 'x', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: true },
+      {
+        name: 'x',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: true,
+      },
       { actor: actor('alice') },
     )
     const updated = await updateScheduledTask(
@@ -171,7 +209,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
   test('delete removes the row; list reflects it', async () => {
     const created = await createScheduledTask(
       db,
-      { name: 'x', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: true },
+      {
+        name: 'x',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: true,
+      },
       { actor: actor('alice') },
     )
     expect((await listScheduledTasks(db)).length).toBe(1)
@@ -186,7 +230,13 @@ describe('RFC-159 scheduled-task CRUD', () => {
     // migrationError while the row stays readable / repairable / deletable.
     const created = await createScheduledTask(
       db,
-      { name: 'x', launchPayload: launchBody(), scheduleSpec: SPEC, enabled: true },
+      {
+        name: 'x',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled: true,
+      },
       { actor: actor('alice') },
     )
     await db

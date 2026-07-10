@@ -39,10 +39,12 @@ function stubLaunch(): {
   captured: { owner?: string; schedId?: string; body?: StartTask }
 } {
   const captured: { owner?: string; schedId?: string; body?: StartTask } = {}
-  const build: BuildScheduleLaunch = (owner, schedId) => async (body) => {
+  // RFC-165 §9b: the closure receives (kind, payload, actor); these run-now
+  // tests only exercise workflow rows.
+  const build: BuildScheduleLaunch = (owner, schedId) => async (_kind, payload) => {
     captured.owner = owner
     captured.schedId = schedId
-    captured.body = body
+    captured.body = payload as unknown as StartTask
     return { id: STUB_TASK_ID }
   }
   return { build, captured }
@@ -79,7 +81,13 @@ describe('RFC-159 T7 — run-now service (pure-launch semantics)', () => {
   async function makeSchedule(enabled: boolean): Promise<string> {
     const created = await createScheduledTask(
       db,
-      { name: 'daily audit', launchPayload: launchBody(), scheduleSpec: SPEC, enabled },
+      {
+        name: 'daily audit',
+        launchKind: 'workflow' as const,
+        launchPayload: launchBody(),
+        scheduleSpec: SPEC,
+        enabled,
+      },
       { actor: actorFor(bobId) },
     )
     return created.id
@@ -182,6 +190,7 @@ describe('RFC-159 T7 — run-now route gate', () => {
       db,
       {
         name: 'nightly',
+        launchKind: 'workflow' as const,
         launchPayload: {
           workflowId: wf.id,
           name: 'nightly',

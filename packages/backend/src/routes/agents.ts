@@ -9,6 +9,7 @@ import {
   AgentNameSchema,
   CreateAgentSchema,
   RenameAgentSchema,
+  StartAgentTaskSchema,
   UpdateAgentSchema,
 } from '@agent-workflow/shared'
 import { z } from 'zod'
@@ -27,6 +28,9 @@ import { resolveDependsClosure, validateDependsOn } from '@/services/agentDeps'
 import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
 import { assertNotBuiltin, excludeBuiltinAgents, isBuiltinRow } from '@/services/systemResources'
 import { assertNewRefsUsable, diffNewNames } from '@/services/resourceRefs'
+import { startAgentTask } from '@/services/agentLaunch'
+import { buildStartTaskDeps } from '@/services/startTaskDeps'
+import { resolveOpencodeCmd } from '@/util/opencode'
 import { mountAclEndpoints } from './resourceAcl'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Agent } from '@agent-workflow/shared'
@@ -158,6 +162,38 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     await requireResourceOwner(deps.db, actor, 'agent', existing)
     await deleteAgent(deps.db, name)
     return c.body(null, 204)
+  })
+
+  // RFC-165 §4 — launch a SINGLE-AGENT task (POST /api/agents/:name/tasks).
+  // Service-layer entry (the builtin __agent_host__ workflow would 403
+  // assertWorkflowLaunchable via /api/tasks by design); permission-wise this
+  // is a LAUNCH, gated by tasks:launch in server.ts (F15) — deliberately
+  // exempt from the agents:write method gate. The schema only ever declared
+  // modern space fields, so no raw-key gate is needed (workgroup precedent).
+  app.post('/api/agents/:name/tasks', async (c) => {
+    const name = c.req.param('name')
+    let body: unknown
+    try {
+      body = await c.req.raw.json()
+    } catch {
+      body = {}
+    }
+    const parsed = StartAgentTaskSchema.safeParse(body)
+    if (!parsed.success) {
+      throw new ValidationError('agent-launch-invalid', 'invalid agent launch payload', {
+        issues: parsed.error.issues,
+      })
+    }
+    const actor = actorOf(c)
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const task = await startAgentTask(
+      deps.db,
+      actor,
+      name,
+      parsed.data,
+      buildStartTaskDeps(deps.db, deps.configPath, actor.user.id, opencodeCmd),
+    )
+    return c.json(task, 201)
   })
 
   app.post('/api/agents/:name/rename', async (c) => {

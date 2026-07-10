@@ -13,6 +13,7 @@ import {
   RepairRequestSchema,
   rejectRetiredStartTaskKeys,
   StartTaskSchema,
+  taskExecutionKind,
   TaskStatusSchema,
   UploadInputSchema,
   type WorkflowInput,
@@ -426,7 +427,7 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   // the version-TOCTOU / invalid / noop / wrapper-blocker / status gates.
   app.post('/api/tasks/:id/sync-workflow', async (c) => {
     const id = c.req.param('id')
-    await assertTaskWorkflowNotBuiltin(deps, id) // RFC-104: no manual exec of built-ins
+    await assertTaskSyncable(deps, id) // RFC-104 builtin 403 / RFC-165 host 422
     const task = await getTask(deps.db, id)
     if (task === null) throw new NotFoundError('task-not-found', `task '${id}' not found`)
     const workflow = await getWorkflow(deps.db, task.workflowId)
@@ -647,15 +648,42 @@ async function visibilityCheck(c: Context, deps: AppDeps): Promise<void> {
 }
 
 /**
- * RFC-104: refuse manual resume/retry of a task whose workflow is a built-in.
- * Built-in workflows cannot be manually executed; only the fusion engine drives
- * aw-skill-fusion, and its own continuation (clarify / review → resumeTask) plus
- * daemon recovery (lifecycleRepair) call the SERVICE directly, bypassing these
- * user-facing routes. A null task returns so the route's own 404 still fires.
+ * RFC-104 + RFC-165 (F13-r3): lifecycle guard by EXECUTION KIND.
+ * - 'agent' host tasks (RFC-165 single-agent launches): the synthesized
+ *   snapshot is a REAL DAG run by the normal engine, so generic resume /
+ *   node retry semantics hold → ALLOWED (this is the only carve-out from
+ *   the builtin-workflow lock; the __agent_host__ FK anchor is builtin).
+ * - 'workgroup' host tasks: generic resume/retry does not apply (the engine
+ *   adopts only pending rows; recovery belongs to RFC-164's engine re-entry)
+ *   → stays 403 via the builtin host row, explicitly LOCKED by tests.
+ * - plain workflow tasks whose workflow is builtin (fusion): 403 — only the
+ *   fusion engine drives aw-skill-fusion; its own continuation + daemon
+ *   recovery call the SERVICE directly, bypassing these user routes.
+ * A null task returns so the route's own 404 still fires.
  */
 async function assertTaskWorkflowNotBuiltin(deps: AppDeps, taskId: string): Promise<void> {
   const task = await getTask(deps.db, taskId)
   if (task === null) return
+  if (taskExecutionKind(task) === 'agent') return
+  const wf = await getWorkflow(deps.db, task.workflowId)
+  if (wf !== null) assertNotBuiltin('workflow', wf)
+}
+
+/**
+ * RFC-165 (F13-r3): host tasks (agent / workgroup) freeze a SYNTHESIZED
+ * snapshot — there is no authored workflow to sync from, so sync-workflow is
+ * uniformly 422 for them (vs. the 403 builtin lock, which is about manual
+ * execution). Plain builtin-workflow tasks (fusion) keep the 403.
+ */
+async function assertTaskSyncable(deps: AppDeps, taskId: string): Promise<void> {
+  const task = await getTask(deps.db, taskId)
+  if (task === null) return
+  if (taskExecutionKind(task) !== 'workflow') {
+    throw new ValidationError(
+      'task-host-sync-unsupported',
+      'agent/workgroup host tasks run a synthesized snapshot — there is no workflow to sync from',
+    )
+  }
   const wf = await getWorkflow(deps.db, task.workflowId)
   if (wf !== null) assertNotBuiltin('workflow', wf)
 }

@@ -452,6 +452,11 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   const channel = opts.clarifyChannel ?? { kind: 'none' as const }
   const clarifyWired = channel.kind !== 'none'
   const clarifyMandatory = clarifyWired && channel.directive === 'mandatory'
+  // RFC-165 (F12): optional trips NEITHER enforcement gate below; it only
+  // keeps the clarify option alive in envelope-followup (error-correction)
+  // rounds so the agent can still pick either envelope after a malformed
+  // reply.
+  const clarifyOptional = clarifyWired && channel.directive === 'optional'
   const clarifyStoppedDirective = clarifyWired && channel.directive === 'stopped'
   const wantsInventory = isAgentNodeKind(inventoryNodeKind) && followupMode === undefined
 
@@ -639,7 +644,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   const prompt =
     followupMode !== undefined
       ? renderEnvelopeFollowupPrompt({
-          hasClarifyChannel: clarifyMandatory,
+          hasClarifyChannel: clarifyMandatory || clarifyOptional,
           // RFC-148: reason is mandatory on the followup arm — the historical
           // envelope-missing coalescing fallback (a patch over the unpacked
           // flag) is gone with the packing.

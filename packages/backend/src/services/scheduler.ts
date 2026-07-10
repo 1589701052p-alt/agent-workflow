@@ -2464,7 +2464,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // clarify-cross-agent node instead of (or as well as) a RFC-023 clarify
   // node. When at least one cross-clarify target exists we instruct the
   // runner to disable the 5-question cap on the envelope parser.
-  const clarifyMode: 'self' | 'cross' =
+  // RFC-165: renamed from `clarifyMode` — that name now belongs to the clarify
+  // NODE field ('optional'); this local is the channel wiring FAMILY.
+  const channelKind: 'self' | 'cross' =
     findCrossClarifyNodeForQuestioner(definition, node.id) !== undefined ? 'cross' : 'self'
   // RFC-132 (PR-C): the designer's External Feedback is no longer a separate context — its questions
   // ride the unified flat clarify queue (buildClarifyQueueContext), which selects by effective target
@@ -2821,7 +2823,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // lookup above returns undefined for the cross node (it is not a
         // `clarify` kind), so without this the questioner would silently stay
         // isolated even when the user picked inline in the editor. Resolve the
-        // cross node via the SAME helper `clarifyMode` itself uses
+        // cross node via the SAME helper `channelKind` itself uses
         // (findCrossClarifyNodeForQuestioner) rather than reusing
         // clarifyNodeForGate: a questioner can wire BOTH a self-clarify and a
         // cross-clarify `__clarify__` edge, and findClarifyNodeForAgent returns
@@ -2829,7 +2831,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // points at the self clarify node and the cross node's
         // sessionModeForQuestioner would be silently ignored. (Codex review #3.)
         const crossQuestionerNodeId =
-          clarifyMode === 'cross'
+          channelKind === 'cross'
             ? findCrossClarifyNodeForQuestioner(definition, node.id)
             : undefined
         const crossQuestionerNode = crossQuestionerNodeId
@@ -2977,6 +2979,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // <workflow-clarify> is REJECTED (no session) under an explicit stop, while review reruns
         // (reviewActive && !isClarifyRerun) keep emitting clarify.
         const clarifyStopped = hasClarifyChannel && nodeStopOverride
+        // RFC-165 (F12): the wired SELF-clarify node may declare
+        // clarifyMode:'optional' — the channel is offered, never enforced.
+        // Precedence stopped > optional > mandatory/suppressed; every rerun
+        // (initial / retry / post-answer) recomputes from the same static
+        // node field, so answering a round can never re-escalate the node to
+        // mandatory. Cross channels carry no clarifyMode (undefined ⇒ off).
+        const clarifyOptional =
+          hasClarifyChannel && clarifyNodeObjForGate?.clarifyMode === 'optional'
         // RFC-122 (H2 fix), RFC-132 (PR-C): inject the standalone STOP CLARIFYING trailer whenever the
         // node is stopped. The flat block NEVER carries a per-question directive trailer (§5), so —
         // unlike the round-grouped path — the trailer's ONLY source is this notice. `contextDirective:
@@ -3188,12 +3198,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           clarifyChannel: !hasClarifyChannel
             ? { kind: 'none' as const }
             : {
-                kind: clarifyMode,
+                kind: channelKind,
                 directive: clarifyStopped
                   ? ('stopped' as const)
-                  : effectiveHasClarifyChannel
-                    ? ('mandatory' as const)
-                    : ('suppressed' as const),
+                  : clarifyOptional
+                    ? ('optional' as const)
+                    : effectiveHasClarifyChannel
+                      ? ('mandatory' as const)
+                      : ('suppressed' as const),
                 injectStopNotice: clarifyStopNotice,
               },
           skills: resolvedSkills,

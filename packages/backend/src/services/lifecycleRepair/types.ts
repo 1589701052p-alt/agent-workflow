@@ -21,6 +21,9 @@ export interface RepairTaskRow {
   id: string
   status: string
   workflowSnapshot: string
+  /** RFC-165 (F13-r4): non-null ⟹ workgroup host task — execution-reviving
+   *  repair options are refused (list unavailable + apply 422). */
+  workgroupId: string | null
 }
 
 export interface RepairNodeRunRow {

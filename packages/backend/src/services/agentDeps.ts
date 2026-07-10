@@ -193,6 +193,15 @@ export async function findAgentsDependingOn(db: DbClient, name: string): Promise
     .select({ name: agents.name, dependsOn: agents.dependsOn })
     .from(agents)
     .where(like(agents.dependsOn, `%"${name}"%`))
+  return agentsDependingOnIn(rows, name)
+}
+
+/** Pure core of findAgentsDependingOn — RFC-165 (F17-r3): the agent
+ *  rename/delete guards re-run it on rows read INSIDE their dbTxSync. */
+export function agentsDependingOnIn(
+  rows: ReadonlyArray<{ name: string; dependsOn: string }>,
+  name: string,
+): string[] {
   const out: string[] = []
   for (const row of rows) {
     try {

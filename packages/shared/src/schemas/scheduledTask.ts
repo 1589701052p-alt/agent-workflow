@@ -2,7 +2,9 @@
 // ScheduleSpec = interval | daily | weekly | monthly 判别联合（预设携创建者 IANA 时区）。
 // launchPayload 复用 StartTaskSchema——整份存启动 body，到点参数不变地重放。
 import { z } from 'zod'
-import { StartTaskSchema } from './task'
+import { StartAgentTaskSchema, StartTaskSchema } from './task'
+import { AgentNameSchema } from './agent'
+import { StartWorkgroupTaskSchema, WorkgroupNameSchema } from './workgroup'
 import { isValidIanaTz } from '../scheduleTime'
 
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/ // 'HH:MM' 24h
@@ -56,6 +58,57 @@ export const ScheduleSpecSchema = z.discriminatedUnion('kind', [
 ])
 export type ScheduleSpec = z.infer<typeof ScheduleSpecSchema>
 
+// ---------------------------------------------------------------------------
+// RFC-165 §9b (D11) — 定时任务三主体（launch_kind）
+// ---------------------------------------------------------------------------
+
+export const SCHEDULED_LAUNCH_KINDS = ['workflow', 'agent', 'workgroup'] as const
+export const ScheduledLaunchKindSchema = z.enum(SCHEDULED_LAUNCH_KINDS)
+export type ScheduledLaunchKind = z.infer<typeof ScheduledLaunchKindSchema>
+
+/**
+ * kind='agent' 的定时 payload 封套：单 Agent 启动 body + 目标 agent 名
+ * （即时启动时目标在 URL 路径上；定时行必须把目标冻结进 payload）。
+ */
+export const ScheduledAgentPayloadSchema = StartAgentTaskSchema.extend({
+  agentName: AgentNameSchema,
+})
+export type ScheduledAgentPayload = z.infer<typeof ScheduledAgentPayloadSchema>
+
+/** kind='workgroup' 的定时 payload 封套：工作组启动 body + 目标组名。 */
+export const ScheduledWorkgroupPayloadSchema = StartWorkgroupTaskSchema.extend({
+  workgroupName: WorkgroupNameSchema,
+})
+export type ScheduledWorkgroupPayload = z.infer<typeof ScheduledWorkgroupPayloadSchema>
+
+/** 三封套的判别联合（DTO 读取面；写入面走 scheduledPayloadSchemaFor）。 */
+export const ScheduledLaunchPayloadSchema = z.union([
+  StartTaskSchema,
+  ScheduledAgentPayloadSchema,
+  ScheduledWorkgroupPayloadSchema,
+])
+export type ScheduledLaunchPayload = z.infer<typeof ScheduledLaunchPayloadSchema>
+
+/**
+ * RFC-165 §9b：save/edit/fire/run-now 四处共用的 payload 校验选择器——
+ * launch_kind 决定封套 schema，杜绝「按 kind 各写一份校验」的散射。
+ */
+export function scheduledPayloadSchemaFor(
+  kind: ScheduledLaunchKind,
+): z.ZodType<ScheduledLaunchPayload, z.ZodTypeDef, unknown> {
+  const schema =
+    kind === 'workflow'
+      ? StartTaskSchema
+      : kind === 'agent'
+        ? ScheduledAgentPayloadSchema
+        : ScheduledWorkgroupPayloadSchema
+  // Cast: the three schemas carry .default() fields whose INPUT types differ
+  // per arm, which defeats a direct ZodType<union> assignment; output-wise
+  // each arm IS a ScheduledLaunchPayload member and callers only need
+  // parse/safeParse against unknown input.
+  return schema as unknown as z.ZodType<ScheduledLaunchPayload, z.ZodTypeDef, unknown>
+}
+
 /** 定时任务名（管理用显示名，≠ 启动 body.name）；trim 后 1..255，拒纯空白。 */
 export const ScheduledTaskNameSchema = z.string().trim().min(1).max(255)
 
@@ -73,7 +126,9 @@ export const ScheduledTaskSchema = z.object({
   id: z.string(),
   name: ScheduledTaskNameSchema,
   ownerUserId: z.string(),
-  launchPayload: StartTaskSchema.nullable(),
+  /** RFC-165 §9b：执行主体 kind；旧行缺省 'workflow'（0086 default 回填）。 */
+  launchKind: ScheduledLaunchKindSchema.default('workflow'),
+  launchPayload: ScheduledLaunchPayloadSchema.nullable(),
   scheduleSpec: ScheduleSpecSchema.nullable(),
   /** RFC-165：payload 是可识别的退役旧形（如 path 模式），需要用户重存。 */
   migrationNeeded: z.boolean().default(false),
@@ -103,20 +158,28 @@ export const ScheduledTaskSchema = z.object({
 })
 export type ScheduledTask = z.infer<typeof ScheduledTaskSchema>
 
-/** POST /api/scheduled-tasks body。 */
+/**
+ * POST /api/scheduled-tasks body。`launchPayload` 在 SCHEMA 层保持 unknown ——
+ * 服务层按 `launchKind` 经 `scheduledPayloadSchemaFor` 做封套全量校验（单一
+ * 选择器，四入口共用）；raw-key 退役键拒收仍在路由层先行。
+ */
 export const CreateScheduledTaskSchema = z.object({
   name: ScheduledTaskNameSchema,
-  launchPayload: StartTaskSchema,
+  /** RFC-165 §9b：执行主体；缺省 workflow（向后兼容旧客户端）。 */
+  launchKind: ScheduledLaunchKindSchema.default('workflow'),
+  launchPayload: z.unknown(),
   scheduleSpec: ScheduleSpecSchema,
   enabled: z.boolean().default(true),
 })
 export type CreateScheduledTask = z.infer<typeof CreateScheduledTaskSchema>
 
-/** PUT /api/scheduled-tasks/:id body（strict partial）。 */
+/** PUT /api/scheduled-tasks/:id body（strict partial）。`launchKind` 不可变——
+ *  提供时必须等于既有值（服务层 422 scheduled-kind-immutable）。 */
 export const UpdateScheduledTaskSchema = z
   .object({
     name: ScheduledTaskNameSchema.optional(),
-    launchPayload: StartTaskSchema.optional(),
+    launchKind: ScheduledLaunchKindSchema.optional(),
+    launchPayload: z.unknown().optional(),
     scheduleSpec: ScheduleSpecSchema.optional(),
     enabled: z.boolean().optional(),
   })

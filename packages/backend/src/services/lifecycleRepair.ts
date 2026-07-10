@@ -145,6 +145,25 @@ export async function listRepairOptionsForAlert(
   }
   const options: RepairOption[] = []
   for (const def of defs) {
+    // RFC-165 (F13-r4): execution-reviving repairs don't apply to workgroup
+    // host tasks — surface them as unavailable WITHOUT running preflight
+    // (preflights may inspect DAG state that doesn't exist for the host).
+    if (task.workgroupId !== null && def.revivesExecution === true) {
+      options.push({
+        id: def.id,
+        rule: def.rule,
+        labelKey: def.labelKey,
+        descriptionKey: def.descriptionKey,
+        risk: def.risk,
+        destructive: def.destructive,
+        available: false,
+        unavailableReasonKey: 'diagnose.repair.common.workgroupUnsupported',
+        previewSteps: [],
+        ...(def.autoApplyEligible ? { autoApplyEligible: true } : {}),
+        ...(def.revivesExecution ? { revivesExecution: true } : {}),
+      })
+      continue
+    }
     let pre: PreflightResult
     try {
       pre = await def.preflight(rc)
@@ -220,6 +239,16 @@ export async function applyRepairOption(args: ApplyRepairOptionArgs): Promise<Re
     throw new ValidationError(
       'repair-option-not-implemented',
       `optionId '${optionId}' is in the shared taxonomy but not implemented yet`,
+    )
+  }
+
+  // RFC-165 (F13-r4): mirror the list-side refusal — a stale dialog (or a
+  // direct API call) must not revive a workgroup host task via generic
+  // resume/node-revive repairs.
+  if (task.workgroupId !== null && def.revivesExecution === true) {
+    throw new ValidationError(
+      'workgroup-repair-unsupported',
+      `repair option '${def.id}' revives task execution — not applicable to workgroup tasks (RFC-164 engine re-entry pending)`,
     )
   }
 
@@ -400,7 +429,12 @@ async function loadAlertOrThrow(
 
 async function loadTaskOrThrow(db: DbClient, taskId: string): Promise<RepairTaskRow> {
   const rows = await db
-    .select({ id: tasks.id, status: tasks.status, workflowSnapshot: tasks.workflowSnapshot })
+    .select({
+      id: tasks.id,
+      status: tasks.status,
+      workflowSnapshot: tasks.workflowSnapshot,
+      workgroupId: tasks.workgroupId,
+    })
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .limit(1)

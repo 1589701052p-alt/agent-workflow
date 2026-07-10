@@ -774,7 +774,12 @@ export const scheduledTasks = sqliteTable(
     id: text('id').primaryKey(), // ULID
     name: text('name').notNull(), // management display name (≠ launch body.name)
     ownerUserId: text('owner_user_id').notNull(), // creator; fires launch as this user
-    launchPayload: text('launch_payload').notNull(), // JSON: full StartTask body
+    // RFC-165 §9b (0087): which subject face this schedule fires. Existing
+    // rows are workflow schedules — the column default is the backfill.
+    launchKind: text('launch_kind', { enum: ['workflow', 'agent', 'workgroup'] })
+      .notNull()
+      .default('workflow'),
+    launchPayload: text('launch_payload').notNull(), // JSON: kind-enveloped launch body
     scheduleSpec: text('schedule_spec').notNull(), // JSON: ScheduleSpec (kind + creator tz)
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
     nextRunAt: integer('next_run_at'), // epoch ms of next fire; NULL when disabled (skips poll)

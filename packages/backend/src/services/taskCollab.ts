@@ -209,35 +209,33 @@ export async function updateTaskMembers(
 }
 
 /**
- * Persist a task's launch-time owner + collaborators. Caller has already
- * inserted the `tasks` row (so taskCollaborators FKs resolve) — this just
- * writes the supporting rows. (RFC-099 removed the assignments leg.)
+ * RFC-165 (F17): pure row builder behind `recordLaunchContext` — validates
+ * every referenced user against the provided user rows (active only) and
+ * returns the deduped owner + collaborator rows. Extracted so the launch
+ * transaction (dbTxSync, synchronous surface) can run the SAME logic inline
+ * without this module's async db reads.
  */
-export async function recordLaunchContext(
-  db: DbClient,
+export function buildLaunchCollabRows(
   args: {
     taskId: string
     ownerUserId: string
     collaboratorUserIds: ReadonlyArray<string>
     now: number
   },
-): Promise<void> {
+  userRows: ReadonlyArray<{ id: string; status: string }>,
+): (typeof taskCollaborators.$inferInsert)[] {
   // 1. Validate every referenced user is active.
   const referenced = new Set<string>()
   referenced.add(args.ownerUserId)
   for (const u of args.collaboratorUserIds) referenced.add(u)
-  if (referenced.size > 0) {
-    const ids = [...referenced]
-    const rows = await db.select().from(users)
-    const active = new Set(rows.filter((r) => r.status === 'active').map((r) => r.id))
-    for (const id of ids) {
-      if (!active.has(id)) {
-        throw new ValidationError('invalid-collaborator', `referenced user '${id}' is not active`)
-      }
+  const active = new Set(userRows.filter((r) => r.status === 'active').map((r) => r.id))
+  for (const id of referenced) {
+    if (!active.has(id)) {
+      throw new ValidationError('invalid-collaborator', `referenced user '${id}' is not active`)
     }
   }
 
-  // 2. Insert owner row + collaborator rows in a single batch.
+  // 2. Owner row + collaborator rows, deduped by the composite PK.
   const collabValues: (typeof taskCollaborators.$inferInsert)[] = []
   collabValues.push({
     taskId: args.taskId,
@@ -256,14 +254,31 @@ export async function recordLaunchContext(
       addedAt: args.now,
     })
   }
-  // de-dup by (taskId, userId, role) to satisfy the composite PK.
   const seenPK = new Set<string>()
-  const insertCollab = collabValues.filter((v) => {
+  return collabValues.filter((v) => {
     const key = `${v.taskId}::${v.userId}::${v.role}`
     if (seenPK.has(key)) return false
     seenPK.add(key)
     return true
   })
+}
+
+/**
+ * Persist a task's launch-time owner + collaborators. Caller has already
+ * inserted the `tasks` row (so taskCollaborators FKs resolve) — this just
+ * writes the supporting rows. (RFC-099 removed the assignments leg.)
+ */
+export async function recordLaunchContext(
+  db: DbClient,
+  args: {
+    taskId: string
+    ownerUserId: string
+    collaboratorUserIds: ReadonlyArray<string>
+    now: number
+  },
+): Promise<void> {
+  const rows = await db.select().from(users)
+  const insertCollab = buildLaunchCollabRows(args, rows)
   if (insertCollab.length > 0) {
     await db.insert(taskCollaborators).values(insertCollab)
   }

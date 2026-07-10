@@ -35,8 +35,10 @@ function fakeLaunch(
   calls: LaunchCall[],
   opts: { throwFor?: Set<string> } = {},
 ): BuildScheduleLaunch {
-  return (ownerUserId, scheduledTaskId) => async (body) => {
-    calls.push({ ownerUserId, scheduledTaskId, body })
+  // RFC-165 §9b: the closure now receives (kind, payload, actor); these
+  // scheduler tests only exercise workflow rows.
+  return (ownerUserId, scheduledTaskId) => async (_kind, payload) => {
+    calls.push({ ownerUserId, scheduledTaskId, body: payload as unknown as StartTask })
     if (opts.throwFor?.has(scheduledTaskId)) throw new Error('boom')
     return { id: `task-${calls.length}` }
   }

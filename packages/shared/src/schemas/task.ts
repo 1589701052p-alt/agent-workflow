@@ -920,3 +920,41 @@ export const SyncWorkflowBodySchema = z.object({
   expectedVersion: z.number().int().nonnegative(),
 })
 export type SyncWorkflowBody = z.infer<typeof SyncWorkflowBodySchema>
+
+// ---------------------------------------------------------------------------
+// RFC-165 §4 — single-agent launch (POST /api/agents/:name/tasks)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single-agent launch body. Deliberately SHAPE-lenient like
+ * StartWorkgroupTaskSchema: the service composes a full StartTask candidate
+ * around the builtin `__agent_host__` workflow (inputs = {description}) and
+ * runs StartTaskSchema on it, so repo-source cross-field rules stay
+ * single-sourced above. `description` becomes the agent's task prompt via the
+ * host snapshot's `{{description}}` template (port-injected — a literal
+ * `{{...}}` in the text is never re-expanded).
+ */
+export const StartAgentTaskSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  /** The task prompt for the agent (proposal: 描述即提示词). */
+  description: z.string().trim().min(1).max(65536),
+  /**
+   * RFC-165 D7: whether the host snapshot wires an OPTIONAL clarify channel
+   * (the agent may ask the user questions before/instead of finishing).
+   * Default ON; false ⇒ no clarify node at all.
+   */
+  allowClarify: z.boolean().default(true),
+  /** RFC-165: temporary-space launch (see StartTaskSchema.scratch). */
+  scratch: z.boolean().optional(),
+  repoUrl: z.string().min(1).optional(),
+  ref: z.string().min(1).optional(),
+  repos: z.array(z.unknown()).min(1).max(16).optional(),
+  collaboratorUserIds: z.array(z.string().min(1)).max(64).optional(),
+  gitUserName: z.string().max(255).optional(),
+  gitUserEmail: z.string().max(255).optional(),
+  workingBranch: z.string().optional(),
+  autoCommitPush: z.boolean().optional(),
+  maxDurationMs: z.number().int().positive().optional(),
+  maxTotalTokens: z.number().int().positive().optional(),
+})
+export type StartAgentTask = z.infer<typeof StartAgentTaskSchema>
