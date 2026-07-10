@@ -103,11 +103,14 @@ describe('RFC-159 — scheduled detail: edit task config entry', () => {
     expect(href).toContain('editScheduled=sched-1')
   })
 
-  test('the plain schedule "Edit" (spec) entry still renders alongside it', async () => {
+  // 2026-07-10 user feedback: a generic "Edit" sitting next to "Edit task config"
+  // didn't say WHAT it edits. The label must spell out its scope (name + schedule
+  // spec — exactly what ScheduleDialog's edit mode can change).
+  test('the name-&-schedule edit entry renders a non-generic label alongside it', async () => {
     installFetch()
     await renderDetail()
     await waitFor(() => {
-      expect(screen.getByTestId('scheduled-edit')).toBeTruthy()
+      expect(screen.getByTestId('scheduled-edit').textContent).toBe('Edit name & schedule')
       expect(screen.getByTestId('scheduled-edit-config')).toBeTruthy()
     })
   })

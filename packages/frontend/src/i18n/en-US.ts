@@ -1078,7 +1078,7 @@ export const enUS: Resources = {
     noRuns: 'No runs yet.',
     autoDisabled: 'Auto-disabled after repeated launch failures. Re-enable to resume.',
     runNow: 'Run now',
-    edit: 'Edit',
+    edit: 'Edit name & schedule',
     editTitle: 'Edit scheduled task',
     enable: 'Enable',
     disable: 'Disable',
@@ -2741,10 +2741,9 @@ export const enUS: Resources = {
     target: 'Handler',
     noTarget: 'Unassigned',
     reassign: 'Reassign handler',
-    collapsedToQuestioner:
-      'This question is now handled by the asking node (questioner); no separate designer pass will run.',
-    collapsedToDesigner:
-      'This question is now handled by the designer node only; the asking node receives an echo receipt instead of a separate rerun.',
+    // RFC-163 — grouped pre-dispatch card handler rows (asker + reassign-added designer).
+    handlerAsker: 'Asker (reruns itself)',
+    handlerDesigner: 'Added revision handler',
     autoDispatchQueued: 'Auto-dispatch queued',
     confirm: 'Confirm',
     stage: 'Stage',

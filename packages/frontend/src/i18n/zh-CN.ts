@@ -2492,8 +2492,8 @@ export interface Resources {
     empty: string
     source: string
     target: string
-    collapsedToQuestioner: string
-    collapsedToDesigner: string
+    handlerAsker: string
+    handlerDesigner: string
     autoDispatchQueued: string
     noTarget: string
     reassign: string
@@ -3582,7 +3582,7 @@ export const zhCN: Resources = {
     noRuns: '还没有触发记录。',
     autoDisabled: '连续启动失败已自动停用。重新启用可恢复。',
     runNow: '立即运行一次',
-    edit: '编辑',
+    edit: '编辑名称与周期',
     editTitle: '编辑定时任务',
     enable: '启用',
     disable: '停用',
@@ -5186,8 +5186,9 @@ export const zhCN: Resources = {
     target: '处理节点',
     noTarget: '未指定',
     reassign: '改派处理节点',
-    collapsedToQuestioner: '该题已改由提问节点承接（反问者），不再单独安排设计者处理。',
-    collapsedToDesigner: '该题已改由设计节点统一承接，提问节点将收到回执知会，不再单独续跑。',
+    // RFC-163 — 下发前分组卡的处理节点行（提问节点 + 增派修订 handler）。
+    handlerAsker: '提问节点（自己续跑）',
+    handlerDesigner: '增派修订',
     autoDispatchQueued: '自动下发排队中',
     confirm: '确认',
     stage: '加入待下发',
