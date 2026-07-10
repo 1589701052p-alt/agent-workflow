@@ -151,6 +151,9 @@ export async function startWorkgroupTask(
   const humanUserIds = group.members
     .filter((m) => m.memberType === 'human' && m.userId !== null)
     .map((m) => m.userId as string)
+  const collaboratorUserIds = [
+    ...new Set([...(input.collaboratorUserIds ?? []), ...humanUserIds]),
+  ]
 
   await ensureWorkgroupHostWorkflow(db)
   const config = buildWorkgroupRuntimeConfig(group, input.goal)
@@ -169,9 +172,7 @@ export async function startWorkgroupTask(
     ...(input.ref !== undefined ? { ref: input.ref } : {}),
     ...(input.repos !== undefined ? { repos: input.repos } : {}),
     ...(input.scratch !== undefined ? { scratch: input.scratch } : {}),
-    ...(input.collaboratorUserIds !== undefined
-      ? { collaboratorUserIds: input.collaboratorUserIds }
-      : {}),
+    ...(collaboratorUserIds.length > 0 ? { collaboratorUserIds } : {}),
     ...(input.gitUserName !== undefined ? { gitUserName: input.gitUserName } : {}),
     ...(input.gitUserEmail !== undefined ? { gitUserEmail: input.gitUserEmail } : {}),
     ...(input.workingBranch !== undefined ? { workingBranch: input.workingBranch } : {}),
