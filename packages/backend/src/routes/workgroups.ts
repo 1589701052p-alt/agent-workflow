@@ -13,7 +13,6 @@
 
 import {
   CreateWorkgroupSchema,
-  rejectRetiredStartTaskKeys,
   RenameWorkgroupSchema,
   StartWorkgroupTaskSchema,
   UpdateWorkgroupSchema,
