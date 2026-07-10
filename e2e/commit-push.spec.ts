@@ -29,8 +29,9 @@ function sh(cmd: string): void {
 }
 
 test.beforeAll(async () => {
-  // A path-mode repo whose `origin` is a writable bare remote, so the
-  // framework's `git push` from the task worktree actually lands.
+  // A writable bare remote seeded from a working repo. RFC-165: the launch
+  // clones the bare remote via its file:// URL, so the framework's `git push`
+  // from the task worktree lands straight on the bare remote.
   remote = mkdtempSync(join(tmpdir(), 'aw-e2e-cp-remote-'))
   sh(`git init -q --bare -b main "${remote}"`)
   repo = mkdtempSync(join(tmpdir(), 'aw-e2e-cp-repo-'))
@@ -126,13 +127,14 @@ test.describe('RFC-075 — auto commit&push (real daemon + bare remote)', () => 
     expect(wfRes.ok).toBe(true)
     const wf = (await wfRes.json()) as { id: string }
 
-    // Launch with auto commit&push ON, file:// URL against our repo (RFC-165).
+    // Launch with auto commit&push ON, file:// URL of the BARE remote
+    // (RFC-165: pushes go to the launch URL, so target the bare directly).
     const taskRes = await api('/api/tasks', {
       method: 'POST',
       body: JSON.stringify({
         name: 'cp-task',
         workflowId: wf.id,
-        repoUrl: pathToFileURL(repo).href,
+        repoUrl: pathToFileURL(remote).href,
         ref: 'main',
         autoCommitPush: true,
         inputs: { t: 'go' },
