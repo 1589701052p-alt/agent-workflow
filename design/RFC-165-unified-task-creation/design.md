@@ -120,9 +120,9 @@ MaterializeSpaceResult =
 **策略：path → `file://` 保真改写**，工程细节（F19-r3 修订）：
 
 1. URL 构造 `pathToFileURL(realpath(path))`（空格/Unicode/`#`/`%`）；`parseGitUrl` file 分支的百分号解码兼容 T4 内核验补齐。
-2. **file cache key dual-read + 校验后 lazy rekey（F19-r4：file:// 缓存早已存在**，`git-url.ts:47,183-192`、`gitRepoCache.ts:315`——直接改 key 规则会重复 clone/遗留旧行）：新规范（保留大小写与 `.git`）未命中时回退旧 key 查询；旧 key 是 lossy 的（lowercase+剥 `.git`）会碰撞（`/Foo` vs `/foo`、`repo` vs `repo.git`）——**rekey 前必须复核 `newKey(parse(row.url)) === requestedNewKey`**，不一致视为 miss 走新 clone；rekey 在 old/new 两把 `withUrlLock` 下 CAS 更新 **`url_hash`（`cached_repos` 无 slug 列，`schema.ts:616`；`local_path` 目录不动）**；测试覆盖命中/碰撞不误认/迁移/不重复 clone。
+2. **file cache key dual-read + 校验后 lazy rekey（F19-r4：`file://` 缓存早已存在**，`git-url.ts:47,183-192`、`gitRepoCache.ts:315`——直接改 key 规则会重复 clone/遗留旧行）：新规范（保留大小写与 `.git`）未命中时回退旧 key 查询；旧 key 是 lossy 的（lowercase+剥 `.git`）会碰撞（`/Foo` vs `/foo`、`repo` vs `repo.git`）——**rekey 前必须复核 `newKey(parse(row.url)) === requestedNewKey`**，不一致视为 miss 走新 clone；rekey 在 old/new 两把 `withUrlLock` 下 CAS 更新 **`url_hash`（`cached_repos` 无 slug 列，`schema.ts:616`；`local_path` 目录不动）**；测试覆盖命中/碰撞不误认/迁移/不重复 clone。
 3. **file 源权威解析**：请求 ref 以**源仓当次 rev-parse 结果为权威**——cold/warm 都把 ref 解析到 remote-tracking（cold 补 syncBranches 同款 FF）；**file scheme 下** fetch 失败、或源分支已删（`syncBranchToRemote` 现仅 warning 留 stale 本地分支，`gitRepoCache.ts:218`）→ **硬 fail**，不得以 stale 镜像启动。其它 scheme 维持现状 warning。
-4. **`fetchBeforeLaunch` 存量行不静默删（F19-r3）**：`fetchBeforeLaunch:true` 的行语义（启动前刷新本地仓的 `origin/*`，`task-fetch-before-launch.test.ts:123`）在 file:// 转换后**不等价**（镜像只 fetch 本地仓自身）——该类行**禁用 + `lastError='rfc165-fetch-semantic-review'`**，编辑页提示改选 origin URL 或确认 file:// 后重存；`false`/缺省行自动转换（转换时移除该键）。
+4. **`fetchBeforeLaunch` 存量行不静默删（F19-r3）**：`fetchBeforeLaunch:true` 的行语义（启动前刷新本地仓的 `origin/*`，`task-fetch-before-launch.test.ts:123`）在 `file://` 转换后**不等价**（镜像只 fetch 本地仓自身）——该类行**禁用 + `lastError='rfc165-fetch-semantic-review'`**，编辑页提示改选 origin URL 或确认 `file://` 后重存；`false`/缺省行自动转换（转换时移除该键）。
 5. 目录缺失/非 git → 禁用 + `lastError='rfc165-local-path-retired'`；幂等；谓词按 payload 内容。
 
 **读写分离（F18 + N3-r3：逐字段 degraded）**：row mapper 对 `launchPayload` 与 `scheduleSpec` **各自**逐行 try/catch + safeParse——每列三态：`ok(值)` / `legacy(migrationNeeded)` / `degraded(null + migrationError)`（覆盖坏 JSON **与「JSON 合法但 shape 不识别」**两类）；DTO 为逐字段 discriminated（`schemas/scheduledTask.ts:62-68` 双列必合法的钉死解开）。**raw PUT 修复路径不依赖完整 parsed row**：PUT 以 raw body 全量校验后整行重写（degraded 行同样可修可删）。
@@ -187,7 +187,7 @@ MaterializeSpaceResult =
 
 **e2e（Playwright）**
 
-28. 三方式创建链到终态（file:// fixture / scratch+agent→done→diff / workgroup→终态）。29. 定时创建链（agent 定时）。30. 视觉自查（不动基线）。
+28. 三方式创建链到终态（`file://` fixture / scratch+agent→done→diff / workgroup→终态）。29. 定时创建链（agent 定时）。30. 视觉自查（不动基线）。
 
 ## §12 与 RFC-164 的协调
 
