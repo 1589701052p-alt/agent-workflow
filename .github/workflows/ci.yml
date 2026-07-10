@@ -400,17 +400,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install opencode (required by daemon/doctor tests)
-        # Same step the `check` and `build-binary` jobs run: daemon `start` and
-        # `cli doctor` assert opencode is in PATH, and several test files spawn
-        # the daemon end-to-end. Without it the gate fails ~18 tests with
-        # "opencode binary not executable / daemon exited before ready" (and the
-        # 5s-timeout cascade in combination/loop/startTask tests that wait on a
-        # daemon that never comes up). Fresh runner still has no
-        # ~/.agent-workflow/config.json (no mcpProbe timeouts) - opencode is the
-        # only missing piece.
+        # Daemon `start` refuses to run without opencode >= MIN_OPENCODE_VERSION
+        # (1.14.0); cli `doctor` asserts opencode is in PATH. Several test
+        # files spawn the daemon end-to-end so the binary must be installed.
+        # NB: this job's default shell on windows-latest is PowerShell, so -
+        # unlike the bash `check` job - we must NOT use `export PATH=...`
+        # (PowerShell doesn't recognise `export` and the step exits 1). Mirror
+        # the `build-binary` job instead: setup-bun already puts ~/.bun/bin on
+        # PATH, so `opencode --version` resolves right after the global install.
         run: |
           bun install -g opencode-ai@${{ env.OPENCODE_VERSION }}
-          export PATH="$HOME/.bun/bin:$PATH"
           opencode --version
 
       - name: Format check
