@@ -1,22 +1,17 @@
-// RFC-024: locks the path/url mutual-exclusion + ref/baseBranch rules added
-// to StartTaskSchema. Path-mode legacy callers must keep working unchanged.
+// RFC-024: locks the URL-source rules on StartTaskSchema.
+//
+// RFC-165: the local-path launch mode is retired — repoPath/baseBranch/
+// fetchBeforeLaunch left the schema entirely (unknown keys strip; the raw-key
+// reject gate at every route entrance turns them into 422s BEFORE parsing —
+// see rfc165-contract-v2.test.ts / rfc165-banned-locks.test.ts in backend).
+// The path-mode cases that used to live here were deleted with the mode; the
+// strip semantics are locked below so the schema can't quietly re-accept them.
 
 import { describe, expect, test } from 'bun:test'
 import { StartTaskSchema } from '../src/schemas/task'
 
 describe('StartTaskSchema (RFC-024)', () => {
-  test('path mode (legacy) parses unchanged', () => {
-    const r = StartTaskSchema.safeParse({
-      workflowId: 'wf-1',
-      name: 'fixture-task',
-      repoPath: '/tmp/repo',
-      baseBranch: 'main',
-      inputs: {},
-    })
-    expect(r.success).toBe(true)
-  })
-
-  test('url mode parses (no baseBranch required)', () => {
+  test('url mode parses (ref optional)', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
       name: 'fixture-task',
@@ -37,22 +32,7 @@ describe('StartTaskSchema (RFC-024)', () => {
     expect(r.success).toBe(true)
   })
 
-  test('rejects when both repoPath and repoUrl given', () => {
-    const r = StartTaskSchema.safeParse({
-      workflowId: 'wf-1',
-      name: 'fixture-task',
-      repoPath: '/tmp/repo',
-      baseBranch: 'main',
-      repoUrl: 'git@github.com:foo/bar.git',
-      inputs: {},
-    })
-    expect(r.success).toBe(false)
-    if (!r.success) {
-      expect(r.error.issues.some((i) => /mutually exclusive/.test(i.message))).toBe(true)
-    }
-  })
-
-  test('rejects when neither given', () => {
+  test('rejects when no source given (start-task-source-required)', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
       name: 'fixture-task',
@@ -60,74 +40,41 @@ describe('StartTaskSchema (RFC-024)', () => {
     })
     expect(r.success).toBe(false)
     if (!r.success) {
-      // RFC-066 widened the message to mention the new `repos[]` field too.
-      // Keep the assertion broad enough to survive that text change.
-      expect(r.error.issues.some((i) => /one of repoPath.*repoUrl/.test(i.message))).toBe(true)
-    }
-  })
-
-  test('rejects path mode without baseBranch', () => {
-    const r = StartTaskSchema.safeParse({
-      workflowId: 'wf-1',
-      name: 'fixture-task',
-      repoPath: '/tmp/repo',
-      inputs: {},
-    })
-    expect(r.success).toBe(false)
-    if (!r.success) {
-      expect(r.error.issues.some((i) => /baseBranch is required/.test(i.message))).toBe(true)
+      expect(r.error.issues.some((i) => i.message === 'start-task-source-required')).toBe(true)
     }
   })
 })
 
-describe('StartTaskSchema fetchBeforeLaunch (RFC-068)', () => {
-  test('accepts fetchBeforeLaunch=true in path mode', () => {
+describe('StartTaskSchema RFC-165 — retired path-mode keys strip (never re-accepted)', () => {
+  test('repoPath/baseBranch/fetchBeforeLaunch are unknown keys — stripped, not parsed', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
       name: 'fixture-task',
+      repoUrl: 'git@github.com:foo/bar.git',
       repoPath: '/tmp/repo',
       baseBranch: 'main',
       fetchBeforeLaunch: true,
       inputs: {},
     })
     expect(r.success).toBe(true)
-    if (r.success) expect(r.data.fetchBeforeLaunch).toBe(true)
+    if (r.success) {
+      expect('repoPath' in r.data).toBe(false)
+      expect('baseBranch' in r.data).toBe(false)
+      expect('fetchBeforeLaunch' in r.data).toBe(false)
+    }
   })
 
-  test('accepts fetchBeforeLaunch=false', () => {
+  test('a path-only legacy body has no source after the strip → rejected', () => {
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf-1',
       name: 'fixture-task',
       repoPath: '/tmp/repo',
       baseBranch: 'main',
-      fetchBeforeLaunch: false,
-      inputs: {},
-    })
-    expect(r.success).toBe(true)
-    if (r.success) expect(r.data.fetchBeforeLaunch).toBe(false)
-  })
-
-  test('fetchBeforeLaunch omitted leaves field undefined (legacy bodies)', () => {
-    const r = StartTaskSchema.safeParse({
-      workflowId: 'wf-1',
-      name: 'fixture-task',
-      repoPath: '/tmp/repo',
-      baseBranch: 'main',
-      inputs: {},
-    })
-    expect(r.success).toBe(true)
-    if (r.success) expect(r.data.fetchBeforeLaunch).toBeUndefined()
-  })
-
-  test('rejects non-boolean fetchBeforeLaunch', () => {
-    const r = StartTaskSchema.safeParse({
-      workflowId: 'wf-1',
-      name: 'fixture-task',
-      repoPath: '/tmp/repo',
-      baseBranch: 'main',
-      fetchBeforeLaunch: 'yes' as unknown as boolean,
       inputs: {},
     })
     expect(r.success).toBe(false)
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.message === 'start-task-source-required')).toBe(true)
+    }
   })
 })

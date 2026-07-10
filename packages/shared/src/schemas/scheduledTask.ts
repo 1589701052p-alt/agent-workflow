@@ -85,6 +85,12 @@ export const ScheduledTaskSchema = z.object({
     })
     .nullable()
     .default(null),
+  /**
+   * RFC-165（实现门 P2）：payload 降级为 null 时尽力从原始 JSON 提取的
+   * workflowId 提示位——详情页据此保留「编辑任务配置」修复入口（编辑页
+   * 空表单 + 全量 PUT 即修复路径）。健康行同样携带；坏 JSON 提不出 → null。
+   */
+  launchPayloadWorkflowId: z.string().nullable().optional(),
   enabled: z.boolean(),
   nextRunAt: z.number().int().nullable(),
   lastRunAt: z.number().int().nullable(),

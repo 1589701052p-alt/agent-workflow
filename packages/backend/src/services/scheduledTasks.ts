@@ -29,6 +29,7 @@ import type { DbClient } from '@/db/client'
 import { scheduledTasks, users } from '@/db/schema'
 import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
 import { NotFoundError, ValidationError } from '@/util/errors'
+import { runGit } from '@/util/git'
 import { SCHEDULED_TASK_CHANNEL, scheduledTaskBroadcaster } from '@/ws/broadcaster'
 
 /** Injected launch — `(body) => startTask(body, deps)`, closed over owner + scheduledTaskId. */
@@ -82,6 +83,19 @@ function rowToScheduledTask(row: Row): ScheduledTask {
   )
   const spec = parseJsonField(row.scheduleSpec, ScheduleSpecSchema)
   const hasError = payload.error !== null || spec.error !== null
+  // RFC-165 (implementation-gate P2): even a degraded payload usually still
+  // carries a readable workflowId — surface it so the detail page can keep
+  // the edit-config (full-repair) entry routable. Corrupt JSON → null.
+  let workflowIdHint: string | null = null
+  try {
+    const raw: unknown = JSON.parse(row.launchPayload)
+    if (typeof raw === 'object' && raw !== null) {
+      const wf = (raw as Record<string, unknown>)['workflowId']
+      if (typeof wf === 'string' && wf.length > 0) workflowIdHint = wf
+    }
+  } catch {
+    /* corrupt JSON — no hint */
+  }
   const parsed = ScheduledTaskSchema.safeParse({
     id: row.id,
     name: row.name,
@@ -90,6 +104,7 @@ function rowToScheduledTask(row: Row): ScheduledTask {
     scheduleSpec: spec.value,
     migrationNeeded: payload.legacy,
     migrationError: hasError ? { launchPayload: payload.error, scheduleSpec: spec.error } : null,
+    launchPayloadWorkflowId: workflowIdHint,
     enabled: row.enabled,
     nextRunAt: row.nextRunAt,
     lastRunAt: row.lastRunAt,
@@ -186,57 +201,64 @@ export async function updateScheduledTask(
   if (existing === null) {
     throw new NotFoundError('scheduled-task-not-found', `scheduled task '${id}' not found`)
   }
-  // RFC-165 (N3): a legacy/degraded row has null JSON fields — a partial PUT
-  // that keeps such a field would persist garbage. Repair requires supplying
-  // the field in full (raw-row full repair; auth/name-only/disable/delete
-  // never reach here with a null need).
+  // RFC-165 (N3, narrowed per implementation-gate review): a legacy/degraded
+  // row has null JSON fields — a partial PUT that keeps such a field would
+  // persist garbage, so repair (a full replacement value) is required ONLY
+  // when this update actually CONSUMES the degraded field: the result being
+  // enabled needs a valid payload (workflow gate) and a valid spec
+  // (next_run_at). Plain rename / disable of a degraded row must stay
+  // possible — otherwise a corrupt schedule can't even be stopped.
   const patchedPayload =
     patch.launchPayload !== undefined
       ? StartTaskSchema.parse(patch.launchPayload)
       : existing.launchPayload
-  if (patchedPayload === null) {
-    throw new ValidationError(
-      'scheduled-task-needs-repair',
-      `scheduled task '${id}' has an unreadable launchPayload — supply a full launchPayload to repair it`,
-    )
-  }
-  const body: StartTask = patchedPayload
   const patchedSpec =
     patch.scheduleSpec !== undefined
       ? ScheduleSpecSchema.parse(patch.scheduleSpec)
       : existing.scheduleSpec
-  if (patchedSpec === null) {
-    throw new ValidationError(
-      'scheduled-task-needs-repair',
-      `scheduled task '${id}' has an unreadable scheduleSpec — supply a full scheduleSpec to repair it`,
-    )
-  }
-  const spec: ScheduleSpec = patchedSpec
   const enabled = patch.enabled !== undefined ? patch.enabled : existing.enabled
+
+  if (enabled) {
+    if (patchedPayload === null) {
+      throw new ValidationError(
+        'scheduled-task-needs-repair',
+        `scheduled task '${id}' has an unreadable launchPayload — supply a full launchPayload to repair it`,
+      )
+    }
+    if (patchedSpec === null) {
+      throw new ValidationError(
+        'scheduled-task-needs-repair',
+        `scheduled task '${id}' has an unreadable scheduleSpec — supply a full scheduleSpec to repair it`,
+      )
+    }
+  }
 
   // R3-1: re-gate whenever the RESULT is enabled (spec-only / re-enable / payload
   // change). Skip when the result is disabled so a user can still stop/clean up a
   // schedule whose workflow vanished.
-  if (enabled) {
-    const wf = await assertWorkflowLaunchable(db, opts.actor, body.workflowId)
+  if (enabled && patchedPayload !== null) {
+    const wf = await assertWorkflowLaunchable(db, opts.actor, patchedPayload.workflowId)
     assertNoRequiredUploadInput(wf)
   }
 
   const now = Date.now()
   const set: Partial<typeof scheduledTasks.$inferInsert> = { updatedAt: now }
   if (patch.name !== undefined) set.name = patch.name
-  if (patch.launchPayload !== undefined) {
-    set.launchPayload = JSON.stringify(body)
+  if (patch.launchPayload !== undefined && patchedPayload !== null) {
+    set.launchPayload = JSON.stringify(patchedPayload)
     // A successful full repair also clears the RFC-165 migration lastError
     // breadcrumb (best-effort UX; harmless when it was never set).
     if (existing.launchPayload === null || existing.migrationNeeded) set.lastError = null
   }
-  if (patch.scheduleSpec !== undefined) set.scheduleSpec = JSON.stringify(spec)
+  if (patch.scheduleSpec !== undefined && patchedSpec !== null) {
+    set.scheduleSpec = JSON.stringify(patchedSpec)
+  }
   if (patch.enabled !== undefined) set.enabled = enabled
   if (!enabled) {
     set.nextRunAt = null
   } else if (patch.scheduleSpec !== undefined || (enabled && !existing.enabled)) {
-    set.nextRunAt = computeNextRunAt(spec, now, now)
+    // enabled ⇒ patchedSpec non-null (guarded above).
+    set.nextRunAt = computeNextRunAt(patchedSpec as ScheduleSpec, now, now)
     set.consecutiveFailures = 0
   }
   await db.update(scheduledTasks).set(set).where(eq(scheduledTasks.id, id))
@@ -330,11 +352,18 @@ export async function fireSchedule(
  * path itself), unlike an origin-URL rewrite which drops anything unpushed.
  *   * dir exists and is a git repo → rewrite `{repoPath, baseBranch}` →
  *     `{repoUrl: file://…, ref: baseBranch}` (top level and each repos[] row);
- *     drop `fetchBeforeLaunch` (false/absent only).
+ *     drop `fetchBeforeLaunch` (false/absent only). Git-ness is probed via
+ *     `git rev-parse --git-dir` (a bare repo / worktree subdir has no `.git`
+ *     child yet was perfectly launchable in path mode).
  *   * `fetchBeforeLaunch: true`     → DISABLE + lastError
  *     'rfc165-fetch-semantic-review' — the old semantics ("refresh the local
  *     repo's origin/* before launch") have no file:// equivalent; the user
  *     must confirm a URL choice and re-save. Never silently converted.
+ *   * `baseBranch` naming a REMOTE-TRACKING ref (`origin/x`, `refs/remotes/…`)
+ *     → DISABLE + lastError 'rfc165-remote-tracking-ref'. In the file clone
+ *     that string resolves against the CLONE's own origin (= the source's
+ *     local branches), not the source's refs/remotes/* — silently launching
+ *     a different commit is exactly what F19 forbids.
  *   * dir missing / not a git repo → DISABLE + lastError
  *     'rfc165-local-path-retired'.
  * Idempotent: healed payloads carry no `repoPath`; already-disabled rfc165-*
@@ -355,8 +384,22 @@ export async function healScheduledLaunchPayloads(
       .where(eq(scheduledTasks.id, row.id))
     disabled += 1
   }
-  const isGitDir = (p: string): boolean => existsSync(p) && existsSync(`${p}/.git`)
+  // Bare repos / worktree subdirs have no `.git` child — probe with git
+  // itself (P2 review fix; the old `.git`-child check disabled runnable rows).
+  const isGitDir = async (p: string): Promise<boolean> => {
+    if (!existsSync(p)) return false
+    try {
+      return (await runGit(p, ['rev-parse', '--git-dir'])).exitCode === 0
+    } catch {
+      return false
+    }
+  }
   const toFileUrl = (p: string): string => pathToFileURL(realpathSync(p)).href
+  // A remote-tracking ref cannot be carried into the file clone faithfully —
+  // the clone's `origin/x` points at the SOURCE's local x, not the source's
+  // own refs/remotes/origin/x (P1 review fix: disable instead of drifting).
+  const isRemoteTrackingRef = (ref: string): boolean =>
+    ref.startsWith('origin/') || ref.startsWith('refs/remotes/') || ref.startsWith('remotes/')
 
   for (const row of rows) {
     if (!row.enabled && (row.lastError ?? '').startsWith('rfc165-')) continue
@@ -400,9 +443,32 @@ export async function healScheduledLaunchPayloads(
       converted += 1
       continue
     }
-    const missing = paths.find((p) => !isGitDir(p))
+    let missing: string | undefined
+    for (const p of paths) {
+      if (!(await isGitDir(p))) {
+        missing = p
+        break
+      }
+    }
     if (missing !== undefined) {
       await disable(row, `rfc165-local-path-retired: ${missing}`)
+      continue
+    }
+    // Collect every baseBranch the rewrite would carry into `ref` — a
+    // remote-tracking form cannot survive the clone faithfully.
+    const refs: string[] = []
+    if (typeof body['baseBranch'] === 'string') refs.push(body['baseBranch'] as string)
+    for (const r of repos) {
+      if (r !== null && typeof r === 'object' && typeof r['baseBranch'] === 'string') {
+        refs.push(r['baseBranch'] as string)
+      }
+    }
+    const remoteRef = refs.find((r) => isRemoteTrackingRef(r))
+    if (remoteRef !== undefined) {
+      await disable(
+        row,
+        `rfc165-remote-tracking-ref: baseBranch '${remoteRef}' names a remote-tracking ref — pick a concrete branch/URL and re-save`,
+      )
       continue
     }
 

@@ -11,8 +11,8 @@ import {
 const VALID_LAUNCH = {
   workflowId: 'wf1',
   name: 'nightly audit',
-  repoPath: '/repo',
-  baseBranch: 'main',
+  repoUrl: 'file:///repo',
+  ref: 'main',
 }
 
 describe('ScheduleSpecSchema — four kinds', () => {

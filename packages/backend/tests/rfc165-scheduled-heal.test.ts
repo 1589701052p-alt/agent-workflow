@@ -269,4 +269,89 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     expect(repaired.migrationError).toBe(null)
     expect(repaired.lastError).toBe(null)
   })
+
+  test('H8 remote-tracking baseBranch → disabled (never silently re-pointed)', async () => {
+    // Implementation-gate P1: in the file clone, 'origin/main' resolves against
+    // the CLONE's origin (= the source's local main) — not the source's own
+    // refs/remotes/origin/main. Faithful conversion is impossible → disable.
+    const repo = await seedRepo('r8')
+    const id = await seedRow({
+      workflowId: 'wf1',
+      name: 't',
+      inputs: {},
+      repoPath: repo,
+      baseBranch: 'origin/main',
+    })
+    const r = await healScheduledLaunchPayloads(db)
+    expect(r.disabled).toBe(1)
+    expect(r.converted).toBe(0)
+    const row = await rawRow(id)
+    expect(row.enabled).toBe(false)
+    expect(row.lastError ?? '').toContain('rfc165-remote-tracking-ref')
+    // Payload untouched — the user repairs by re-picking a source.
+    expect((await rawPayload(id))['repoPath']).toBe(repo)
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test('H9 bare repo path heals (git probe, not a `.git` child check)', async () => {
+    // Implementation-gate P2: a bare repo has no `.git` subdir but was a
+    // perfectly launchable path-mode source.
+    const bare = join(tmp, 'bare.git')
+    await runGit(tmp, ['init', '-q', '--bare', '-b', 'main', 'bare.git'])
+    const id = await seedRow({
+      workflowId: 'wf1',
+      name: 't',
+      inputs: {},
+      repoPath: bare,
+      baseBranch: 'main',
+    })
+    const r = await healScheduledLaunchPayloads(db)
+    expect(r.converted).toBe(1)
+    expect(r.disabled).toBe(0)
+    const p = await rawPayload(id)
+    expect(p['repoUrl']).toBe(pathToFileURL(realpathSync(bare)).href)
+    expect('repoPath' in p).toBe(false)
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test('H10 degraded row: rename + disable pass WITHOUT repair (guard narrowed)', async () => {
+    // Implementation-gate P2: only operations that CONSUME the degraded field
+    // (the result being enabled) force a full repair — a corrupt schedule must
+    // stay stoppable/renamable.
+    await db.insert(users).values({
+      id: 'alice',
+      username: 'alice',
+      displayName: 'Alice',
+      role: 'admin',
+      status: 'active',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    const id = await seedRow({ totally: 'not-a-start-task' })
+    const owner = (await db.select().from(users).where(eq(users.id, 'alice')))[0]!
+    const actor = buildActor({
+      user: {
+        id: owner.id,
+        username: owner.username,
+        displayName: owner.displayName,
+        role: owner.role,
+        status: owner.status,
+      },
+      source: 'daemon',
+    })
+    const renamed = await updateScheduledTask(
+      db,
+      id,
+      { name: 'renamed', enabled: false },
+      { actor },
+    )
+    expect(renamed.name).toBe('renamed')
+    expect(renamed.enabled).toBe(false)
+    expect(renamed.launchPayload).toBe(null) // still degraded — repair not forced
+
+    // Re-enabling WITHOUT repairing still 422s (the fire path needs a payload).
+    await expect(updateScheduledTask(db, id, { enabled: true }, { actor })).rejects.toThrow(
+      /unreadable launchPayload/,
+    )
+  })
 })

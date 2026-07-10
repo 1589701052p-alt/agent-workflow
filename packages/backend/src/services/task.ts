@@ -1205,6 +1205,18 @@ export async function startTask(input: StartTask, deps: StartTaskDeps): Promise<
       }
     }
   } catch (err) {
+    // Implementation-gate P2 fix: a failure AFTER the tasks insert (the
+    // task_repos batch, or a rethrown collaborator error) must not leave a
+    // half-created pending row the caller was told failed — it would sit
+    // ownerless with no workspace/tombstone/scheduler. Best-effort delete;
+    // a row that never landed (insert itself threw) makes this a no-op, and
+    // recordLaunchContext's own rollback just makes it idempotent.
+    try {
+      await deps.db.delete(taskRepos).where(eq(taskRepos.taskId, taskId))
+      await deps.db.delete(tasks).where(eq(tasks.id, taskId))
+    } catch {
+      /* best-effort */
+    }
     // RFC-165 (F9): a scratch dir whose row failed to commit (insert error or
     // collaborator rollback above) is unreachable from any task row — the
     // launch flow owns its cleanup, best-effort, before rethrowing.

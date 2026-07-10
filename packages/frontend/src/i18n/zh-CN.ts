@@ -1202,6 +1202,7 @@ export interface Resources {
     deleteConfirm: string
     uploadUnsupported: string
     editConfig: string
+    degradedBanner: string
     editConfigTitle: string
     saveConfig: string
     backToSchedule: string
@@ -3952,6 +3953,8 @@ export const zhCN: Resources = {
     deleteConfirm: '确认删除？',
     uploadUnsupported: '需要文件上传的工作流不支持定时。',
     editConfig: '编辑任务配置',
+    degradedBanner:
+      '此定时任务的存储配置已不可读（旧版格式或数据损坏）——用「编辑任务配置」重新填写并保存整份配置即可修复；也可以禁用或删除该定时任务。',
     editConfigTitle: '编辑任务配置：{{name}}',
     saveConfig: '保存任务配置',
     backToSchedule: '← 返回定时任务',

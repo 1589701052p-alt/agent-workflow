@@ -121,17 +121,16 @@ export async function runWorktreeGc(
       // Legacy pre-tombstone GC (or manual rm) already took the dir — heal the
       // row forward so revive paths 410 instead of resurrecting a ghost
       // (R3-2-r4; boot reconcile does the same sweep once at startup).
+      // Deliberately does NOT require workspacePruningAt to be null
+      // (implementation-gate P2 fix): a daemon that died between deleting the
+      // dir (phase 2) and stamping workspacePrunedAt (phase 3) leaves a
+      // claimed row whose dir is gone — finalizing it here IS the crash
+      // recovery; racing a live phase-3 stamp is idempotent (same tombstone).
       if (t.worktreePath !== '') {
         await db
           .update(tasks)
           .set({ workspacePrunedAt: now })
-          .where(
-            and(
-              eq(tasks.id, t.id),
-              isNull(tasks.workspacePruningAt),
-              isNull(tasks.workspacePrunedAt),
-            ),
-          )
+          .where(and(eq(tasks.id, t.id), isNull(tasks.workspacePrunedAt)))
       }
       result.skipped += 1
       continue

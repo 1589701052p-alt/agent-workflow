@@ -365,6 +365,32 @@ export const StartTaskSchema = z
     const hasLegacy = hasLegacyUrl
     const hasRepos = Array.isArray(value.repos) && value.repos.length > 0
 
+    // RFC-067: Git identity XOR + format check — runs for EVERY space kind
+    // (implementation-gate P2 fix: the scratch early-return below used to
+    // skip it, silently accepting half identities on scratch launches; a
+    // scratch task's root/agent commits DO consume a supplied identity).
+    // Trim before testing so whitespace-only strings can't sneak through.
+    // Loose email check: must contain `@`, no whitespace on either side —
+    // git itself accepts any `Name <email>` shape, so no TLD/DNS pedantry.
+    const trimName = value.gitUserName?.trim() ?? ''
+    const trimEmail = value.gitUserEmail?.trim() ?? ''
+    const hasName = trimName.length > 0
+    const hasEmail = trimEmail.length > 0
+    if (hasName !== hasEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'git-identity-incomplete',
+        path: hasName ? ['gitUserEmail'] : ['gitUserName'],
+      })
+    }
+    if (hasEmail && !/^[^\s@]+@[^\s@]+$/.test(trimEmail)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'git-identity-email-invalid',
+        path: ['gitUserEmail'],
+      })
+    }
+
     // RFC-165: scratch ⊕ every repo source. A scratch task has no source repo,
     // no ref, no remote — so workingBranch / autoCommitPush are meaningless
     // and rejected too (schema layer of the two-layer ban; UI hides them).
@@ -408,29 +434,6 @@ export const StartTaskSchema = z
       return
     }
 
-    // RFC-067: Git identity XOR + format check. Trim before testing so the
-    // user can't sneak through with whitespace-only strings. Loose email
-    // check: must contain `@`, no whitespace on either side. We intentionally
-    // do NOT validate TLD / DNS — git itself accepts any `Name <email>`
-    // shape, so the framework should not be stricter than git.
-    const trimName = value.gitUserName?.trim() ?? ''
-    const trimEmail = value.gitUserEmail?.trim() ?? ''
-    const hasName = trimName.length > 0
-    const hasEmail = trimEmail.length > 0
-    if (hasName !== hasEmail) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'git-identity-incomplete',
-        path: hasName ? ['gitUserEmail'] : ['gitUserName'],
-      })
-    }
-    if (hasEmail && !/^[^\s@]+@[^\s@]+$/.test(trimEmail)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'git-identity-email-invalid',
-        path: ['gitUserEmail'],
-      })
-    }
     // RFC-075: loose working-branch format check. Authoritative validation is
     // `git check-ref-format --branch` at materialize time; this catches the
     // obvious illegal shapes (whitespace, `..`, leading/trailing `/`, etc.)

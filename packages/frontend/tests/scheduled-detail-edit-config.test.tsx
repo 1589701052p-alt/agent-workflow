@@ -31,7 +31,7 @@ const SCHEDULE = {
   id: 'sched-1',
   name: 'nightly audit',
   ownerUserId: 'bob',
-  launchPayload: { workflowId: 'wf-42', name: 'nightly', repoPath: '/r', baseBranch: 'main' },
+  launchPayload: { workflowId: 'wf-42', name: 'nightly', repoUrl: 'https://h/o/r.git' },
   scheduleSpec: { kind: 'daily', at: '09:00', timezone: 'UTC' },
   enabled: true,
   nextRunAt: Date.now() + 1000,
@@ -44,7 +44,7 @@ const SCHEDULE = {
   updatedAt: 1,
 }
 
-function installFetch() {
+function installFetch(schedule: Record<string, unknown> = SCHEDULE) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = input.toString()
     const json = (body: unknown, status = 200) =>
@@ -53,7 +53,7 @@ function installFetch() {
         headers: { 'content-type': 'application/json' },
       })
     if (url.includes('/api/tasks')) return json([]) // run history
-    if (url.includes('/api/scheduled-tasks/sched-1')) return json(SCHEDULE)
+    if (url.includes('/api/scheduled-tasks/sched-1')) return json(schedule)
     return json({})
   })
 }
@@ -113,5 +113,39 @@ describe('RFC-159 — scheduled detail: edit task config entry', () => {
       expect(screen.getByTestId('scheduled-edit').textContent).toBe('Edit name & schedule')
       expect(screen.getByTestId('scheduled-edit-config')).toBeTruthy()
     })
+  })
+})
+
+describe('RFC-165 — degraded schedule repair affordance (implementation-gate P2)', () => {
+  test('degraded payload with a workflowId hint keeps the edit-config REPAIR entry + banner', async () => {
+    installFetch({
+      ...SCHEDULE,
+      launchPayload: null,
+      launchPayloadWorkflowId: 'wf-42',
+      migrationNeeded: true,
+      migrationError: { launchPayload: 'legacy-shape: repoPath retired', scheduleSpec: null },
+    })
+    await renderDetail()
+
+    const banner = await screen.findByTestId('scheduled-degraded-banner')
+    expect(banner.textContent ?? '').toContain('legacy-shape: repoPath retired')
+
+    const link = screen.getByTestId('scheduled-edit-config')
+    const href = link.getAttribute('href') ?? ''
+    expect(href).toContain('/workflows/wf-42/launch')
+    expect(href).toContain('editScheduled=sched-1')
+  })
+
+  test('corrupt payload with NO recoverable workflowId: banner only, no dead link', async () => {
+    installFetch({
+      ...SCHEDULE,
+      launchPayload: null,
+      launchPayloadWorkflowId: null,
+      migrationError: { launchPayload: 'invalid-json', scheduleSpec: null },
+    })
+    await renderDetail()
+
+    await screen.findByTestId('scheduled-degraded-banner')
+    expect(screen.queryByTestId('scheduled-edit-config')).toBeNull()
   })
 })

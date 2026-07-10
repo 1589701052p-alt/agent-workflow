@@ -19,7 +19,7 @@
 //   S6 scratch + preCreatedWorktree (multipart) is rejected until the unified
 //      materializeSpace protocol lands (T2c) — explicit 422, not half-working.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
@@ -152,6 +152,37 @@ describe('RFC-165 T2a — scratch-space materialization', () => {
     const task = await startTask({ ...BODY }, { db: h.db, appHome: h.appHome })
     expect(materializingSpaces.size).toBe(0)
     expect(task.spaceKind).toBe('scratch')
+  })
+
+  test('S8 task_repos insert failure rolls back the task row (no ghost pending row)', async () => {
+    // Implementation-gate P2: a DB error AFTER the tasks insert used to leave
+    // a committed pending row whose scratch dir the catch had just deleted —
+    // ownerless, workspaceless, invisible to the scheduler. Poison the
+    // task_repos insert to force that exact window.
+    h = buildHarness()
+    const realDb = h.db
+    const poisoned = new Proxy(realDb, {
+      get(target, prop, receiver) {
+        if (prop === 'insert') {
+          return (table: unknown) => {
+            if (table === taskRepos) throw new Error('boom-task-repos-insert')
+            return (target as unknown as { insert: (t: unknown) => unknown }).insert(table)
+          }
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    }) as DbClient
+
+    await expect(startTask({ ...BODY }, { db: poisoned, appHome: h.appHome })).rejects.toThrow(
+      'boom-task-repos-insert',
+    )
+
+    // No half-created row survives, the per-task scratch dir is cleaned
+    // (the empty `scratch/` parent may remain), lease freed.
+    const rows = await realDb.select().from(tasks)
+    expect(rows.length).toBe(0)
+    expect(readdirSync(join(h.appHome, 'scratch'))).toEqual([])
+    expect(materializingSpaces.size).toBe(0)
   })
 
   test('S7 materializedSpace success handoff: startTask consumes verbatim (F3)', async () => {

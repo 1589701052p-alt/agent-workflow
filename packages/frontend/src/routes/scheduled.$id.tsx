@@ -92,11 +92,15 @@ function ScheduledDetailPage() {
             {t('scheduled.edit')}
           </button>
           {/* RFC-159 (edit-config): edit the FULL task config (repo/branch/inputs/
-              collaborators/git-identity/…) by reusing the launch form in edit mode. */}
-          {s.launchPayload !== null && (
+              collaborators/git-identity/…) by reusing the launch form in edit mode.
+              RFC-165: a degraded payload keeps this entry as the REPAIR path via
+              the best-effort workflowId hint (edit form seeds blank; saving PUTs
+              a full replacement payload). Only a payload whose workflowId is
+              unrecoverable (corrupt JSON) loses the entry. */}
+          {(s.launchPayload?.workflowId ?? s.launchPayloadWorkflowId ?? null) !== null && (
             <Link
               to="/workflows/$id/launch"
-              params={{ id: s.launchPayload.workflowId }}
+              params={{ id: s.launchPayload?.workflowId ?? s.launchPayloadWorkflowId ?? '' }}
               search={{ editScheduled: s.id }}
               className="btn"
               data-testid="scheduled-edit-config"
@@ -131,6 +135,24 @@ function ScheduledDetailPage() {
           />
         </div>
       </header>
+
+      {/* RFC-165: degraded/legacy rows surface the repair guidance + the
+          per-field parse reason so the user knows WHAT to fix. */}
+      {(s.launchPayload === null || s.scheduleSpec === null) && (
+        <div
+          className="info-box info-box--muted"
+          role="status"
+          data-testid="scheduled-degraded-banner"
+        >
+          <div>{t('scheduled.degradedBanner')}</div>
+          {s.migrationError?.launchPayload != null && (
+            <div className="muted">{s.migrationError.launchPayload}</div>
+          )}
+          {s.migrationError?.scheduleSpec != null && (
+            <div className="muted">{s.migrationError.scheduleSpec}</div>
+          )}
+        </div>
+      )}
 
       {/* Mutation errors render on their own row below the header — never squeezed
           into the top-right action cluster (mirrors DetailHeaderActions). */}

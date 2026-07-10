@@ -1272,6 +1272,8 @@ export const enUS: Resources = {
     deleteConfirm: 'Delete?',
     uploadUnsupported: 'Workflows requiring a file upload cannot be scheduled.',
     editConfig: 'Edit task config',
+    degradedBanner:
+      'The stored config of this schedule is no longer readable (legacy format or corrupted data). Use "Edit task config" to re-enter and save a full replacement, or disable / delete the schedule.',
     editConfigTitle: 'Edit task config: {{name}}',
     saveConfig: 'Save task config',
     backToSchedule: '← Back to schedule',

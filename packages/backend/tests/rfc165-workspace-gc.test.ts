@@ -240,6 +240,23 @@ describe('RFC-165 T2b — two-phase workspace tombstone + revive gate', () => {
     expect((await taskRow(h, liveId)).workspacePrunedAt).toBe(null)
   })
 
+  test('G7b stale claim with a vanished dir is finalized, not stuck (crash between phase 2 and 3)', async () => {
+    // Implementation-gate P2: daemon died after rm(dir) but before stamping
+    // workspacePrunedAt — the row sits claimed with no directory. The next
+    // tick's missing-path branch must finalize it (the old null-only claim
+    // predicate left it permanently at "workspace-pruning").
+    const id = await seedTask(h, {
+      status: 'done',
+      worktreePath: join(h.appHome, 'ws-crashed'),
+      workspacePruningAt: Date.now() - 60_000, // claimed a minute ago; dir gone
+    })
+
+    const r = await runWorktreeGc(h.db, GC_ON)
+    expect(r.removed).toEqual([])
+    const row = await taskRow(h, id)
+    expect(row.workspacePrunedAt).not.toBe(null)
+  })
+
   test('G8 scratch orphan scan: anchored/leased/young survive, old orphan reaped', async () => {
     const anchoredId = await seedTask(h, { status: 'running' })
     const anchored = mkDir(h, 'scratch', anchoredId)
