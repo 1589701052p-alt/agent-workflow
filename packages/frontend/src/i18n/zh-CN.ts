@@ -1246,6 +1246,7 @@ export interface Resources {
     /** RFC-066: multi-repo summary `<details>` label on the task detail page. */
     multiRepoSummary: string
     cancelButton: string
+    relaunchButton: string
     resumeButton: string
     resuming: string
     syncWorkflow: {
@@ -1600,7 +1601,7 @@ export interface Resources {
     launch: string
     saveScheduled: string
     saveConfig: string
-    summaryInputs: string
+    limitInvalid: string
     summaryCollaborators: string
     clarifyOff: string
     kindLocked: string
@@ -4063,6 +4064,7 @@ export const zhCN: Resources = {
     // RFC-066: multi-repo summary on the task detail page.
     multiRepoSummary: '{{count}} 个仓库',
     cancelButton: '取消任务',
+    relaunchButton: '再次启动',
     resumeButton: '继续任务',
     resuming: '继续中…',
     // RFC-109 — 同步最新工作流并继续
@@ -4415,10 +4417,10 @@ export const zhCN: Resources = {
     launch: '启动任务',
     saveScheduled: '存为定时任务',
     saveConfig: '保存配置',
-    summaryInputs: '{{count}} 个输入',
+    limitInvalid: '上限必须为正数（Token 上限须为整数）。',
     summaryCollaborators: '{{count}} 位协作者',
     clarifyOff: '反问已关闭',
-    kindLocked: '编辑定时任务时执行方式与对象不可更改。',
+    kindLocked: '编辑定时任务时执行方式不可更改（对象可在同类型内更换）。',
     degradedBanner: '该定时任务存储的配置无法解析（旧格式或已损坏）；请重新填写并保存以修复。',
   },
   stepper: {

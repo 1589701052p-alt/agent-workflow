@@ -12355,3 +12355,11 @@ mark.comment-anchor[data-active='true'] {
   flex-wrap: wrap;
   word-break: break-word;
 }
+
+.wizard-summary__inputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}

@@ -32,6 +32,12 @@ describe('tasks.new.tsx — RFC-037 task name wiring', () => {
     expect(SRC).toMatch(/stepContentReady\s*=[\s\S]*nameReady/)
   })
 
+  test('workflow content gate requires a SUCCESSFUL detail load (Codex P1)', () => {
+    // While the detail query is pending/failed, inputDefs is empty and
+    // missingRequired reads false — the gate must not treat that as ready.
+    expect(SRC).toMatch(/workflowQ\.isSuccess && !missingRequired/)
+  })
+
   test('every submit arm stamps the trimmed name into the body', () => {
     // RFC-165: all three kind builders receive `name: taskName.trim()` — the
     // agent / workgroup arms inside buildImmediateBody, the workflow

@@ -1318,6 +1318,7 @@ export const enUS: Resources = {
     // RFC-066: multi-repo summary on the task detail page.
     multiRepoSummary: '{{count}} repositories',
     cancelButton: 'Cancel task',
+    relaunchButton: 'Launch again',
     resumeButton: 'Resume task',
     resuming: 'Resuming…',
     // RFC-109 — sync latest workflow & continue
@@ -1681,10 +1682,11 @@ export const enUS: Resources = {
     launch: 'Start task',
     saveScheduled: 'Save as scheduled',
     saveConfig: 'Save config',
-    summaryInputs: '{{count}} input(s)',
+    limitInvalid: 'Limits must be positive (the token cap must be an integer).',
     summaryCollaborators: '{{count}} collaborator(s)',
     clarifyOff: 'Follow-up questions off',
-    kindLocked: 'Execution mode and object cannot change while editing a schedule.',
+    kindLocked:
+      'The execution mode cannot change while editing a schedule (the object can be swapped within the same kind).',
     degradedBanner:
       'This schedule\u2019s stored config cannot be parsed (legacy or corrupted); re-fill the form and save to repair it.',
   },

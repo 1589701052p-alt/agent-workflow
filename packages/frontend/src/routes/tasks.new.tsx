@@ -216,9 +216,10 @@ function TaskWizardPage() {
     setGitUserEmail(seed.gitUserEmail)
     setWorkingBranch(seed.workingBranch)
     setAutoCommitPush(seed.autoCommitPush)
-    setMaxDurationMin(
-      seed.maxDurationMs !== undefined ? Math.round(seed.maxDurationMs / 60_000) : undefined,
-    )
+    // Keep the exact stored value: fractional minutes round-trip back to the
+    // original ms via Math.round(min * 60_000) — a no-op save must not mutate
+    // a limit like 123456ms into 120000ms (Codex P2).
+    setMaxDurationMin(seed.maxDurationMs !== undefined ? seed.maxDurationMs / 60_000 : undefined)
     setMaxTotalTokens(seed.maxTotalTokens)
     seedCollabIds.current = seed.collaboratorUserIds
     // Everything is pre-filled — open every step so the user can jump straight
@@ -246,7 +247,9 @@ function TaskWizardPage() {
   }, [isEdit, scheduleQ.data, collabLookup.isLoading])
 
   // Seed the inputs map from the selected workflow's declared keys (merge:
-  // stale keys drop, new keys start blank, user-typed values survive).
+  // stale keys drop, new keys start blank, user-typed values survive). The
+  // uploads map is filtered in lockstep — leaving files picked for a PREVIOUS
+  // workflow would force a multipart submit with unknown keys (Codex P2).
   useEffect(() => {
     if (kind !== 'workflow' || workflowQ.data === undefined) return
     const defs = workflowQ.data.definition.inputs ?? []
@@ -256,6 +259,11 @@ function TaskWizardPage() {
         seeded[i.key] = prev[i.key] ?? ''
       }
       return seeded
+    })
+    const uploadKeys = new Set(defs.filter((d) => d.kind === 'upload').map((d) => d.key))
+    setUploads((prev) => {
+      const kept = Object.entries(prev).filter(([k]) => uploadKeys.has(k))
+      return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept)
     })
   }, [kind, workflowQ.data])
 
@@ -316,9 +324,13 @@ function TaskWizardPage() {
   const sourceReady =
     space.kind === 'scratch' || space.repos.every((r) => validateRepoUrl(r.repoUrl) === null)
   const nameReady = taskName.trim().length > 0
+  // Codex P1: while the workflow detail is loading (or failed), inputDefs is
+  // empty and missingRequired reads false — the wizard must NOT treat that as
+  // "no required inputs" and let a launch skip them (or skip the multipart
+  // path for upload inputs). Require a SUCCESSFUL detail load.
   const contentReady =
     kind === 'workflow'
-      ? !missingRequired
+      ? workflowQ.isSuccess && !missingRequired
       : kind === 'agent'
         ? description.trim().length > 0
         : goal.trim().length > 0
@@ -334,7 +346,15 @@ function TaskWizardPage() {
     space.kind === 'remote' &&
     workingBranchTrim !== '' &&
     !isLooseValidBranchName(workingBranchTrim)
-  const stepContentReady = nameReady && contentReady && gitIdentityOk && !workingBranchError
+  // Codex P2: NumberInput's native min/step don't gate button-driven submits —
+  // zero/negative limits would be silently dropped off the wire and a
+  // fractional token cap would 422 against the integer schema.
+  const durationInvalid = maxDurationMin !== undefined && maxDurationMin <= 0
+  const tokensInvalid =
+    maxTotalTokens !== undefined && (maxTotalTokens <= 0 || !Number.isInteger(maxTotalTokens))
+  const limitsOk = !durationInvalid && !tokensInvalid
+  const stepContentReady =
+    nameReady && contentReady && gitIdentityOk && !workingBranchError && limitsOk
   // RFC-159 P2: editing a schedule with collaborators must wait for the id →
   // UserPublic lookup, else Save rebuilds the body with an empty set.
   const collabReady = !isEdit || seedCollabIds.current.length === 0 || collabLookup.isSuccess
@@ -553,6 +573,11 @@ function TaskWizardPage() {
                 {t('launch.repoSource.cloningHint')}
               </span>
             )}
+            {isEdit && collabLookup.isError && (
+              <span className="form-actions__error" data-testid="wizard-collab-load-error">
+                {t('scheduled.collabLoadError')}
+              </span>
+            )}
             {(start.error !== null && start.error !== undefined) ||
             (saveConfig.error !== null && saveConfig.error !== undefined) ? (
               <span className="form-actions__error" data-testid="wizard-submit-error">
@@ -619,7 +644,6 @@ function TaskWizardPage() {
                   value={workflowId}
                   onChange={setWorkflowId}
                   options={workflowOptions}
-                  disabled={isEdit}
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-workflow"
                 />
@@ -628,7 +652,6 @@ function TaskWizardPage() {
                   value={agentName}
                   onChange={setAgentName}
                   options={agentOptions}
-                  disabled={isEdit}
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-agent"
                 />
@@ -637,7 +660,6 @@ function TaskWizardPage() {
                   value={workgroupName}
                   onChange={setWorkgroupName}
                   options={workgroupOptions}
-                  disabled={isEdit}
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-workgroup"
                 />
@@ -723,6 +745,11 @@ function TaskWizardPage() {
             )}
 
             {kind === 'workflow' && workflowQ.isLoading && <LoadingState />}
+            {kind === 'workflow' && workflowQ.error !== null && workflowQ.error !== undefined && (
+              <div className="error-box" role="alert" data-testid="wizard-workflow-load-error">
+                {describeApiError(workflowQ.error)}
+              </div>
+            )}
             {kind === 'workflow' && !workflowQ.isLoading && inputDefs.length === 0 && (
               <div className="muted">{t('launch.noInputs')}</div>
             )}
@@ -864,6 +891,11 @@ function TaskWizardPage() {
                     data-testid="wizard-max-tokens"
                   />
                 </Field>
+                {(durationInvalid || tokensInvalid) && (
+                  <div className="error-text" role="alert" data-testid="wizard-limits-error">
+                    {t('taskWizard.limitInvalid')}
+                  </div>
+                )}
               </div>
             </details>
           </div>
@@ -903,9 +935,24 @@ function TaskWizardPage() {
             <div className="wizard-summary__row">
               <dt>{t('taskWizard.stepContent')}</dt>
               <dd data-testid="wizard-summary-content">
-                {kind === 'workflow'
-                  ? t('taskWizard.summaryInputs', { count: inputDefs.length })
-                  : truncate(kind === 'agent' ? description : goal)}
+                {kind === 'workflow' ? (
+                  inputDefs.length === 0 ? (
+                    t('launch.noInputs')
+                  ) : (
+                    <ul className="wizard-summary__inputs">
+                      {inputDefs.map((def) => (
+                        <li key={def.key}>
+                          <span className="muted">{def.key}: </span>
+                          {def.kind === 'upload'
+                            ? (uploads[def.key] ?? []).map((f) => f.name).join(', ') || '—'
+                            : truncate(inputs[def.key] ?? '')}
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                ) : (
+                  truncate(kind === 'agent' ? description : goal)
+                )}
               </dd>
             </div>
             {(collaborators.length > 0 ||

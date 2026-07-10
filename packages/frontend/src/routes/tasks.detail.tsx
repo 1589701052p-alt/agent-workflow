@@ -268,6 +268,25 @@ function TaskDetailPage() {
         </div>
         <div className="page__actions">
           <TaskMembersDialogButton taskId={id} />
+          {/* RFC-165: subject-aware relaunch — terminal tasks deep-link into
+              the /tasks/new wizard with the execution subject pre-picked
+              (v1 pre-fills the subject only). */}
+          {isTerminal(tk.status) && (
+            <Link
+              to="/tasks/new"
+              search={
+                taskExecutionKind(tk) === 'agent'
+                  ? { kind: 'agent', agent: tk.sourceAgentName ?? '' }
+                  : taskExecutionKind(tk) === 'workgroup'
+                    ? { kind: 'workgroup' }
+                    : { kind: 'workflow', workflow: tk.workflowId }
+              }
+              className="btn"
+              data-testid="task-detail-relaunch"
+            >
+              {t('tasks.relaunchButton')}
+            </Link>
+          )}
           {resumability === 'ready' && (
             <button
               type="button"

@@ -81,6 +81,9 @@ const SCHEDULE_AGENT = {
     description: 'audit the repo',
     allowClarify: false,
     scratch: true,
+    // Codex P2 lock: a NON-whole-minute limit must survive a no-op save
+    // byte-exactly (the wizard keeps fractional minutes in state).
+    maxDurationMs: 123456,
   },
   scheduleSpec: { kind: 'daily', at: '09:00', timezone: 'UTC' },
   enabled: true,
@@ -352,6 +355,9 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     const kindSeg = await screen.findByTestId('wizard-kind-agent')
     await waitFor(() => expect(kindSeg.getAttribute('aria-checked')).toBe('true'))
     expect((kindSeg as HTMLButtonElement).disabled).toBe(true)
+    // Codex P1: only the KIND locks — the object selector stays usable so a
+    // degraded seed can be repaired / repointed within the same kind.
+    expect((screen.getByTestId('wizard-object-agent') as HTMLButtonElement).disabled).toBe(false)
 
     // Jump straight to confirm (fully seeded → reachable) and save.
     fireEvent.click(screen.getByTestId('stepper-step-confirm'))
@@ -369,6 +375,7 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
         description: 'audit the repo',
         allowClarify: false,
         scratch: true,
+        maxDurationMs: 123456,
       })
     })
     expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/tasks'))).toBe(false)
@@ -387,6 +394,21 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     const listbox = await screen.findByRole('listbox')
     expect(within(listbox).queryByText('__sys_reviewer__')).toBeNull()
     expect(within(listbox).getByRole('option', { name: /auditor/ })).toBeTruthy()
+  })
+
+  test('W11: invalid numeric limits gate the content step (Codex P2)', async () => {
+    installFetch()
+    await renderWizard('/tasks/new?kind=agent&agent=auditor')
+    fireEvent.click(await screen.findByTestId('wizard-space-scratch'))
+    next()
+    fireEvent.change(await screen.findByTestId('wizard-task-name'), { target: { value: 'T' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'd' } })
+    expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('wizard-max-tokens'), { target: { value: '2.5' } })
+    expect(screen.getByTestId('wizard-limits-error')).toBeTruthy()
+    expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('wizard-max-tokens'), { target: { value: '2000' } })
+    expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(false)
   })
 
   test('W10: a 422 workgroup-not-ready launch renders the friendly reason copy', async () => {
