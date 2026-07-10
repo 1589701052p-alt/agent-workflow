@@ -427,7 +427,13 @@ jobs:
         # MCP servers) - no mcpProbe 30s timeouts. RUN_GIT_NETWORK stays off
         # (real-git-clone + external-MCP-spawn integration suites stay gated,
         # matching a local `bun test`).
-        run: bun test
+        # `--timeout 60000`: process-heavy integration tests (git worktrees +
+        # mock-opencode spawns) exceed bun:test's 5000ms default on the slower
+        # Windows runner; tripping it mid-run clobbers the next test's shared
+        # state (the S-RFC074 mirage). 60s covers tests AND beforeEach/afterEach
+        # hooks; fast unit tests are unaffected. See setDefaultTimeout notes in
+        # clarify-review-combination-scenarios.test.ts.
+        run: bun test --timeout 60000
 
   e2e:
     # Playwright happy-path against the single binary that `build-binary`
