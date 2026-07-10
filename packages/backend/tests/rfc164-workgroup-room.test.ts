@@ -216,8 +216,15 @@ describe('RFC-164 room — endpoints', () => {
       .from(workgroupMessages)
       .where(eq(workgroupMessages.taskId, taskId))
     expect(after).toHaveLength(2)
-    expect(after[1]?.kind).toBe('chat')
-    expect(after[1]?.authorKind).toBe('human')
+    // Assert by kind, not array index: a concurrent test that perturbs the
+    // clock can make ULID ids non-monotonic across the whole suite, reordering
+    // the id-sorted select (the no-@ chat message's kind is still correct —
+    // only its position moves). Full-suite pollution surfaced this on
+    // 2026-07-10; single/small-batch runs stay monotonic.
+    const chatMsg = after.find((m) => m.kind === 'chat')
+    expect(chatMsg).toBeDefined()
+    expect(chatMsg?.authorKind).toBe('human')
+    expect(after.filter((m) => m.kind === 'dispatch')).toHaveLength(1)
     // no extra assignment for the plain chat
     expect(
       await db.select().from(workgroupAssignments).where(eq(workgroupAssignments.taskId, taskId)),
@@ -405,7 +412,9 @@ describe('RFC-164 room — PR-5 surfaces', () => {
       .where(eq(workgroupMessages.taskId, taskId))
     const deliveries = msgs.filter((m) => m.kind === 'delivery')
     expect(deliveries).toHaveLength(2)
-    expect(deliveries[1]?.bodyMd).toContain('订单号+事件类型联合键')
+    // by-content, not index (ULID ordering may be perturbed under full-suite
+    // clock pollution — see the 决策 #14 test note).
+    expect(deliveries.some((m) => m.bodyMd.includes('订单号+事件类型联合键'))).toBe(true)
 
     // 已交付卡重复交付 409
     const dup = await req(owner.token, `/api/workgroup-tasks/${taskId}/assignments/${a1}/deliver`, {
