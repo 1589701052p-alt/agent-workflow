@@ -19,7 +19,15 @@ import { rimrafDir } from './helpers/cleanup'
 // All git is offline via a `file://` bare repo (mirrors start-task-url.test.ts);
 // no `RUN_GIT_NETWORK` dependency.
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setDefaultTimeout, test } from 'bun:test'
+// RFC-W001: these tests build a `file://` bare repo (git init + commit + clone
+// --bare) + multipart parsing, and several launch a task that spawns the
+// stub-opencode runtime. On the slower Windows CI runner individual tests
+// exceed bun:test's 5000ms default per-test timeout; bun then fires the
+// timeout mid-test and starts the NEXT test's setup, clobbering shared temp
+// state (the S-RFC074 mirage documented in clarify-review-combination-
+// scenarios.test.ts). Raise the file-wide default so no test trips the cliff.
+setDefaultTimeout(60_000)
 import type { Hono } from 'hono'
 import { execSync } from 'node:child_process'
 import {
