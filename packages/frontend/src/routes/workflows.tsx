@@ -8,7 +8,7 @@ import { Link, createRoute, redirect, useNavigate } from '@tanstack/react-router
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CreateWorkflow, Workflow } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
+import { api, ApiError, extractErrorBody } from '@/api/client'
 import { useResourceList } from '@/hooks/useResourceList'
 import { describeApiError } from '@/i18n'
 import { getBaseUrl, getToken } from '@/stores/auth'
@@ -112,7 +112,9 @@ function WorkflowsPage() {
           setImportMsg(t('workflows.importCanceled'))
         }
       } else {
-        setImportMsg(err instanceof Error ? err.message : String(err))
+        // describeApiError maps coded failures (e.g. workflow-name-invalid on
+        // a legacy free-form name) to the localized remediation text.
+        setImportMsg(describeApiError(err))
       }
     }
   }
@@ -266,7 +268,12 @@ function WorkflowsPage() {
   )
 }
 
-async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'): Promise<void> {
+/** Exported for tests — hand-rolled fetch (text/yaml body + query param), so
+ *  it must share the api client's FLAT/nested error decoding. */
+export async function postYaml(
+  yaml: string,
+  onConflict: 'fail' | 'overwrite' | 'new',
+): Promise<void> {
   const base = getBaseUrl()
   const token = getToken()
   const url = new URL('/api/workflows/import', base)
@@ -275,13 +282,10 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
   if (token !== null) headers.Authorization = `Bearer ${token}`
   const res = await fetch(url.toString(), { method: 'POST', headers, body: yaml })
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as {
-      error?: { code: string; message: string }
-    } | null
-    const err = body?.error ?? {
-      code: `http-${res.status}`,
-      message: res.statusText || 'request failed',
-    }
-    throw new ApiError(res.status, err.code, err.message)
+    // Shared decoder: the daemon emits FLAT {ok:false, code, message} — the
+    // old nested-only parse here degraded every import failure (including
+    // the 409 conflict that drives the overwrite/new prompt) to `http-<n>`.
+    const err = extractErrorBody(await res.json().catch(() => null), res)
+    throw new ApiError(res.status, err.code, err.message, err.details)
   }
 }

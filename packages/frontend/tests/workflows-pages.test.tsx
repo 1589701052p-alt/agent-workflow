@@ -63,6 +63,7 @@ afterEach(() => {
   cleanup()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function wf(name: string, overrides: Partial<Workflow> = {}): Workflow {
@@ -87,13 +88,27 @@ interface Recorded {
 
 function installFetch(
   state: { workflows: Workflow[]; releaseCreate?: () => void } & Recorded,
-  opts: { failCreate?: boolean; deferCreate?: boolean } = {},
+  opts: {
+    failCreate?: boolean
+    deferCreate?: boolean
+    importResponse?: { status: number; body: unknown }
+  } = {},
 ): void {
   vi.spyOn(globalThis, 'fetch').mockImplementation(
     async (req: RequestInfo | URL, init?: RequestInit) => {
       const url = req.toString()
       const method = (init?.method ?? 'GET').toUpperCase()
-      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      // Import bodies are YAML, not JSON — record those as the raw string.
+      const body =
+        typeof init?.body === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(init.body as string) as unknown
+              } catch {
+                return init.body
+              }
+            })()
+          : undefined
       state.calls.push({ url, method, body })
       const json = (payload: unknown, status = 200) =>
         new Response(JSON.stringify(payload), {
@@ -102,6 +117,10 @@ function installFetch(
         })
 
       if (url.includes('/api/users/lookup')) return json([])
+      if (url.includes('/api/workflows/import') && method === 'POST') {
+        const ir = opts.importResponse ?? { status: 201, body: wf('imported') }
+        return json(ir.body, ir.status)
+      }
       if (url.endsWith('/api/workflows') && method === 'GET') return json(state.workflows)
       if (url.endsWith('/api/workflows') && method === 'POST') {
         if (opts.failCreate === true) {
@@ -346,6 +365,50 @@ describe('/workflows quick-create dialog', () => {
     const name = (await screen.findByTestId('workflow-create-name')) as HTMLInputElement
     expect(name.value).toBe('')
     expect((screen.getByTestId('workflow-create-confirm') as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('postYaml decodes FLAT daemon error payloads (Codex P2)', () => {
+  // The daemon's errorHandler emits FLAT {ok:false, code, message}. postYaml
+  // used to parse only a nested {error:{...}} shape, degrading EVERY import
+  // failure — including the 409 that drives the overwrite/new prompt — to a
+  // generic `http-<status>`. It now reuses the api client's extractErrorBody.
+  test('flat 422 → ApiError carries workflow-name-invalid (was http-422)', async () => {
+    installFetch(
+      { workflows: [], calls: [] },
+      {
+        importResponse: {
+          status: 422,
+          body: { ok: false, code: 'workflow-name-invalid', message: 'name must match …' },
+        },
+      },
+    )
+    const { postYaml } = await import('../src/routes/workflows')
+    await expect(postYaml('name: Bad Legacy Name\n', 'fail')).rejects.toMatchObject({
+      code: 'workflow-name-invalid',
+    })
+  })
+
+  test('flat 409 keeps workflow-import-conflict (the overwrite/new prompt branch key)', async () => {
+    installFetch(
+      { workflows: [], calls: [] },
+      {
+        importResponse: {
+          status: 409,
+          body: { ok: false, code: 'workflow-import-conflict', message: 'id collides' },
+        },
+      },
+    )
+    const { postYaml } = await import('../src/routes/workflows')
+    await expect(postYaml('name: x\n', 'fail')).rejects.toMatchObject({
+      code: 'workflow-import-conflict',
+    })
+  })
+
+  test('the import UI routes coded errors through the shared decoders (source lock)', () => {
+    const list = readSrc('routes/workflows.tsx')
+    expect(list).toContain('extractErrorBody(')
+    expect(list).toContain('setImportMsg(describeApiError(err))')
   })
 })
 
