@@ -2286,7 +2286,7 @@ code {
 }
 .workflow-sync__count,
 .workflow-sync__kind {
-  color: var(--text-muted, #888);
+  color: var(--muted, #888);
   font-weight: 400;
   font-size: 12px;
 }
@@ -2859,7 +2859,7 @@ code {
 .task-detail__id {
   margin-top: var(--space-1);
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 /* Workflow jump link under the task ID — same muted subtitle treatment as
@@ -2868,7 +2868,7 @@ code {
 .task-detail__workflow {
   margin-top: var(--space-1);
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .task-detail__id-label {
@@ -2911,7 +2911,7 @@ code {
 .task-name-cell__id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
   white-space: nowrap;
   /* Parent is `display: flex; flex-direction: column` — without this the code
      box stretches to the full cell width, which looks like a wide empty chip.
@@ -3330,7 +3330,7 @@ details.form-section[open] > summary {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: var(--text-muted, #666);
+  color: var(--muted, #666);
   white-space: nowrap;
 }
 
@@ -3366,7 +3366,7 @@ details.form-section[open] > summary {
   padding: 1px 6px;
   border-radius: 10px;
   background: var(--border);
-  color: var(--text-muted, #666);
+  color: var(--muted, #666);
 }
 
 .capability-card__desc {
@@ -3386,7 +3386,7 @@ details.form-section[open] > summary {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-muted, #666);
+  color: var(--muted, #666);
 }
 
 .capability-card__ports-list {
@@ -3407,7 +3407,7 @@ details.form-section[open] > summary {
 }
 
 .capability-card__port-kind {
-  color: var(--text-muted, #666);
+  color: var(--muted, #666);
   font-size: 11px;
 }
 
@@ -3418,13 +3418,13 @@ details.form-section[open] > summary {
 }
 
 .capability-card__ports-none {
-  color: var(--text-muted, #999);
+  color: var(--muted, #999);
   font-style: italic;
 }
 
 .capability-card__prompt {
   margin: 0;
-  color: var(--text-muted, #666);
+  color: var(--muted, #666);
   font-size: 12px;
 }
 
@@ -3886,7 +3886,7 @@ details.form-section[open] > summary {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--text-muted, #9aa);
+  color: var(--muted, #9aa);
   cursor: pointer;
 }
 
@@ -4422,7 +4422,7 @@ details.form-section[open] > summary {
   border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   border: 1px solid var(--border);
-  color: var(--text-muted, var(--text));
+  color: var(--muted, var(--text));
   font-size: 11px;
   line-height: 1.4;
   pointer-events: none;
@@ -6704,7 +6704,7 @@ mark.comment-anchor[data-active='true'] {
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 12px;
-  color: var(--text-muted, inherit);
+  color: var(--muted, inherit);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   max-width: 320px;
   pointer-events: none;
@@ -9051,7 +9051,7 @@ mark.comment-anchor[data-active='true'] {
   flex-shrink: 0;
 }
 .agent-dep-autodetect__desc {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: var(--font-sm);
   flex: 1 1 auto;
   min-width: 0;
@@ -9957,8 +9957,8 @@ mark.comment-anchor[data-active='true'] {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
 }
 
 .injected-memories-card__body {
@@ -10037,7 +10037,7 @@ mark.comment-anchor[data-active='true'] {
 
 .injected-memory-row__scope-id {
   margin-left: 4px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-weight: 400;
 }
 
@@ -10048,7 +10048,7 @@ mark.comment-anchor[data-active='true'] {
 
 .injected-memory-row__version {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .injected-memory-row__tags {
@@ -10060,8 +10060,8 @@ mark.comment-anchor[data-active='true'] {
   font-size: 10px;
   padding: 0 5px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
 }
 
 .injected-memory-row__preview {
