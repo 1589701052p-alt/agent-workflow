@@ -11499,6 +11499,31 @@ mark.comment-anchor[data-active='true'] {
 .task-questions__col .card:not(.card--highlighted) {
   background: var(--panel);
 }
+/* RFC-163 — 下发前分组卡的处理节点行（提问节点 + 增派修订 handler）。贴 meta 的
+   muted/ellipsis 语汇，行间只留最小气口，不自造 chrome。 */
+.task-questions__handlers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-sm);
+}
+.task-questions__handler-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.task-questions__handler-role {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.task-questions__handler-node {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-questions__meta {
   display: flex;
   flex-wrap: wrap;

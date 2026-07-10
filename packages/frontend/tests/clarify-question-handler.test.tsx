@@ -6,7 +6,7 @@
 // present (so it can't break the fragile clarify page). Collapse/scope/echo were deleted.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api } from '@/api/client'
 import { ClarifyQuestionHandler } from '@/components/clarify/ClarifyQuestionHandler'
@@ -99,6 +99,18 @@ describe('ClarifyQuestionHandler', () => {
     const root = screen.getByTestId('clarify-handler-q1')
     expect(within(root).queryAllByRole('combobox').length).toBe(0)
     expect(root.textContent).toContain('auditor')
+  })
+
+  // RFC-163 —「答完/asker 已下发后让上游修订」保持可用：processing / awaiting_confirm 的
+  // picker 仍可改派（ADD 一条未下发 designer = 看板上自己的待指派卡）。初版曾收紧到
+  // pending/staged、连带 409 守卫禁掉该一等流程——此测锁定不再回退（只有 done 关闭编辑）。
+  test('RFC-163: dispatched (processing / awaiting_confirm) asker → picker STAYS editable (revision flow)', () => {
+    for (const phase of ['processing', 'awaiting_confirm'] as const) {
+      cleanup()
+      wrap([askerEntry({ phase })], SNAPSHOT)
+      const root = screen.getByTestId('clarify-handler-q1')
+      expect(within(root).queryAllByRole('combobox').length).toBeGreaterThan(0)
+    }
   })
 
   test('defensive: non-array entries data → renders nothing (never throws)', () => {

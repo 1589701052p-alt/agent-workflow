@@ -32,15 +32,15 @@ function groupBoardEntries(entries: TaskQuestionEntry[]): BoardCard[]
 4. 组内 `handlers` 保序：提问节点条目（self/questioner）在前、designer 在后（稳定、可测）。
 5. 卡的 `phase` 见 §2。
 
-> **为何不会跨列分裂**（关键不变式）：一张未下发卡的 handlers **同为未下发**，且 stage 是**组级**
-> （§3）——整组要么全 `pending`、要么全 `staged`，恒在同一列。批量下发把整组一起下发。要让「一个
-> `(origin,question)` 不出现『部分下发、部分未下发』」成立，**必须**「改派增 designer 只在提问条目
-> 未下发时可行」——**这条守卫本 RFC 新加**（见 §3.5；Codex 设计门 P2 指出现状不保证）。
+> **为何不会跨列分裂**（分组域不变式）：分组**只作用于未下发条目**——一张未下发卡的 handlers
+> **同为未下发**，且 stage 是**组级**（§3），整组要么全 `pending`、要么全 `staged`，恒在同一列；
+> 批量下发把整组一起下发。
 >
-> **降级兜底**：即便守卫被绕过（历史遗留 / 直连 API）而出现「提问条目已下发 + designer 未下发」的
-> 混态，`groupBoardEntries`（§1 case 4）**也不崩**——已下发提问条目单独一卡、未下发 designer 单独
-> 一卡，各在各列、不跨列拼；后续 designer 经 board 单独下发、级联回提问节点（最终一致，只是多一次
-> 提问节点重跑）。即：守卫保证「常态干净」，grouping 保证「异常不炸」。§5 单测两者都锁。
+> **「已下发 asker + 未下发 designer」不是异常，而是修订流常态**（§3.5，Codex P2 实现期勘误）：
+> 答完/asker 已重跑后再改派（让上游修订）会得到这个形态——已下发 asker 单卡照旧留在处理中/待确认
+> 列，新 designer 行是**自己的待指派单卡**（case 4：分组域不含已下发条目，二者天然不同卡、不跨列
+> 拼），对它 stage/下发经级联再跑 asker（正常修订轮）。它是独立组 ⇒ 批量下发展开自然只含它自己、
+> 无部分批。§5 单测锁定 case-4 形态与修订流两端。
 
 ## 2. 卡所在列（`phase`）
 
@@ -66,23 +66,29 @@ function groupBoardEntries(entries: TaskQuestionEntry[]): BoardCard[]
 提问节点级联）。**杜绝**「只 stage 提问卡 → 下发 → 提问节点脱离上游先跑、乱序」的 board 路径隐患
 （RFC-162 Finding-2 只修了 quick 自动下发路径，board 手动路径靠本 RFC 的组级动作兜住）。
 
-## 3.5 后端守卫 + 前端门对齐（Codex 设计门 P2 —— 使 §1 不变式成立）
+## 3.5 「已下发 asker 改派」的正确划界（Codex 设计门 P2 —— 实现期勘误：降级不变式，不加守卫）
 
-**唯一的后端改动**（本 RFC 因此是「前端为主 + 一小块后端硬化」，非纯前端）：
+Codex P2 指出「改派仅下发前」并非现状硬不变式（对已下发 asker 直调 API 仍能增派 designer），给了
+两个可接受解法：加 `dispatched_at IS NULL` 守卫，**或**停止把它当硬不变式。**初版选了加守卫——
+实现期证明是错的**：它打红 **19 个存量 cross-designer 场景测试**，因为「答完/asker 已重跑后让上游
+修订」是 RFC-162 的**一等流程**（quick 通道答完即自动下发 asker，用户决定要上游修订时 asker 几乎
+总是已下发；此时改派 ADD 一条未下发 designer、后续下发经级联再跑 asker = 正常修订轮，不是乱序）。
 
-- `reassignTaskQuestion` 的 **add-designer 分支**加守卫：当**提问条目**（self/questioner，即被改派的
-  `entry`）`dispatched_at IS NOT NULL` 时，**拒绝**增派 designer（`ConflictError
-  'task-question-asker-dispatched'`，提示「提问节点已下发，改派前请 reopen」）。这与既有「已下发
-  designer 行改派被拒」对偶——补齐提问条目侧的对称守卫，杜绝「已下发提问 + 新未下发 designer」混态。
-  - 只拦「target ≠ 提问节点」的增派；`target === 提问节点`（移除 designer 回单卡）与 manual move 不受
-    影响（它们不制造混态）。
-- 前端门对齐：`ClarifyQuestionHandler`（`/clarify` 详情页 picker）的 `editable = asker.phase !==
-  'done'` 收紧为 **`asker.phase === 'pending' || 'staged'`**——与看板 `reassignable` 一致，不再让
-  processing/awaiting_confirm 态发起改派（此前是 board 与详情页门不一致的小裂缝）。
+**终解 = 降级不变式（Codex 给的第二解法）**：
 
-测试：后端加「对已下发提问条目增派 designer → 409 `task-question-asker-dispatched`」用例
-（`rfc120-task-questions-service` 或 reassign 套件）；前端加「processing 态 ClarifyQuestionHandler
-不可改派」断言。
+- **service 层不加守卫**：对已下发 asker 的改派照常 `added-designer`（新行 `dispatched_at NULL`）。
+- **分组域只含未下发条目**：`groupBoardEntries` 只合并未下发兄弟——「已下发 asker + 未下发
+  designer」不是异常混态，而是**修订流的常态**：已下发 asker 在处理中/待确认列单卡照旧，新 designer
+  行成为**自己的待指派单卡**（case-4），用户对它 stage/下发，级联重跑 asker。不跨列拼、无部分批
+  （它是独立组，批量下发自然整组=它自己）。
+- **前端门**：看板已下发卡保持只读（RFC-162 主线如此，改派入口在待指派/待下发卡 + `/clarify` 详情
+  页）；`ClarifyQuestionHandler` 保持 `phase !== 'done'`（processing/awaiting_confirm 可发起修订
+  改派——这正是「答后修订」的详情页入口，不收紧）。
+
+测试：后端锁「dispatched asker 改派 → `added-designer`、新 designer 未下发、asker 条目不动」+
+「dispatched asker 改派回提问节点 → 仍可移除 designer（撤回修订）」；前端锁
+「processing/awaiting_confirm 的 ClarifyQuestionHandler picker 仍可改派」。三者都注明「初版守卫
+禁掉一等流程打红 19 测」的回退防护意图。
 
 ## 4. 节点 filter / 计数 / badge
 

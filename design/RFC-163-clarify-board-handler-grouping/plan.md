@@ -16,10 +16,13 @@
 - **RFC-163-T4（filter/计数对齐）**：**先分组后按组过滤**（filter 命中任一 handler ⇒ 整组保留 +
   下发全套；**不**先滤条目——否则批量下发只发命中 id、部分下发，Codex 设计门 P1）；chip 计数不变
   （per-handler）；dispatch `entryIds` 来自未裁剪的整组。
-- **RFC-163-T4b（后端守卫 + 前端门对齐 · Codex 设计门 P2）**：`reassignTaskQuestion` add-designer
-  分支加「提问条目 `dispatched_at IS NOT NULL` ⇒ 拒（`task-question-asker-dispatched`）」；
-  `ClarifyQuestionHandler.editable` 收紧为 `phase ∈ {pending,staged}`。后端 409 用例 + 前端不可改派
-  断言。使 §1「改派仅下发前」不变式成立。
+- **RFC-163-T4b（Codex 设计门 P2 · 实现期勘误——降级不变式，不加守卫）**：初版「service 加
+  asker-dispatched 409 守卫 + 详情页门收紧」打红 **19 个存量 cross-designer 场景测试**——「答完/
+  asker 已下发后让上游修订」是 RFC-162 一等流程（quick 通道答完即自动下发）。终解＝Codex 第二解法：
+  **不加守卫**、`ClarifyQuestionHandler` 保持 `phase !== 'done'`；「已下发 asker + 未下发 designer」
+  ＝修订流常态（分组域只含未下发条目 ⇒ 新 designer 自成待指派单卡，case-4，下发经级联再跑 asker）。
+  锁：dispatched asker 改派 → added-designer/未下发/asker 不动 + 撤回修订可删 designer + 详情页
+  processing/awaiting_confirm 仍可改派（三者注明防回退意图）。
 - **RFC-163-T5（i18n + CSS）**：handler 行标签（提问节点/上游/下游/手动）双语 key；分组卡 `.task-
   questions__card-handlers` 之类命名空间样式（最小、贴既有）。
 - **RFC-163-T6（组件测试 + 源码锁）**：改派不新增卡（同卡 +1 行）/ 组级 stage 调用次数 / 批量下发

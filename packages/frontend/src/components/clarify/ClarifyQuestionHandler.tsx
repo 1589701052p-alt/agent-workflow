@@ -79,6 +79,10 @@ export function ClarifyQuestionHandler({
   const agentNodes = nodes
     .filter((n) => n.kind.startsWith('agent'))
     .map((n) => ({ value: n.id, label: resolveNodeNameFromSnapshot(snapshot, n.id) ?? n.id }))
+  // RFC-163: post-dispatch reassign stays open (phase !== 'done') —「答完/重跑后让上游修订」
+  // is a first-class flow: it ADDS an undispatched designer row that becomes its own 待指派
+  // card on the board (dispatching it reruns the asker via the normal cascade). Only a
+  // confirmed-done question is closed to edits.
   const editable = asker.phase !== 'done' && agentNodes.length > 0
 
   return (

@@ -402,6 +402,51 @@ describe('RFC-120 PR-B writes (confirm / reassign / stage)', () => {
     expect(designer.sealedAt).toBe(sealTs)
   })
 
+  // RFC-163 —「答完/asker 已下发后让上游修订」是一等流程（quick 通道答完即自动下发 asker，
+  // 用户决定要上游修订时 asker 几乎总是已下发）：改派仍 ADD 一条**未下发** designer 行（它在
+  // 看板成为自己的待指派单卡——groupBoardEntries case-4，分组只合并未下发兄弟），asker 条目
+  // 原样不动。初版曾加 409 守卫禁掉此流、打红 19 个存量 cross-designer 场景——此测锁定不再回退。
+  test('RFC-163: reassign on a DISPATCHED asker still ADDS an undispatched designer (revision flow)', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    const dispatchedAt = Date.now()
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt, dispatchedBy: 'u1' })
+      .where(eq(taskQuestions.id, questioner!.id))
+
+    const action = await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    expect(action).toBe('added-designer')
+    const rows = await db.select().from(taskQuestions)
+    const designer = rows.find((r) => r.roleKind === 'designer')
+    // The designer materializes UNDISPATCHED (its own 待指派 card; a later dispatch reruns the
+    // asker via the normal cascade). The dispatched asker row is untouched.
+    expect(designer).toBeDefined()
+    expect(designer!.dispatchedAt).toBeNull()
+    const asker = rows.find((r) => r.id === questioner!.id)!
+    expect(asker.dispatchedAt).toBe(dispatchedAt)
+  })
+
+  // RFC-163 — the REMOVE direction likewise works on a dispatched asker: reassigning back to
+  // the asking node withdraws the pending revision (deletes the undispatched designer row).
+  test('RFC-163: dispatched asker + undispatched designer → reassign back to asker still removes the designer', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    const taskId = await seedAnsweredCross(db)
+    const [questioner] = await listTaskQuestions(db, taskId)
+    // Add the designer first (asker still undispatched), then dispatch the asker.
+    await reassignTaskQuestion(db, questioner!.id, 'coder', ACTOR)
+    await db
+      .update(taskQuestions)
+      .set({ dispatchedAt: Date.now(), dispatchedBy: 'u1' })
+      .where(eq(taskQuestions.id, questioner!.id))
+
+    const action = await reassignTaskQuestion(db, questioner!.id, 'auditor', ACTOR)
+    expect(action).toBe('removed-designer')
+    const rows = await db.select().from(taskQuestions)
+    expect(rows.some((r) => r.roleKind === 'designer')).toBe(false)
+  })
+
   // RFC-162 — reassign creates NO echo row (echo deleted; the asker keeps its own entry).
   test('RFC-162: reassign never materializes an echo row', async () => {
     const db = createInMemoryDb(MIGRATIONS)

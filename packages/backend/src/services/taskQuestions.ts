@@ -978,6 +978,12 @@ export async function reassignTaskQuestion(
 
   // Target ≠ asking node → ENSURE a designer handler row targeting it (add, or re-target an
   // existing UNDISPATCHED one). The asker's self/questioner entry is never touched.
+  // RFC-163 note — this is deliberately allowed on a DISPATCHED asker too:「答完/重跑后让上游
+  // 修订」is a first-class flow (the quick channel auto-dispatches the asker on answer, so by
+  // the time a user decides an upstream revision is needed the asker is usually dispatched).
+  // The new undispatched designer row simply becomes its own 待指派 single card (the board's
+  // grouping only merges UNDISPATCHED siblings — groupBoardEntries case-4), and dispatching it
+  // later reruns the asker via the normal cascade (a revision pass, not an out-of-order bug).
   let dispatched = false
   const now = Date.now()
   dbTxSync(db, (tx) => {
