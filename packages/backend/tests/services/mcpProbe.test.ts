@@ -108,6 +108,31 @@ function fakeOpener(client: ProbedMcpClient, handshakeMs = 50): OpenClientFn {
   return async () => ({ client, handshakeMs })
 }
 
+/**
+ * A list call that hangs forever on its own and settles ONLY when the probe's
+ * AbortSignal fires (the hard-total-timeout path).
+ *
+ * Why the ref'd keepAlive timer: the probe's hard-total-timeout timer in
+ * mcpProbe.ts is `.unref()`'d (so it never keeps the daemon alive in prod).
+ * In a test, the hanging list Promises carry no I/O, so with only an unref'd
+ * timer pending the bun event loop goes idle BEFORE the 10ms abort fires -
+ * the abort never happens and the probe hangs forever (this hung the entire
+ * check-windows gate; it is timing-flaky so a first run could pass and later
+ * runs hang). The ref'd keepAlive keeps the loop alive until abort clears it,
+ * so the unref'd abort timer reliably fires on every platform. See RFC-W001.
+ */
+function hangUntilAbort(sig: AbortSignal): Promise<never> {
+  const keepAlive = setTimeout(() => {}, 5000)
+  return new Promise((_resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(keepAlive)
+      reject(new Error('aborted'))
+    }
+    if (sig.aborted) onAbort()
+    else sig.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 afterEach(() => {
   // Inflight map should empty after every test (probe Promise finally drops it).
   expect(__inflightSize()).toBe(0)
@@ -233,16 +258,19 @@ describe('probeMcp — error mapping', () => {
       serverInfo: null,
       protocolVersion: null,
       capabilities: null,
-      listTools: (sig) =>
-        new Promise((_resolve, reject) => {
+      listTools: (sig) => {
+        const keepAlive = setTimeout(() => {}, 5000)
+        return new Promise((_resolve, reject) => {
           sig.addEventListener('abort', () => {
+            clearTimeout(keepAlive)
             aborted = true
             reject(new Error('aborted'))
           })
-        }),
-      listResources: () => new Promise(() => {}),
-      listResourceTemplates: () => new Promise(() => {}),
-      listPrompts: () => new Promise(() => {}),
+        })
+      },
+      listResources: (sig) => hangUntilAbort(sig),
+      listResourceTemplates: (sig) => hangUntilAbort(sig),
+      listPrompts: (sig) => hangUntilAbort(sig),
       capturedStderr: () => '',
       close: async () => {},
     }
@@ -308,10 +336,10 @@ describe('probeMcp — error mapping', () => {
       serverInfo: null,
       protocolVersion: null,
       capabilities: null,
-      listTools: () => new Promise(() => {}),
-      listResources: () => new Promise(() => {}),
-      listResourceTemplates: () => new Promise(() => {}),
-      listPrompts: () => new Promise(() => {}),
+      listTools: (sig) => hangUntilAbort(sig),
+      listResources: (sig) => hangUntilAbort(sig),
+      listResourceTemplates: (sig) => hangUntilAbort(sig),
+      listPrompts: (sig) => hangUntilAbort(sig),
       capturedStderr: () => 'log line\nAuthorization: Bearer eyJ.abc\nmore log\n',
       close: async () => {},
     }
