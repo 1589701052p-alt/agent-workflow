@@ -24,6 +24,10 @@ export const agents = sqliteTable('agents', {
   name: text('name').notNull().unique(), // URL identifier (/agents/{name})
   description: text('description').notNull().default(''),
   outputs: text('outputs').notNull().default('[]'), // JSON string[] of port names
+  // RFC-166: declarative input ports (JSON AgentInputPort[]; default []).
+  // Optional/additive — existing agents keep implicit {{token}} input binding;
+  // consumed only by the capability card, not the spawn path.
+  inputs: text('inputs').notNull().default('[]'),
   // RFC-014: agent-level switch. When true (default), an iterate review decision
   // on a node whose upstream agent declares ≥ 2 markdown[_file] outputs will
   // re-generate every markdown[_file] sibling port and cascade their sibling

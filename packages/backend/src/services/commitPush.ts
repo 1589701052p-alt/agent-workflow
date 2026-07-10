@@ -36,6 +36,7 @@ export function buildCommitAgent(): Agent {
     name: COMMIT_AGENT_NAME,
     description: 'Framework built-in: write commit messages and repair rejected pushes (RFC-075).',
     outputs: [COMMIT_MESSAGE_PORT],
+    inputs: [], // RFC-166
     syncOutputsOnIterate: true,
     permission: {},
     skills: [],

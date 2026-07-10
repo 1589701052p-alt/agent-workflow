@@ -205,6 +205,7 @@ export async function seedFusionResources(db: DbClient): Promise<void> {
         description:
           'Built-in skill-fusion worker: merges approved memories into a managed skill (RFC-101).',
         outputs: ['summary'],
+        inputs: [], // RFC-166
         syncOutputsOnIterate: true,
         permission: {},
         skills: [],

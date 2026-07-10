@@ -255,6 +255,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
           name: parsed.data.name,
           description: '',
           outputs: [],
+          inputs: [], // RFC-166
           syncOutputsOnIterate: true,
           permission: {},
           skills: [],

@@ -24,6 +24,25 @@ export const AgentOutputKindsMapSchema = z.record(z.string(), AgentOutputKindSch
 export type AgentOutputKindsMap = z.infer<typeof AgentOutputKindsMapSchema>
 
 /**
+ * RFC-166 — declarative INPUT ports (symmetrical to `outputs`, but kind is
+ * inlined here rather than via a sidecar map — inputs is a new field with no
+ * legacy `string[]` shape to preserve). OPTIONAL / additive: an agent that
+ * declares no inputs (the default `[]`) behaves byte-for-byte as before — the
+ * runner still binds inputs implicitly via `promptTemplate`'s `{{token}}`
+ * (validator prompt-template rule unchanged). Declared inputs are consumed
+ * ONLY by the capability card (leader roster / RFC-167 orchestrator) — they
+ * do NOT enter the spawn path. `kind` reuses the registered-kind grammar
+ * (string | markdown | signal | path<ext> | list<T>).
+ */
+export const AgentInputPortSchema = z.object({
+  name: z.string().min(1, 'input port name is required').max(128, 'input port name too long'),
+  kind: AgentOutputKindSchema.default('string'),
+  required: z.boolean().optional(),
+  description: z.string().max(2048).optional(),
+})
+export type AgentInputPort = z.infer<typeof AgentInputPortSchema>
+
+/**
  * RFC-060 PR-B — agent role flag. Default `'normal'` for all agents that
  * existed before RFC-060; `'aggregator'` marks an agent designed to sit at
  * the convergence point of a wrapper-fanout (runs once per wrapper, sees
@@ -80,6 +99,11 @@ export const AgentSchema = z.object({
   builtin: z.boolean().optional(),
   outputs: z.array(z.string()),
   outputKinds: AgentOutputKindsMapSchema.optional(),
+  /** RFC-166 — declarative input ports. OPTIONAL on the DTO (same as
+   *  outputKinds/role, RFC-060 precedent): existing fixtures/built-in agents
+   *  need not spell it. rowToAgent always populates `[]` so real responses
+   *  carry a value; consumers read `agent.inputs ?? []`. */
+  inputs: z.array(AgentInputPortSchema).optional(),
   /**
    * RFC-060 PR-B — wrapper-fanout output rename sidecar. Only meaningful
    * when `role === 'aggregator'`; absent otherwise.
@@ -157,6 +181,10 @@ export const CreateAgentSchema = z.object({
   description: z.string().default(''),
   outputs: z.array(z.string()).default([]),
   outputKinds: AgentOutputKindsMapSchema.optional(),
+  /** RFC-166 — declarative input ports; OPTIONAL on create bodies (server
+   *  fills []). The DTO (AgentSchema) keeps it default-[] so responses are
+   *  symmetrical with outputs; existing callers/fixtures need not spell it. */
+  inputs: z.array(AgentInputPortSchema).optional(),
   /** RFC-060 PR-B — wrapper-fanout output rename sidecar (aggregator only). */
   outputWrapperPortNames: AgentOutputWrapperPortNamesSchema.optional(),
   /** RFC-060 PR-B — agent role flag; optional, treat absent as 'normal'. */

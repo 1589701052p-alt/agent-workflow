@@ -3,7 +3,14 @@
 // strings in the DB and (un)marshaled at this boundary. Routes upstream see
 // pure JS objects.
 
-import type { Agent, CreateAgent, RenameAgent, UpdateAgent } from '@agent-workflow/shared'
+import type {
+  Agent,
+  AgentInputPort,
+  CreateAgent,
+  RenameAgent,
+  UpdateAgent,
+} from '@agent-workflow/shared'
+import { AgentInputPortSchema } from '@agent-workflow/shared'
 import { eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
@@ -79,6 +86,11 @@ export async function createAgent(
     name: input.name,
     description: input.description,
     outputs: JSON.stringify(input.outputs),
+    // RFC-166: declarative input ports (own column, symmetrical to outputs).
+    // Normalize through the schema on write so the column is canonical (kind
+    // default applied, unknown keys stripped) even if a service-layer caller
+    // bypassed CreateAgentSchema's zod parse.
+    inputs: serializeInputs(input.inputs),
     syncOutputsOnIterate: input.syncOutputsOnIterate,
     runtime: input.runtime ?? null, // RFC-111
     permission: JSON.stringify(input.permission),
@@ -138,6 +150,7 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   const set: Partial<typeof agents.$inferInsert> = { updatedAt: Date.now() }
   if (patch.description !== undefined) set.description = patch.description
   if (patch.outputs !== undefined) set.outputs = JSON.stringify(patch.outputs)
+  if (patch.inputs !== undefined) set.inputs = serializeInputs(patch.inputs) // RFC-166
   if (patch.syncOutputsOnIterate !== undefined)
     set.syncOutputsOnIterate = patch.syncOutputsOnIterate
   if (patch.permission !== undefined) set.permission = JSON.stringify(patch.permission)
@@ -448,6 +461,24 @@ function parseStringArrayColumn(value: string | null | undefined): string[] {
   }
 }
 
+/** RFC-166 — parse the agents.inputs JSON column, dropping malformed rows. */
+function parseInputsColumn(value: string | null | undefined): AgentInputPort[] {
+  if (value === null || value === undefined || value === '') return []
+  try {
+    const parsed = AgentInputPortSchema.array().safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : []
+  } catch {
+    return []
+  }
+}
+
+/** RFC-166 — canonicalize declared input ports for the agents.inputs column:
+ *  apply the `kind` default and strip unknown keys, so the stored JSON is
+ *  identical whether or not the caller pre-parsed through CreateAgentSchema. */
+function serializeInputs(inputs: AgentInputPort[] | undefined): string {
+  return JSON.stringify(AgentInputPortSchema.array().parse(inputs ?? []))
+}
+
 function rowToAgent(row: AgentRow): Agent {
   const fmExtra = JSON.parse(row.frontmatterExtra) as Record<string, unknown>
   // RFC-005: lift outputKinds back out of frontmatter_extra into a top-level
@@ -510,6 +541,7 @@ function rowToAgent(row: AgentRow): Agent {
     name: row.name,
     description: row.description,
     outputs: JSON.parse(row.outputs) as string[],
+    inputs: parseInputsColumn(row.inputs), // RFC-166
     syncOutputsOnIterate: row.syncOutputsOnIterate,
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],

@@ -596,6 +596,13 @@
       "when": 1785510000004,
       "tag": "0085_rfc165_task_space",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "6",
+      "when": 1785510000005,
+      "tag": "0086_rfc166_agent_inputs",
+      "breakpoints": true
     }
   ]
 }

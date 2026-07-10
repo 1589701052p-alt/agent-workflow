@@ -153,6 +153,7 @@ export async function validateDependsOn(
         name: selfName,
         description: '',
         outputs: [],
+        inputs: [], // RFC-166
         syncOutputsOnIterate: true,
         permission: {},
         skills: [],
