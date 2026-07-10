@@ -454,11 +454,15 @@ describe('/workflows/new removal wiring', () => {
     expect(ob).toContain('to="/workflows"')
   })
 
-  test('the list page composes the shared Dialog + the pure builder + the redirect', () => {
+  test('BOTH list pages compose the shared QuickCreateDialog (用户 2026-07-10 拍板抽公共组件)', () => {
     const list = readSrc('routes/workflows.tsx')
-    expect(list).toContain("import { Dialog } from '@/components/Dialog'")
+    expect(list).toContain("import { QuickCreateDialog } from '@/components/QuickCreateDialog'")
     expect(list).toContain('buildQuickCreateWorkflowPayload')
     expect(list).toContain('NewRedirectRoute')
+    const wg = readSrc('routes/workgroups.tsx')
+    expect(wg).toContain("import { QuickCreateDialog } from '@/components/QuickCreateDialog'")
+    // The dismissal-suppress guard is wired on the workgroup side too.
+    expect(wg).toContain('createOpenRef')
   })
 
   test('dialog copy matches the workgroup pattern in BOTH bundles; retired editor keys are gone', () => {
@@ -481,6 +485,11 @@ describe('/workflows/new removal wiring', () => {
     expect(zhCN.workflows.errors.nameInvalid.length).toBeGreaterThan(0)
     expect(enUS.workflows.errors.nameRequired.length).toBeGreaterThan(0)
     expect(enUS.workflows.errors.nameInvalid.length).toBeGreaterThan(0)
+    // 用户 2026-07-10：hint 文案两资源逐字一致，且不再提「用于 URL」。
+    expect(zhCN.workgroups.fieldNameHint).toBe(zhCN.workflows.fieldNameHint)
+    expect(enUS.workgroups.fieldNameHint).toBe(enUS.workflows.fieldNameHint)
+    expect(zhCN.workgroups.fieldNameHint).not.toContain('URL')
+    expect(enUS.workgroups.fieldNameHint).not.toMatch(/URL/i)
     expect(zhCN.errors['workflow-name-invalid']?.length ?? 0).toBeGreaterThan(0)
     expect(enUS.errors['workflow-name-invalid']?.length ?? 0).toBeGreaterThan(0)
     // Editor: rename gate wired into BOTH the field error and the auto-save

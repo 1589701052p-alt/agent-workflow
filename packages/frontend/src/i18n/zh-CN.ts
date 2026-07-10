@@ -3763,7 +3763,7 @@ export const zhCN: Resources = {
     sectionMembers: '成员',
     sectionSwitches: '协作开关',
     fieldName: '名称',
-    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]；用于 URL 与 API 路径。',
+    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]，至多 128 字。',
     fieldDescription: '描述',
     fieldInstructions: '工作组章程',
     fieldInstructionsHint: '可选。每一轮都会注入给每个成员的公共指令。',

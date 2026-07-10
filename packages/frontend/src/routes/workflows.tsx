@@ -13,11 +13,10 @@ import { useResourceList } from '@/hooks/useResourceList'
 import { describeApiError } from '@/i18n'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
-import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { Field, TextInput } from '@/components/Form'
 import { LoadingState } from '@/components/LoadingState'
+import { QuickCreateDialog } from '@/components/QuickCreateDialog'
 import { ResourceNameCell } from '@/components/ResourceNameCell'
 import { buildQuickCreateWorkflowPayload } from '@/lib/workflow-form'
 import { Route as RootRoute } from './__root'
@@ -207,63 +206,36 @@ function WorkflowsPage() {
         </table>
       )}
 
-      <Dialog
+      <QuickCreateDialog
         open={createOpen}
         onClose={() => setCreateOpenTracked(false)}
         title={t('editor.newTitle')}
-        size="sm"
-        triggerRef={createTriggerRef}
-        data-testid="workflow-create-dialog"
-        footer={
-          <>
-            {create.error !== null && create.error !== undefined && (
-              <span className="form-actions__error">{describeApiError(create.error)}</span>
-            )}
-            <button type="button" className="btn" onClick={() => setCreateOpenTracked(false)}>
-              {t('common.cancel')}
-            </button>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={create.isPending || !builtCreate.ok}
-              onClick={() => {
-                if (builtCreate.ok) create.mutate(builtCreate.payload)
-              }}
-              data-testid="workflow-create-confirm"
-            >
-              {create.isPending ? t('common.creating') : t('workflows.createButton')}
-            </button>
-          </>
+        createLabel={t('workflows.createButton')}
+        nameLabel={t('editor.fieldName')}
+        nameHint={t('workflows.fieldNameHint')}
+        descriptionLabel={t('editor.fieldDescription')}
+        name={createName}
+        onNameChange={setCreateName}
+        description={createDescription}
+        onDescriptionChange={setCreateDescription}
+        nameError={
+          createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
+            ? t(builtCreate.errors.name)
+            : undefined
         }
-      >
-        <Field
-          label={t('editor.fieldName')}
-          required
-          hint={t('workflows.fieldNameHint')}
-          // Required-ness is conveyed by the disabled Create button; only a
-          // malformed (non-empty) name earns an inline error (workgroup 同款).
-          error={
-            createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
-              ? t(builtCreate.errors.name)
-              : undefined
-          }
-        >
-          <TextInput
-            value={createName}
-            onChange={setCreateName}
-            maxLength={128}
-            required
-            data-testid="workflow-create-name"
-          />
-        </Field>
-        <Field label={t('editor.fieldDescription')}>
-          <TextInput
-            value={createDescription}
-            onChange={setCreateDescription}
-            data-testid="workflow-create-description"
-          />
-        </Field>
-      </Dialog>
+        canCreate={builtCreate.ok}
+        pending={create.isPending}
+        submitError={
+          create.error !== null && create.error !== undefined
+            ? describeApiError(create.error)
+            : undefined
+        }
+        onCreate={() => {
+          if (builtCreate.ok) create.mutate(builtCreate.payload)
+        }}
+        triggerRef={createTriggerRef}
+        testidPrefix="workflow"
+      />
     </div>
   )
 }

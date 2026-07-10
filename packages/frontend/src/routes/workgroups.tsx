@@ -16,8 +16,8 @@ import { describeApiError } from '@/i18n'
 import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { Field, TextInput } from '@/components/Form'
 import { LoadingState } from '@/components/LoadingState'
+import { QuickCreateDialog } from '@/components/QuickCreateDialog'
 import { ResourceNameCell } from '@/components/ResourceNameCell'
 import {
   buildQuickCreatePayload,
@@ -62,13 +62,22 @@ function WorkgroupsPage() {
   const [createName, setCreateName] = useState('')
   const [createDescription, setCreateDescription] = useState('')
   const createTriggerRef = useRef<HTMLButtonElement | null>(null)
+  // Mirrors createOpen for the mutation callback: dismissing the dialog while
+  // a slow POST is in flight must NOT yank the user to the detail page when
+  // the response lands later (same guard as the workflows list page).
+  const createOpenRef = useRef(false)
+  function setCreateOpenTracked(open: boolean): void {
+    createOpenRef.current = open
+    setCreateOpen(open)
+  }
   const create = useMutation({
     mutationFn: (body: QuickCreateWorkgroupBody): Promise<Workgroup> =>
       api.post<Workgroup>('/api/workgroups', body),
     onSuccess: (w) => {
       void qc.invalidateQueries({ queryKey: ['workgroups'] })
       qc.setQueryData(['workgroups', w.name], w)
-      setCreateOpen(false)
+      if (!createOpenRef.current) return
+      setCreateOpenTracked(false)
       navigate({ to: '/workgroups/$name', params: { name: w.name } })
     },
   })
@@ -81,7 +90,7 @@ function WorkgroupsPage() {
     setCreateName('')
     setCreateDescription('')
     create.reset()
-    setCreateOpen(true)
+    setCreateOpenTracked(true)
   }
 
   return (
@@ -199,63 +208,37 @@ function WorkgroupsPage() {
         <p>{t('workgroups.deleteBody', { name: pendingDelete?.name ?? '' })}</p>
       </Dialog>
 
-      <Dialog
+      <QuickCreateDialog
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => setCreateOpenTracked(false)}
         title={t('workgroups.newTitle')}
-        size="sm"
-        triggerRef={createTriggerRef}
-        data-testid="workgroup-create-dialog"
-        footer={
-          <>
-            {create.error !== null && create.error !== undefined && (
-              <span className="form-actions__error">{describeApiError(create.error)}</span>
-            )}
-            <button type="button" className="btn" onClick={() => setCreateOpen(false)}>
-              {t('common.cancel')}
-            </button>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={create.isPending || !builtCreate.ok}
-              onClick={() => {
-                if (builtCreate.ok) create.mutate(builtCreate.payload)
-              }}
-              data-testid="workgroup-create-confirm"
-            >
-              {create.isPending ? t('common.creating') : t('workgroups.createButton')}
-            </button>
-          </>
+        createLabel={t('workgroups.createButton')}
+        nameLabel={t('workgroups.fieldName')}
+        nameHint={t('workgroups.fieldNameHint')}
+        descriptionLabel={t('workgroups.fieldDescription')}
+        name={createName}
+        onNameChange={setCreateName}
+        description={createDescription}
+        onDescriptionChange={setCreateDescription}
+        nameError={
+          createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
+            ? t(builtCreate.errors.name)
+            : undefined
         }
-      >
-        <Field
-          label={t('workgroups.fieldName')}
-          required
-          hint={t('workgroups.fieldNameHint')}
-          // Required-ness is conveyed by the disabled Create button; only a
-          // malformed (non-empty) name earns an inline error.
-          error={
-            createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
-              ? t(builtCreate.errors.name)
-              : undefined
-          }
-        >
-          <TextInput
-            value={createName}
-            onChange={setCreateName}
-            maxLength={128}
-            data-testid="workgroup-create-name"
-          />
-        </Field>
-        <Field label={t('workgroups.fieldDescription')}>
-          <TextInput
-            value={createDescription}
-            onChange={setCreateDescription}
-            maxLength={4096}
-            data-testid="workgroup-create-description"
-          />
-        </Field>
-      </Dialog>
+        canCreate={builtCreate.ok}
+        pending={create.isPending}
+        submitError={
+          create.error !== null && create.error !== undefined
+            ? describeApiError(create.error)
+            : undefined
+        }
+        onCreate={() => {
+          if (builtCreate.ok) create.mutate(builtCreate.payload)
+        }}
+        triggerRef={createTriggerRef}
+        testidPrefix="workgroup"
+        descriptionMaxLength={4096}
+      />
     </div>
   )
 }

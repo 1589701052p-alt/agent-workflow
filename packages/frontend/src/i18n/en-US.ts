@@ -1075,8 +1075,7 @@ export const enUS: Resources = {
     sectionMembers: 'Members',
     sectionSwitches: 'Collaboration switches',
     fieldName: 'Name',
-    fieldNameHint:
-      'Starts with a lowercase letter / digit; only [a-z0-9_-]. Used in URLs and API paths.',
+    fieldNameHint: 'Starts with a lowercase letter / digit; only [a-z0-9_-], at most 128 chars.',
     fieldDescription: 'Description',
     fieldInstructions: 'Group charter',
     fieldInstructionsHint: 'Optional. Injected for every member on every turn.',
