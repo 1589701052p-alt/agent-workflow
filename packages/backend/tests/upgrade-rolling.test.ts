@@ -281,7 +281,8 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     // RFC-154 T1 bumped to 79 with 0079_rfc154_runtime_config_dir.
     // RFC-159 T3 bumped to 80 with 0080_rfc159_scheduled_tasks.
     // RFC-162 bumped to 81 with 0081_rfc162_clarify_unify.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(81)
+    // RFC-164 T2 bumped to 82 with 0082_rfc164_workgroups.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(82)
   })
 
   for (const target of FREEZE_TARGETS) {

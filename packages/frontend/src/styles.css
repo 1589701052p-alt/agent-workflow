@@ -11693,3 +11693,86 @@ mark.comment-anchor[data-active='true'] {
   margin: 0;
   padding-left: 1.2rem;
 }
+
+/* ============================================================
+   RFC-164 — workgroup member editor (.workgroup- namespace).
+   Everything else on the /workgroups pages reuses the shared
+   page / data-table / form-section / form-field primitives.
+   ============================================================ */
+
+.workgroup-members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-members__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Head labels + rows share one grid template so the columns line up:
+   type | reference | display name | role | leader | remove. */
+.workgroup-members__head,
+.workgroup-member__row {
+  display: grid;
+  grid-template-columns: minmax(96px, 130px) minmax(140px, 1fr) minmax(130px, 1fr) minmax(140px, 1.3fr) auto 24px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.workgroup-members__head {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Override .form-input { width: 100% } interplay inside the grid cell —
+   min-width:0 lets the inputs shrink instead of blowing the row out. */
+.workgroup-member__row > * {
+  min-width: 0;
+}
+
+.workgroup-member__leader {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.workgroup-member__leader--none {
+  cursor: default;
+}
+
+.workgroup-member__leader input[type='radio'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.workgroup-member__remove {
+  justify-self: end;
+}
+
+.workgroup-member__errors {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.workgroup-members__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}

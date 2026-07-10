@@ -27,6 +27,8 @@ export * from './schemas/taskCollab'
 export * from './schemas/taskFeedback'
 export * from './schemas/user'
 export * from './schemas/workflow'
+export * from './schemas/workgroup' // RFC-164
+export * from './schemas/workgroupRuntime' // RFC-164 PR-2
 export * from './schemas/sessionView'
 export * from './schemas/structuralDiff'
 export * from './schemas/ws'

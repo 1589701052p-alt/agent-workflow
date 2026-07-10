@@ -12,6 +12,7 @@ export interface Resources {
     mcps: string
     plugins: string
     workflows: string
+    workgroups: string
     tasks: string
     scheduled: string
     reviews: string
@@ -967,6 +968,81 @@ export interface Resources {
     colName: string
     colVersion: string
     colId: string
+  }
+  // RFC-164 — workgroup resource pages (list / new / detail).
+  workgroups: {
+    title: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colMode: string
+    colMembers: string
+    colLeader: string
+    colDescription: string
+    colUpdated: string
+    modeLeaderWorker: string
+    modeFreeCollab: string
+    deleteTitle: string
+    deleteBody: string
+    newTitle: string
+    createButton: string
+    renameButton: string
+    renameTitle: string
+    renameField: string
+    sectionBasics: string
+    sectionMode: string
+    sectionMembers: string
+    sectionSwitches: string
+    fieldName: string
+    fieldNameHint: string
+    fieldDescription: string
+    fieldInstructions: string
+    fieldInstructionsHint: string
+    fieldMode: string
+    modeHintLeaderWorker: string
+    modeHintFreeCollab: string
+    memberColType: string
+    memberColRef: string
+    memberColDisplayName: string
+    memberColRole: string
+    memberColLeader: string
+    memberTypeAgent: string
+    memberTypeHuman: string
+    memberTypeAria: string
+    memberUserAria: string
+    memberAgentPlaceholder: string
+    memberUserPlaceholder: string
+    memberDisplayNamePlaceholder: string
+    memberRolePlaceholder: string
+    memberFallbackLabel: string
+    leaderRadioAria: string
+    addAgentMember: string
+    addHumanMember: string
+    fieldShareOutputs: string
+    fieldShareOutputsHint: string
+    fieldDirectMessages: string
+    fieldDirectMessagesHint: string
+    fieldBlackboard: string
+    fieldBlackboardHint: string
+    fcSwitchesNotice: string
+    fieldMaxRounds: string
+    fieldMaxRoundsHint: string
+    fieldCompletionGate: string
+    fieldCompletionGateHint: string
+    errors: {
+      nameRequired: string
+      nameInvalid: string
+      membersRequired: string
+      agentNameRequired: string
+      userRequired: string
+      displayNameRequired: string
+      displayNameInvalid: string
+      displayNameTooLong: string
+      displayNameDuplicate: string
+      leaderRequired: string
+      leaderMustBeAgent: string
+      maxRoundsInvalid: string
+    }
   }
   scheduled: {
     title: string
@@ -2561,6 +2637,7 @@ export const zhCN: Resources = {
     mcps: 'MCP',
     plugins: '插件',
     workflows: '工作流',
+    workgroups: '工作组',
     tasks: '任务',
     scheduled: '定时任务',
     reviews: '评审',
@@ -3540,6 +3617,81 @@ export const zhCN: Resources = {
     colName: '名称',
     colVersion: '版本',
     colId: 'ID',
+  },
+  // RFC-164 — 工作组资源页（列表 / 新建 / 详情）。
+  workgroups: {
+    title: '工作组',
+    newButton: '+ 新建工作组',
+    emptyList: '还没有工作组。',
+    colName: '名称',
+    colMode: '模式',
+    colMembers: '成员数',
+    colLeader: 'Leader',
+    colDescription: '描述',
+    colUpdated: '更新时间',
+    modeLeaderWorker: 'Leader-Worker',
+    modeFreeCollab: '自由协作',
+    deleteTitle: '删除工作组',
+    deleteBody: '确认删除工作组「{{name}}」？已启动的任务保留启动时的配置快照，不受影响。',
+    newTitle: '新建工作组',
+    createButton: '创建工作组',
+    renameButton: '重命名',
+    renameTitle: '重命名工作组',
+    renameField: '新名称',
+    sectionBasics: '基本信息',
+    sectionMode: '协作模式',
+    sectionMembers: '成员',
+    sectionSwitches: '协作开关',
+    fieldName: '名称',
+    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]；用于 URL 与 API 路径。',
+    fieldDescription: '描述',
+    fieldInstructions: '工作组章程',
+    fieldInstructionsHint: '可选。每一轮都会注入给每个成员的公共指令。',
+    fieldMode: '模式',
+    modeHintLeaderWorker: 'Leader 逐轮派活给 worker，需指定一名 agent 成员为 leader。',
+    modeHintFreeCollab: '无 leader 的自由协作，三个协作开关强制全开。',
+    memberColType: '类型',
+    memberColRef: '引用',
+    memberColDisplayName: '显示名',
+    memberColRole: '职责',
+    memberColLeader: 'Leader',
+    memberTypeAgent: '代理',
+    memberTypeHuman: '人类',
+    memberTypeAria: '成员 {{index}} 类型',
+    memberUserAria: '成员 {{index}} 平台用户',
+    memberAgentPlaceholder: '代理名（可填入尚不存在的名字）',
+    memberUserPlaceholder: '选择平台用户',
+    memberDisplayNamePlaceholder: '组内唯一，禁止 @、逗号、空白',
+    memberRolePlaceholder: '组内职责说明（选人依据）',
+    memberFallbackLabel: '成员 {{index}}',
+    leaderRadioAria: '设 {{name}} 为 leader',
+    addAgentMember: '+ 添加 agent 成员',
+    addHumanMember: '+ 添加人类成员',
+    fieldShareOutputs: '产出互见',
+    fieldShareOutputsHint: '把同伴已完成任务的结果摘要注入给每个成员。',
+    fieldDirectMessages: '定向消息',
+    fieldDirectMessagesHint: '成员可以互相 @；@ 会注入给对方并可唤醒对方。',
+    fieldBlackboard: '公共黑板',
+    fieldBlackboardHint: '把公共聊天流（按预算截尾）注入给每个成员。',
+    fcSwitchesNotice: '自由协作模式下三个协作开关强制视为全开；切回 Leader-Worker 后恢复原设置。',
+    fieldMaxRounds: '最大轮数',
+    fieldMaxRoundsHint: '1–500，默认 20。',
+    fieldCompletionGate: '完成门（人工确认）',
+    fieldCompletionGateHint: 'Leader 宣布完成后任务停在待人工确认，而不是直接结束。',
+    errors: {
+      nameRequired: '名称必填。',
+      nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
+      membersRequired: '至少需要一名成员。',
+      agentNameRequired: 'agent 成员必须填写代理名。',
+      userRequired: '人类成员必须选择平台用户。',
+      displayNameRequired: '显示名必填。',
+      displayNameInvalid: '显示名不能包含 @、逗号或空白字符。',
+      displayNameTooLong: '显示名最长 64 个字符。',
+      displayNameDuplicate: '显示名在组内必须唯一。',
+      leaderRequired: 'Leader-Worker 模式必须指定一名 agent 成员为 leader。',
+      leaderMustBeAgent: 'Leader 只能是 agent 成员。',
+      maxRoundsInvalid: '最大轮数须为 1–500 的整数。',
+    },
   },
   scheduled: {
     title: '定时任务',

@@ -399,7 +399,7 @@ export const resourceGrants = sqliteTable(
   'resource_grants',
   {
     resourceType: text('resource_type', {
-      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow'],
+      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow', 'workgroup'],
     }).notNull(),
     resourceId: text('resource_id').notNull(),
     userId: text('user_id')
@@ -411,6 +411,82 @@ export const resourceGrants = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.resourceType, t.resourceId, t.userId] }),
     userIdx: index('idx_resource_grants_user').on(t.userId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// workgroups — RFC-164. Sixth ACL resource: agents (and humans) grouped into a
+// runtime-collaborating team, launched as a task. `mode` picks the
+// orchestration form (leader dispatches / leaderless free collaboration);
+// the three switch columns control what each agent member gets injected per
+// turn (design §6.2) — free_collab reads them as all-on regardless of storage
+// (resolveWorkgroupSwitches). Launch snapshots the whole config onto the task
+// (tasks.workgroup_config_json, PR-3), so later edits here only affect NEW
+// tasks.
+// -----------------------------------------------------------------------------
+export const workgroups = sqliteTable('workgroups', {
+  id: text('id').primaryKey(), // ULID
+  name: text('name').notNull().unique(),
+  description: text('description').notNull().default(''),
+  /** Group charter — injected for EVERY member each turn (RFC-164 决策 #18). */
+  instructions: text('instructions').notNull().default(''),
+  mode: text('mode', { enum: ['leader_worker', 'free_collab'] })
+    .notNull()
+    .default('leader_worker'),
+  /** FK workgroup_members.id (soft — full-replace regenerates member rows).
+   *  Required (app-enforced) when mode='leader_worker'; must be an agent member. */
+  leaderMemberId: text('leader_member_id'),
+  shareOutputs: integer('share_outputs', { mode: 'boolean' }).notNull().default(true),
+  directMessages: integer('direct_messages', { mode: 'boolean' }).notNull().default(false),
+  blackboard: integer('blackboard', { mode: 'boolean' }).notNull().default(false),
+  /** Hard round cap (leader turns in lw / total member runs in fc, design §4.4). */
+  maxRounds: integer('max_rounds').notNull().default(20),
+  /** Completion gate: leader-done parks the task awaiting human confirmation. */
+  completionGate: integer('completion_gate', { mode: 'boolean' }).notNull().default(false),
+  // RFC-099 ACL (see agents table comment).
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
+  schemaVersion: integer('schema_version').notNull().default(1),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+})
+
+// -----------------------------------------------------------------------------
+// workgroup_members — RFC-164. Member roster of a workgroup. `display_name` is
+// the group-unique addressing token (roster / @-mention / dispatch); for human
+// members it is a REQUIRED alias so agent prompts never carry user ids
+// (RFC-099 prompt-isolation invariant, design §11). Same agent appears at most
+// once per group (multi-instance = multiple concurrent assignments, not rows).
+// -----------------------------------------------------------------------------
+export const workgroupMembers = sqliteTable(
+  'workgroup_members',
+  {
+    id: text('id').primaryKey(), // ULID
+    workgroupId: text('workgroup_id')
+      .notNull()
+      .references(() => workgroups.id, { onDelete: 'cascade' }),
+    memberType: text('member_type', { enum: ['agent', 'human'] }).notNull(),
+    /** memberType='agent': agents.name (soft reference, launch-validated). */
+    agentName: text('agent_name'),
+    /** memberType='human': users.id — audit/UI only, never injected into prompts. */
+    userId: text('user_id'),
+    displayName: text('display_name').notNull(),
+    /** Group-internal role description shown in the roster (选人依据). */
+    roleDesc: text('role_desc').notNull().default(''),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    displayNameUq: uniqueIndex('uq_workgroup_members_display').on(t.workgroupId, t.displayName),
+    groupIdx: index('idx_workgroup_members_group').on(t.workgroupId),
   }),
 )
 

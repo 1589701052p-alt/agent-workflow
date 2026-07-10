@@ -51,6 +51,10 @@ interface TextInputProps {
   required?: boolean
   pattern?: string
   maxLength?: number
+  /** id of a <datalist> owned by the caller — native suggestions layered on
+   *  the styled input (RFC-164: agent-name references allow dangling names,
+   *  so a closed <Select> cannot host them). */
+  list?: string
   'data-testid'?: string
 }
 
@@ -63,6 +67,7 @@ export function TextInput({
   required,
   pattern,
   maxLength,
+  list,
   'data-testid': testid,
 }: TextInputProps) {
   return (
@@ -76,6 +81,7 @@ export function TextInput({
       required={required}
       pattern={pattern}
       maxLength={maxLength}
+      list={list}
       data-testid={testid}
     />
   )
@@ -166,12 +172,20 @@ interface SwitchProps {
   onChange: (v: boolean) => void
   label: string
   hint?: string
+  /** RFC-164: workgroup free_collab mode renders its three collaboration
+   *  switches as forced-on read-only — first caller needing a disabled state. */
+  disabled?: boolean
 }
 
-export function Switch({ checked, onChange, label, hint }: SwitchProps) {
+export function Switch({ checked, onChange, label, hint, disabled }: SwitchProps) {
   return (
     <label className="form-switch">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span>{label}</span>
       {hint !== undefined && <span className="form-field__hint">{hint}</span>}
     </label>

@@ -227,6 +227,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/workflows/:id/export' },
   { method: 'POST', path: '/api/workflows/import' },
 
+  // ---- workgroups (RFC-164) ----
+  {
+    method: 'GET',
+    path: '/api/workgroups',
+    happy: { schema: z.array(z.any()) },
+  },
+  { method: 'GET', path: '/api/workgroups/:name' },
+  { method: 'POST', path: '/api/workgroups' },
+  { method: 'PUT', path: '/api/workgroups/:name' },
+  { method: 'DELETE', path: '/api/workgroups/:name' },
+  { method: 'POST', path: '/api/workgroups/:name/rename' },
+
   // ---- repos (path / refs / file system) ----
   { method: 'GET', path: '/api/repos/recent' },
   { method: 'POST', path: '/api/repos/recent' },

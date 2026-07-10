@@ -30,6 +30,9 @@ import { Route as reviewDetailRoute } from '@/routes/reviews.detail'
 import { Route as clarifyRoute } from '@/routes/clarify'
 import { Route as clarifyDetailRoute } from '@/routes/clarify.detail'
 import { Route as workflowsRoute } from '@/routes/workflows'
+import { Route as workgroupsRoute } from '@/routes/workgroups'
+import { Route as workgroupDetailRoute } from '@/routes/workgroups.detail'
+import { Route as workgroupNewRoute } from '@/routes/workgroups.new'
 import {
   EditRoute as workflowEditRoute,
   NewRoute as workflowNewRoute,
@@ -62,6 +65,10 @@ const routeTree = rootRoute.addChildren([
   workflowLaunchRoute,
   workflowEditRoute,
   workflowsRoute,
+  // RFC-164: '/workgroups/new' literal must precede '/workgroups/$name'.
+  workgroupNewRoute,
+  workgroupDetailRoute,
+  workgroupsRoute,
   // RFC-105: '/tasks/$id/preview' (longer literal) before '/tasks/$id'.
   taskPreviewRoute,
   taskDetailRoute,

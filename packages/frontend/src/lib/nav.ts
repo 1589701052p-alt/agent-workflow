@@ -39,7 +39,12 @@ export const NAV_GROUPS: NavGroupEntry[] = [
   {
     key: 'workflows',
     i18nKey: 'nav.group.workflows',
-    subnav: [{ to: '/workflows', i18nKey: 'nav.workflows' }],
+    subnav: [
+      { to: '/workflows', i18nKey: 'nav.workflows' },
+      // RFC-164: workgroups are launched like workflows, so they live in
+      // the same group.
+      { to: '/workgroups', i18nKey: 'nav.workgroups' },
+    ],
   },
   {
     key: 'tasks',

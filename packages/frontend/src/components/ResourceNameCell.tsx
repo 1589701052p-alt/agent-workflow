@@ -22,8 +22,14 @@ export interface OwnerLookup {
 }
 
 export interface ResourceNameCellProps {
-  /** Detail route of the resource kind (constrained to the five list pages). */
-  to: '/agents/$name' | '/skills/$name' | '/mcps/$name' | '/plugins/$id' | '/workflows/$id'
+  /** Detail route of the resource kind (constrained to the resource list pages). */
+  to:
+    | '/agents/$name'
+    | '/skills/$name'
+    | '/mcps/$name'
+    | '/plugins/$id'
+    | '/workflows/$id'
+    | '/workgroups/$name'
   params: { name: string } | { id: string }
   name: string
   visibility?: ResourceVisibility | undefined
