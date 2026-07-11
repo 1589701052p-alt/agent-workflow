@@ -222,15 +222,6 @@ function TaskDetailPage() {
   const isDynamicWorkgroup = isWorkgroup && room.data?.config.mode === 'dynamic_workflow'
   const dwPhase = room.data?.dw?.phase ?? null
   const tabs = availableTabs({ hasOutputs, isWorkgroup, isDynamicWorkgroup })
-  // Apply the phase-driven default tab ONCE when a dynamic task's room config
-  // first arrives (awaiting_confirm → orchestration panel; executing → the
-  // real canvas). Manual tab choices afterwards are never overridden.
-  const dwDefaultApplied = useRef(false)
-  useEffect(() => {
-    if (!isDynamicWorkgroup || dwDefaultApplied.current) return
-    dwDefaultApplied.current = true
-    setTab(defaultDynamicTab(dwPhase))
-  }, [isDynamicWorkgroup, dwPhase])
   // RFC-120: agent nodes of the frozen snapshot — reassign candidates for the
   // task question board (only agent nodes are valid handlers). Labels resolve to
   // the node's display name (title → agentName → id fallback, same oracle as the
@@ -249,6 +240,21 @@ function TaskDetailPage() {
   useEffect(() => {
     if (!tabs.includes(tab)) setTab(tabs[0] ?? 'workflow-status')
   }, [tabs, tab])
+  // RFC-167 PR-3 (Codex impl-gate P2): apply the phase-driven default tab
+  // ONCE per task when the room config first identifies a dynamic group
+  // (executing → the DAG canvas; anything earlier → the orchestration panel).
+  // Declared AFTER the invalid-tab fallback above on purpose: both effects
+  // fire in the same commit when the tab set flips to the dynamic order (the
+  // fallback reads this render's stale `tab` and schedules tabs[0]) — the
+  // later setTab wins, so the phase default reliably lands. Keyed by task id
+  // so navigating between tasks re-applies; manual tab choices afterwards are
+  // never overridden.
+  const dwDefaultAppliedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isDynamicWorkgroup || dwDefaultAppliedFor.current === id) return
+    dwDefaultAppliedFor.current = id
+    setTab(defaultDynamicTab(dwPhase))
+  }, [isDynamicWorkgroup, dwPhase, id])
 
   if (task.isLoading) return <div className="page muted">{t('tasks.loadingTask')}</div>
   if (task.error !== null && task.error !== undefined)

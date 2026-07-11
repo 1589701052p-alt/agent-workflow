@@ -1094,7 +1094,9 @@ export interface Resources {
       saveAsSubmit: string
       saved: string
       executing: string
-      confirmedChip: string
+      executingDone: string
+      executingFailed: string
+      canceledNotice: string
       exhausted: string
       previewEmpty: string
       canvasPending: string
@@ -3952,7 +3954,9 @@ export const zhCN: Resources = {
       saveAsSubmit: '保存',
       saved: '已另存为 {{name}}。',
       executing: '已确认，DAG 正在执行——进度见「运行状态」页签。',
-      confirmedChip: '已确认',
+      executingDone: '执行完成——结果见「运行状态」画布与产出页签。',
+      executingFailed: '执行失败——失败节点见「运行状态」画布，可从任务头部重试。',
+      canceledNotice: '任务已取消，编排流程终止。',
       exhausted: 'workflow 生成失败（重试已耗尽）。可在详情页查看错误后重试任务。',
       previewEmpty: '暂无可预览的生成结果。',
       canvasPending: '等待编排确认后展示真实 DAG。',

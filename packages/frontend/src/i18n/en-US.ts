@@ -1171,7 +1171,10 @@ export const enUS: Resources = {
       saveAsSubmit: 'Save',
       saved: 'Saved as {{name}}.',
       executing: 'Approved — the DAG is executing. See the Workflow status tab for progress.',
-      confirmedChip: 'Approved',
+      executingDone: 'Execution finished — see the Workflow status canvas and the Outputs tab.',
+      executingFailed:
+        'Execution failed — the failing node is on the Workflow status canvas; resume from the task header to retry.',
+      canceledNotice: 'The task was canceled; the orchestration flow ended.',
       exhausted:
         'Workflow generation failed (retries exhausted). Check the error, then resume the task to retry.',
       previewEmpty: 'Nothing generated to preview yet.',

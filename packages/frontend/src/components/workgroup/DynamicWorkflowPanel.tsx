@@ -26,7 +26,7 @@ import { Dialog } from '@/components/Dialog'
 import { EmptyState } from '@/components/EmptyState'
 import { Field, TextArea, TextInput } from '@/components/Form'
 import { LoadingState } from '@/components/LoadingState'
-import { StatusChip } from '@/components/StatusChip'
+import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorkflowCanvas } from '@/components/canvas/WorkflowCanvas'
 import { describeApiError } from '@/i18n'
 import { workgroupRoomKey, type WorkgroupRoomResponse } from '@/lib/workgroup-room'
@@ -52,11 +52,16 @@ export function DynamicWorkflowPanel({
     queryFn: ({ signal }) =>
       api.get(`/api/workgroup-tasks/${encodeURIComponent(taskId)}/room`, undefined, signal),
     // WS task.status frames carry the live phase flips; slow-poll fallback
-    // while the task is still moving (same idiom as the chat room).
-    refetchInterval:
-      taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'canceled'
-        ? false
-        : 15_000,
+    // while the task is still moving. Codex impl-gate P2: the poll only stops
+    // once the ROOM AGGREGATE ITSELF has observed the terminal status — the
+    // page's faster task query may see `done` first, and cutting the poll on
+    // that alone would freeze a stale awaiting_confirm gate forever when the
+    // WS frame was missed.
+    refetchInterval: (q) => {
+      const terminal = taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'canceled'
+      if (terminal && q.state.data?.taskStatus === taskStatus) return false
+      return 15_000
+    },
   })
 
   // Shared with TaskStatusCanvas / the editor — one cache entry.
@@ -74,6 +79,10 @@ export function DynamicWorkflowPanel({
 
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectComment, setRejectComment] = useState('')
+  const [saveAsOpen, setSaveAsOpen] = useState(false)
+  const [saveAsName, setSaveAsName] = useState('')
+  const [saveAsDesc, setSaveAsDesc] = useState('')
+  const [savedName, setSavedName] = useState<string | null>(null)
   const confirm = useMutation({
     mutationFn: (input: { decision: 'approve' | 'reject'; comment?: string }) =>
       api.post<{ decision: string }>(
@@ -83,6 +92,9 @@ export function DynamicWorkflowPanel({
     onSuccess: () => {
       setRejectOpen(false)
       setRejectComment('')
+      // Codex impl-gate P2: a rejection discards the proposal — the saved-as
+      // note belonged to it and must not survive onto the regenerated one.
+      setSavedName(null)
       void qc.invalidateQueries({ queryKey: workgroupRoomKey(taskId) })
       // approve resumes into execution / reject re-enters generation — both
       // move the task status and (on approve) swap the snapshot the canvas
@@ -92,10 +104,6 @@ export function DynamicWorkflowPanel({
     },
   })
 
-  const [saveAsOpen, setSaveAsOpen] = useState(false)
-  const [saveAsName, setSaveAsName] = useState('')
-  const [saveAsDesc, setSaveAsDesc] = useState('')
-  const [savedName, setSavedName] = useState<string | null>(null)
   const saveAs = useMutation({
     mutationFn: (input: { name: string; description?: string }) =>
       api.post<{ id: string; name: string }>(
@@ -115,6 +123,18 @@ export function DynamicWorkflowPanel({
   }
   if (dw === null) {
     return <EmptyState size="comfortable" title={t('workgroups.dw.previewEmpty')} />
+  }
+  // Codex impl-gate P2: dw.phase freezes at its last substate on cancel
+  // (e.g. 'generating') — without this gate a canceled task would spin the
+  // generation card forever and the confirm buttons would 409.
+  if (taskStatus === 'canceled') {
+    return (
+      <EmptyState
+        size="comfortable"
+        title={t('workgroups.dw.canceledNotice')}
+        data-testid="dw-canceled-notice"
+      />
+    )
   }
 
   const saveAsButton =
@@ -223,7 +243,10 @@ export function DynamicWorkflowPanel({
         </>
       )}
 
-      {/* ── executing (and beyond): pointer to the real canvas ──────────── */}
+      {/* ── executing (and beyond): pointer to the real canvas. Codex
+          impl-gate P2: dw.phase stays 'executing' after the run terminates —
+          the card's copy follows the TASK status so a finished / failed DAG
+          is never labeled as still running. ── */}
       {dw.phase === 'executing' && (
         <Card
           header={<h3 className="workgroup-room__side-title">{t('workgroups.dw.title')}</h3>}
@@ -233,11 +256,15 @@ export function DynamicWorkflowPanel({
           }
         >
           <p className="workgroup-room__gate-state">
-            <StatusChip kind="success" size="sm" withDot>
-              {t('workgroups.dw.confirmedChip')}
-            </StatusChip>
+            <TaskStatusChip status={taskStatus} />
           </p>
-          <p className="workgroup-room__gate-state">{t('workgroups.dw.executing')}</p>
+          <p className="workgroup-room__gate-state">
+            {taskStatus === 'done'
+              ? t('workgroups.dw.executingDone')
+              : taskStatus === 'failed'
+                ? t('workgroups.dw.executingFailed')
+                : t('workgroups.dw.executing')}
+          </p>
           {savedName !== null && (
             <p className="workgroup-room__gate-state" data-testid="dw-saved-note">
               {t('workgroups.dw.saved', { name: savedName })}

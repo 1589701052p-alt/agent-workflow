@@ -238,19 +238,81 @@ describe('DynamicWorkflowPanel — confirm gate', () => {
 })
 
 describe('DynamicWorkflowPanel — executing', () => {
+  const EXECUTING: DwState = {
+    phase: 'executing',
+    generateAttempts: 0,
+    rejectRounds: 0,
+    generatedDef: GENERATED_DEF,
+  }
+
   test('pointer card renders without gate buttons; save-as stays available', async () => {
-    installFetch(
-      makeRoom({
-        phase: 'executing',
-        generateAttempts: 0,
-        rejectRounds: 0,
-        generatedDef: GENERATED_DEF,
-      }),
-    )
+    installFetch(makeRoom(EXECUTING))
     renderPanel()
     expect(await screen.findByTestId('dw-executing-card')).toBeTruthy()
     expect(screen.queryByTestId('dw-gate-approve')).toBeNull()
     expect(screen.queryByTestId('dw-gate-reject')).toBeNull()
     expect(screen.getByTestId('dw-save-as-btn')).toBeTruthy()
+  })
+
+  // Codex impl-gate P2: dw.phase stays 'executing' after termination — the
+  // card copy must follow the TASK status, never claim a finished/failed DAG
+  // is still running.
+  test('a DONE task renders the finished copy, not "executing"', async () => {
+    installFetch(makeRoom(EXECUTING, 'done'))
+    renderPanel('done')
+    const card = await screen.findByTestId('dw-executing-card')
+    expect(card.textContent).toContain('Execution finished')
+    expect(card.textContent).not.toContain('is executing')
+  })
+
+  test('a FAILED task renders the failure copy', async () => {
+    installFetch(makeRoom(EXECUTING, 'failed'))
+    renderPanel('failed')
+    const card = await screen.findByTestId('dw-executing-card')
+    expect(card.textContent).toContain('Execution failed')
+  })
+})
+
+describe('DynamicWorkflowPanel — canceled tasks (Codex P2)', () => {
+  test('a canceled task shows the canceled notice instead of a stuck spinner/gate', async () => {
+    // dw.phase froze at 'generating' when the cancel landed.
+    installFetch(
+      makeRoom({ phase: 'generating', generateAttempts: 1, rejectRounds: 0 }, 'canceled'),
+    )
+    renderPanel('canceled')
+    expect(await screen.findByTestId('dw-canceled-notice')).toBeTruthy()
+    expect(screen.queryByTestId('dw-generating-card')).toBeNull()
+    expect(screen.queryByTestId('dw-gate-approve')).toBeNull()
+  })
+})
+
+describe('DynamicWorkflowPanel — saved-as note lifecycle (Codex P2)', () => {
+  test('rejecting the proposal clears the saved-as acknowledgement', async () => {
+    installFetch(
+      makeRoom(
+        {
+          phase: 'awaiting_confirm',
+          generateAttempts: 0,
+          rejectRounds: 0,
+          generatedDef: GENERATED_DEF,
+        },
+        'awaiting_review',
+      ),
+    )
+    renderPanel('awaiting_review')
+    // save the current proposal → note appears
+    fireEvent.click(await screen.findByTestId('dw-save-as-btn'))
+    fireEvent.change(await screen.findByTestId('dw-save-as-name'), {
+      target: { value: 'saved-dw' },
+    })
+    fireEvent.click(screen.getByTestId('dw-save-as-submit'))
+    expect(await screen.findByTestId('dw-saved-note')).toBeTruthy()
+    // reject it → the note must not survive onto the next proposal
+    fireEvent.click(screen.getByTestId('dw-gate-reject'))
+    fireEvent.change(await screen.findByTestId('dw-reject-comment'), {
+      target: { value: '重新来' },
+    })
+    fireEvent.click(screen.getByTestId('dw-reject-submit'))
+    await waitFor(() => expect(screen.queryByTestId('dw-saved-note')).toBeNull())
   })
 })

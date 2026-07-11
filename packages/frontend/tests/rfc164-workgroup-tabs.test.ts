@@ -103,6 +103,18 @@ describe('tasks.detail.tsx — workgroup wiring (source locks)', () => {
     expect(SRC).toMatch(/\{isDynamicWorkgroup && \(\s*<DynamicWorkflowPanel/)
   })
 
+  test('RFC-167 (Codex P2): the phase-default effect is declared AFTER the invalid-tab fallback and keyed per task', () => {
+    // Both effects fire in the same commit when the tab set flips to the
+    // dynamic order; the phase default must be the LATER setTab so it wins
+    // over the fallback's tabs[0]. The ref stores the task id so navigating
+    // between tasks re-applies the default.
+    const fallbackAt = SRC.indexOf("if (!tabs.includes(tab)) setTab(tabs[0] ?? 'workflow-status')")
+    const dwDefaultAt = SRC.indexOf('setTab(defaultDynamicTab(dwPhase))')
+    expect(fallbackAt).toBeGreaterThan(-1)
+    expect(dwDefaultAt).toBeGreaterThan(fallbackAt)
+    expect(SRC).toMatch(/dwDefaultAppliedFor\.current === id/)
+  })
+
   test('tabLabel maps the chatroom tab through tasks.tabChatroom', () => {
     expect(SRC).toMatch(/'tasks\.tabChatroom'/)
   })
