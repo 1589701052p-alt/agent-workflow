@@ -29,18 +29,10 @@ export const ORCHESTRATOR_WORKFLOW_PORT = 'workflow'
 /** Node id of the orchestrator node in the synthesized generation-phase snapshot. */
 export const DW_ORCHESTRATOR_NODE_ID = '__dw_orchestrator__'
 
-/**
- * The lifecycle phases of a dynamic_workflow workgroup task (stored in the
- * task's workgroup_config_json under `dwPhase`):
- *   - generating:      the orchestrator run is producing / being validated.
- *   - awaiting_confirm: a valid workflow was generated; parked for human review.
- *   - executing:        confirmed; the generated DAG was swapped in and runs.
- *   - rejected:         a human rejected; regenerate with feedback.
- * The task-level status still moves through the ordinary running / awaiting_review
- * / done states; dwPhase is the finer dynamic-mode sub-state (design §8).
- */
-export const DW_PHASES = ['generating', 'awaiting_confirm', 'executing', 'rejected'] as const
-export type DynamicWorkflowPhase = (typeof DW_PHASES)[number]
+// The phase constants moved to shared (PR-2③ — the frontend maps them to copy
+// and the scheduler dispatches on them); re-exported here so existing backend
+// imports keep working.
+export { DW_PHASES, type DynamicWorkflowPhase } from '@agent-workflow/shared'
 
 /**
  * Synthesize the generation-phase host snapshot: a single agent-single node

@@ -87,8 +87,10 @@ export interface WorkgroupHostRunRequest {
   agent: Agent
   /** Fully-composed prompt text (charter/roster/brief/slices). */
   promptTemplate: string
-  /** Replaces the agent-outputs protocol block (design §5). */
-  workgroupProtocolBlock: string
+  /** Replaces the agent-outputs protocol block (design §5). Workgroup turns
+   *  always pass one; the RFC-167 orchestrator run omits it so the STANDARD
+   *  <workflow-output> protocol for its declared ports applies. */
+  workgroupProtocolBlock?: string
 }
 
 export interface WorkgroupHostRunResult {

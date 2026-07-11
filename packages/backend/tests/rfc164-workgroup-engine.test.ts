@@ -286,10 +286,11 @@ describe('RFC-164 engine — launch path', () => {
     expect(body.details?.reasons).toEqual(['leader-missing'])
   })
 
-  // RFC-167 PR-1: dynamic_workflow groups save + configure but are NOT
-  // launchable until the generate→confirm→execute engine (PR-2); the launch
-  // guard refuses rather than mis-running them on the turn engine.
-  test('dynamic_workflow launch → 422 workgroup-dynamic-not-implemented (RFC-167 PR-1 guard)', async () => {
+  // RFC-167 PR-2③: the PR-1 staged guard is GONE — dynamic_workflow groups
+  // launch into the generate→confirm→execute engine. Full launch coverage
+  // (snapshot/dw stamp/engine entry) lives in rfc167-dynamic-workflow-engine
+  // .test.ts; here we lock only that the old guard never fires again.
+  test('dynamic_workflow launch passes the old PR-1 guard (RFC-167 撤守卫回归锁)', async () => {
     await createWorkgroup(db, {
       name: 'dyn',
       description: '',
@@ -304,8 +305,11 @@ describe('RFC-164 engine — launch path', () => {
       method: 'POST',
       body: JSON.stringify({ name: 't', goal: 'g' }),
     })
-    expect(res.status).toBe(422)
-    expect(((await res.json()) as { code: string }).code).toBe('workgroup-dynamic-not-implemented')
+    // No repo source in the body → the launch still 422s at StartTaskSchema,
+    // which proves the flow got PAST the removed dynamic guard.
+    const body = (await res.json()) as { code?: string }
+    expect(body.code).not.toBe('workgroup-dynamic-not-implemented')
+    expect(body.code).toBe('workgroup-launch-invalid')
   })
 
   test('human-member groups launch past the gate (PR-5/T24 撤守卫回归锁)', async () => {

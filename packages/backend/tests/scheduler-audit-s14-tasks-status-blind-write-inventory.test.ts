@@ -66,7 +66,15 @@ const NON_STATUS_UPDATE_TASKS_SNAPSHOT: Record<string, number> = {
   // RFC-164 PR-3: gate approve/reject + mid-run config edit both rewrite
   // workgroup_config_json (the task-owned runtime copy) — never `status`
   // (the gate's status flip rides transitionTaskStatusByEvent separately).
-  'routes/workgroupTasks.ts': 2,
+  // RFC-167 PR-2 adds two more of the same shape: dw-confirm reject rewrites
+  // the dw slot (normal round + reject-exhausted round); the exhausted round's
+  // status flip rides setTaskStatus separately, and approve's snapshot+config
+  // swap rides resumeKick's status CAS (no direct write at all).
+  'routes/workgroupTasks.ts': 4,
+  // RFC-167: persistDwState writes workgroup_config_json only (dw phase /
+  // attempts / generatedDef on the task's config copy) — never `status`
+  // (workgroupRunner persistGate 同款).
+  'services/dynamicWorkflowRunner.ts': 1,
 }
 
 function walkTsFiles(dir: string): string[] {

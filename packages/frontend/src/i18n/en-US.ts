@@ -1090,7 +1090,7 @@ export const enUS: Resources = {
     modeHintDynamicWorkflow:
       'A built-in agent orchestrates the members into a workflow from your goal; you confirm it, then it runs. No chatroom — members are the orchestratable pool.',
     dynamicModeNotice:
-      'Dynamic workflow has no turn-based chatroom, so the collaboration switches, max rounds and completion gate do not apply. The members below are the orchestratable agent pool. Launch support lands in a later change.',
+      'Dynamic workflow has no turn-based chatroom, so the collaboration switches, max rounds and completion gate do not apply. The members below are the orchestratable agent pool.',
     readiness: {
       noAgentMember: 'No agent members yet — the group cannot launch.',
       leaderMissing: 'Leader-Worker mode needs one agent member designated as leader.',

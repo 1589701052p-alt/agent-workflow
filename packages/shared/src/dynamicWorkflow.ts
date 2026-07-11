@@ -24,6 +24,78 @@
 
 import { z } from 'zod'
 import { PortRefSchema, type WorkflowDefinition, type WorkflowEdge } from './schemas/workflow'
+import type { WorkgroupMode } from './schemas/workgroup'
+
+/**
+ * The lifecycle phases of a dynamic_workflow workgroup task (stored in the
+ * task's workgroup_config_json under `dw.phase`, beside the lw `gate` blob):
+ *   - generating:      the orchestrator run is producing / being validated.
+ *   - awaiting_confirm: a valid workflow was generated; parked for human review.
+ *   - executing:        confirmed; the generated DAG was swapped in and runs.
+ *   - rejected:         a human rejected; regenerate with feedback.
+ * The task-level status still moves through the ordinary running /
+ * awaiting_review / done states; dw.phase is the finer dynamic-mode sub-state
+ * (design §8). Lives in shared so the frontend maps phases to copy and the
+ * backend dispatches on them from ONE source.
+ */
+export const DW_PHASES = ['generating', 'awaiting_confirm', 'executing', 'rejected'] as const
+export type DynamicWorkflowPhase = (typeof DW_PHASES)[number]
+
+/**
+ * RFC-167 — the durable per-task dynamic-workflow state, persisted as the `dw`
+ * key of `tasks.workgroup_config_json` (same free-slot pattern as the lw
+ * completion-gate `gate` blob; WorkgroupRuntimeConfigSchema strips unknown
+ * keys so the runtime config parse is unaffected). `(phase, generateAttempts,
+ * generatedDef?)` is the complete idempotent-recovery checkpoint (design §8).
+ */
+export const DwStateSchema = z.object({
+  phase: z.enum(DW_PHASES),
+  /** Failed generation attempts THIS pass (bad JSON / schema / validation). */
+  generateAttempts: z.number().int().min(0).default(0),
+  /** Completed human reject rounds (bounded by DW_MAX_REJECT_ROUNDS). */
+  rejectRounds: z.number().int().min(0).default(0),
+  /** Human feedback from the last rejection — injected into the regen prompt. */
+  rejectionComment: z.string().optional(),
+  /** The validated generated WorkflowDefinition (present from awaiting_confirm on).
+   *  Kept `unknown` here — readers re-parse with WorkflowDefinitionSchema. */
+  generatedDef: z.unknown().optional(),
+})
+export type DwState = z.infer<typeof DwStateSchema>
+
+/** The launch-time initial dw state for a dynamic_workflow workgroup task. */
+export function initialDwState(): DwState {
+  return { phase: 'generating', generateAttempts: 0, rejectRounds: 0 }
+}
+
+/**
+ * Parse the `dw` slot of a task's workgroup_config_json. Returns null when the
+ * slot is missing or malformed — callers decide whether that is a hard error
+ * (engine) or a fall-back-to-default (defensive dispatch).
+ */
+export function parseDwState(raw: unknown): DwState | null {
+  const parsed = DwStateSchema.safeParse(raw)
+  return parsed.success ? parsed.data : null
+}
+
+/** Which engine drives a workgroup task (RFC-167 §3 three-way dispatch). */
+export type WorkgroupDispatch = 'turn-engine' | 'dw-generate' | 'dw-execute'
+
+/**
+ * Single dispatch oracle for workgroup tasks: leader_worker / free_collab run
+ * the round engine; a dynamic_workflow task runs the GENERATE engine until its
+ * confirmed DAG is swapped in (phase 'executing'), after which the ordinary
+ * runScope DAG engine executes the (now real) snapshot. `awaiting_confirm` /
+ * `rejected` / a missing phase all route to dw-generate — the generate engine
+ * re-parks or regenerates idempotently; only an explicit 'executing' unlocks
+ * runScope (fail-closed toward the engine that cannot corrupt a worktree).
+ */
+export function deriveWorkgroupDispatch(
+  mode: WorkgroupMode,
+  dwPhase: DynamicWorkflowPhase | null | undefined,
+): WorkgroupDispatch {
+  if (mode !== 'dynamic_workflow') return 'turn-engine'
+  return dwPhase === 'executing' ? 'dw-execute' : 'dw-generate'
+}
 
 /** One declared input on a generated node: local `port` fed by an upstream port. */
 export const DwGeneratedNodeInputSchema = z.object({

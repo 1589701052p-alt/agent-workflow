@@ -248,6 +248,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'POST', path: '/api/workgroup-tasks/:taskId/assignments/:id/deliver' },
   { method: 'POST', path: '/api/workgroup-tasks/:taskId/confirm' },
   { method: 'PUT', path: '/api/workgroup-tasks/:taskId/config' },
+  // RFC-167 — dynamic-workflow confirm gate + one-shot save-as
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/dw-confirm' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/dw-save-as-workflow' },
 
   // ---- repos (path / refs / file system) ----
   { method: 'GET', path: '/api/repos/files' },

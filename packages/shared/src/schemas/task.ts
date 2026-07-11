@@ -622,6 +622,10 @@ export const RERUN_CAUSES = [
   'wg-message-turn',
   /** RFC-164 free_collab completion-gate holder run (design §8.2). */
   'wg-gate',
+  /** RFC-167 dynamic-workflow orchestrator generation run (dynamicWorkflowRunner). */
+  'dw-generate',
+  /** RFC-167 dynamic-workflow confirm-gate holder run (design §3.1). */
+  'dw-gate',
 ] as const
 export const RerunCauseSchema = z.enum(RERUN_CAUSES)
 export type RerunCause = z.infer<typeof RerunCauseSchema>

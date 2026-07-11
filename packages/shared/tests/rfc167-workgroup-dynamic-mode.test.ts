@@ -6,10 +6,21 @@
 //  3. workgroupLaunchReadiness: dynamic needs ≥1 agent member (no-agent-member)
 //     and NEVER requires a leader (leader-missing is leader_worker-only).
 //  4. resolveWorkgroupSwitches leaves dynamic switches as stored (N/A, ignored).
+// PR-2③ additions:
+//  5. DwStateSchema / parseDwState / initialDwState — the durable `dw` slot of
+//     workgroup_config_json ((phase, generateAttempts, generatedDef) is the
+//     idempotent recovery checkpoint, design §8).
+//  6. deriveWorkgroupDispatch — the SINGLE engine-dispatch oracle (design §3):
+//     only an explicit 'executing' unlocks runScope; everything else in
+//     dynamic mode stays on the generate engine (fail-closed).
 
 import { describe, expect, test } from 'bun:test'
 import {
   CreateWorkgroupSchema,
+  DW_PHASES,
+  deriveWorkgroupDispatch,
+  initialDwState,
+  parseDwState,
   WORKGROUP_MODES,
   resolveWorkgroupSwitches,
   workgroupLaunchReadiness,
@@ -98,5 +109,56 @@ describe('resolveWorkgroupSwitches — dynamic leaves stored switches (N/A)', ()
   test('dynamic mode returns stored switches unchanged (ignored by the engine)', () => {
     const stored = { shareOutputs: false, directMessages: false, blackboard: false }
     expect(resolveWorkgroupSwitches('dynamic_workflow', stored)).toEqual(stored)
+  })
+})
+
+describe('DwState — the durable dw slot (PR-2③)', () => {
+  test('initialDwState is a generating checkpoint with zeroed counters', () => {
+    expect(initialDwState()).toEqual({ phase: 'generating', generateAttempts: 0, rejectRounds: 0 })
+  })
+
+  test('parseDwState round-trips a full state incl. generatedDef', () => {
+    const def = { $schema_version: 4, inputs: [], nodes: [], edges: [] }
+    const dw = parseDwState({
+      phase: 'awaiting_confirm',
+      generateAttempts: 2,
+      rejectRounds: 1,
+      rejectionComment: '拆细一点',
+      generatedDef: def,
+    })
+    expect(dw).not.toBeNull()
+    expect(dw?.phase).toBe('awaiting_confirm')
+    expect(dw?.generateAttempts).toBe(2)
+    expect(dw?.rejectRounds).toBe(1)
+    expect(dw?.rejectionComment).toBe('拆细一点')
+    expect(dw?.generatedDef).toEqual(def)
+  })
+
+  test('parseDwState defaults the counters and rejects garbage', () => {
+    expect(parseDwState({ phase: 'generating' })).toEqual({
+      phase: 'generating',
+      generateAttempts: 0,
+      rejectRounds: 0,
+    })
+    expect(parseDwState(undefined)).toBeNull()
+    expect(parseDwState({ phase: 'nope' })).toBeNull()
+    expect(parseDwState('generating')).toBeNull()
+  })
+})
+
+describe('deriveWorkgroupDispatch — single dispatch oracle (design §3)', () => {
+  test('non-dynamic modes ALWAYS run the turn engine, whatever dw says', () => {
+    expect(deriveWorkgroupDispatch('leader_worker', null)).toBe('turn-engine')
+    expect(deriveWorkgroupDispatch('free_collab', 'executing')).toBe('turn-engine')
+  })
+
+  test("only an explicit 'executing' unlocks runScope; every other phase (or a missing one) stays on the generate engine", () => {
+    for (const phase of DW_PHASES) {
+      expect(deriveWorkgroupDispatch('dynamic_workflow', phase)).toBe(
+        phase === 'executing' ? 'dw-execute' : 'dw-generate',
+      )
+    }
+    expect(deriveWorkgroupDispatch('dynamic_workflow', null)).toBe('dw-generate')
+    expect(deriveWorkgroupDispatch('dynamic_workflow', undefined)).toBe('dw-generate')
   })
 })

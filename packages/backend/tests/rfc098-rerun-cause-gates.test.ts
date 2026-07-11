@@ -75,6 +75,8 @@ const GATE2_EXPECTED: Record<RerunCause, boolean> = {
   'wg-assignment': false,
   'wg-message-turn': false,
   'wg-gate': false,
+  'dw-generate': false, // RFC-167 orchestrator retries re-inject errors in a fresh prompt, not a clarify rerun
+  'dw-gate': false,
 }
 
 describe('RFC-098 WP-10 — gate-2 (isClarifyRerun) × cause truth table', () => {

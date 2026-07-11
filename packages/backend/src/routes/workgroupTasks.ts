@@ -13,8 +13,13 @@
 // (design §8.3 — resumeTask kicks the engine; leader picks it up as
 // new-content).
 
-import type { WorkgroupRuntimeConfig } from '@agent-workflow/shared'
-import { WorkgroupRuntimeConfigSchema } from '@agent-workflow/shared'
+import type { DwState, WorkgroupRuntimeConfig } from '@agent-workflow/shared'
+import {
+  parseDwState,
+  WorkflowDefinitionSchema,
+  WorkflowNameSchema,
+  WorkgroupRuntimeConfigSchema,
+} from '@agent-workflow/shared'
 import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import { ulid } from 'ulid'
@@ -22,9 +27,17 @@ import { z } from 'zod'
 import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
 import { nodeRuns, tasks, workgroupAssignments, workgroupMessages } from '@/db/schema'
-import { setNodeRunStatus } from '@/services/lifecycle'
-import { resumeTask } from '@/services/task'
+import { DW_GATE_CAUSE, DW_MAX_REJECT_ROUNDS } from '@/services/dynamicWorkflowRunner'
+import { setNodeRunStatus, setTaskStatus } from '@/services/lifecycle'
+import { assertNewRefsUsable, extractWorkflowAgentNames } from '@/services/resourceRefs'
+import {
+  emitTaskStatus,
+  getTask,
+  resumeDynamicWorkflowExecution,
+  resumeTask,
+} from '@/services/task'
 import { canViewTask } from '@/services/taskCollab'
+import { createWorkflow } from '@/services/workflow'
 import { advanceMemberCursor, casAssignmentStatus } from '@/services/workgroupLifecycle'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { Paths } from '@/util/paths'
@@ -63,6 +76,12 @@ const ConfirmSchema = z
     message: 'reject requires a comment',
   })
 
+/** RFC-167 — POST .../dw-save-as-workflow body. */
+const SaveAsWorkflowSchema = z.object({
+  name: WorkflowNameSchema,
+  description: z.string().max(4096).optional(),
+})
+
 /** PR-5 中途改配置白名单（design §8.4：mode/leader/repo 不可改）。 */
 const ConfigPatchSchema = z.object({
   switches: z
@@ -98,15 +117,17 @@ interface WorkgroupTaskRow {
 }
 
 export function mountWorkgroupTaskRoutes(app: Hono, deps: AppDeps): void {
-  function kickResume(taskId: string): void {
+  function buildResumeDeps(): Parameters<typeof resumeTask>[2] {
     const opencodeCmd = resolveOpencodeCmd(deps.configPath)
-    const resumeDeps: Parameters<typeof resumeTask>[2] = {
+    return {
       db: deps.db,
       appHome: Paths.root,
       ...(opencodeCmd ? { opencodeCmd } : {}),
       ...resolveLaunchRuntimeConfig(deps.configPath),
     }
-    void resumeTask(deps.db, taskId, resumeDeps).catch((err: unknown) => {
+  }
+  function kickResume(taskId: string): void {
+    void resumeTask(deps.db, taskId, buildResumeDeps()).catch((err: unknown) => {
       if (err instanceof ConflictError && err.code === 'task-not-resumable') return
       log.warn('workgroup resume failed', {
         taskId,
@@ -474,6 +495,167 @@ export function mountWorkgroupTaskRoutes(app: Hono, deps: AppDeps): void {
     // leader wakes with gate-rejected).
     kickResume(taskId)
     return c.json({ decision: parsed.data.decision })
+  })
+
+  // RFC-167 (design §3.2) — dynamic-workflow confirm gate. Task members only
+  // (same 404-shaped boundary as every workgroup-task endpoint). approve swaps
+  // the generated DAG into workflow_snapshot + flips dw.phase='executing'
+  // ATOMICALLY inside the resume ownership CAS (resumeDynamicWorkflowExecution)
+  // and the resumed runTask executes it via runScope; reject (comment required)
+  // re-enters the generate engine with the feedback injected, bounded by
+  // DW_MAX_REJECT_ROUNDS.
+  app.post('/api/workgroup-tasks/:taskId/dw-confirm', async (c) => {
+    const taskId = c.req.param('taskId')
+    const actor = actorOf(c)
+    const { task, config, raw } = await loadVisibleWorkgroupTask(actor, taskId)
+    const parsed = ConfirmSchema.safeParse(await safeJson(c.req.raw))
+    if (!parsed.success) {
+      throw new ValidationError('workgroup-confirm-invalid', 'invalid confirm payload', {
+        issues: parsed.error.issues,
+      })
+    }
+    const dw = parseDwState(raw.dw)
+    if (
+      config.mode !== 'dynamic_workflow' ||
+      dw === null ||
+      dw.phase !== 'awaiting_confirm' ||
+      task.status !== 'awaiting_review'
+    ) {
+      throw new ConflictError(
+        'workgroup-dw-gate-not-open',
+        'the dynamic workflow confirm gate is not awaiting confirmation',
+      )
+    }
+
+    // Close the gate holder run(s) first (wg-confirm ordering precedent): the
+    // decision is durable human input; a subsequently lost resume race leaves
+    // the task re-parkable (the generate engine re-mints a holder on re-entry).
+    const holders = (
+      await deps.db
+        .select()
+        .from(nodeRuns)
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.rerunCause, DW_GATE_CAUSE)))
+    ).filter((r) => r.status === 'awaiting_review')
+
+    if (parsed.data.decision === 'approve') {
+      const generated = WorkflowDefinitionSchema.safeParse(dw.generatedDef)
+      if (!generated.success) {
+        throw new ConflictError(
+          'dw-generated-def-invalid',
+          'the stored generated workflow is unreadable — reject with feedback to regenerate',
+        )
+      }
+      for (const h of holders) {
+        await setNodeRunStatus({
+          db: deps.db,
+          nodeRunId: h.id,
+          to: 'done',
+          allowedFrom: ['awaiting_review'],
+          reason: 'dw-gate-approved',
+        })
+      }
+      const { rejectionComment: _consumed, ...dwRest } = dw
+      const nextDw: DwState = { ...dwRest, phase: 'executing' }
+      await resumeDynamicWorkflowExecution(deps.db, taskId, buildResumeDeps(), {
+        workflowSnapshot: JSON.stringify(generated.data),
+        workgroupConfigJson: JSON.stringify({ ...raw, dw: nextDw }),
+      })
+      return c.json({ decision: 'approve' })
+    }
+
+    // reject — ConfirmSchema guarantees a non-empty comment.
+    const comment = parsed.data.comment ?? ''
+    for (const h of holders) {
+      await setNodeRunStatus({
+        db: deps.db,
+        nodeRunId: h.id,
+        to: 'done',
+        allowedFrom: ['awaiting_review'],
+        reason: 'dw-gate-rejected',
+      })
+    }
+    const rejectRounds = dw.rejectRounds + 1
+    if (rejectRounds >= DW_MAX_REJECT_ROUNDS) {
+      // Hard cap (design §8): repeated rejection is a signal the orchestrator
+      // cannot satisfy the human — fail the task instead of looping forever.
+      const nextDw: DwState = { ...dw, phase: 'rejected', rejectRounds, rejectionComment: comment }
+      await deps.db
+        .update(tasks)
+        .set({ workgroupConfigJson: JSON.stringify({ ...raw, dw: nextDw }) })
+        .where(eq(tasks.id, taskId))
+      await setTaskStatus({
+        db: deps.db,
+        taskId,
+        to: 'failed',
+        allowedFrom: ['awaiting_review'],
+        extra: {
+          finishedAt: Date.now(),
+          errorSummary: 'dw-reject-exhausted',
+          errorMessage: `dynamic workflow rejected ${rejectRounds} time(s) — DW_MAX_REJECT_ROUNDS reached`,
+        },
+        reason: 'dw-reject-exhausted',
+      })
+      const failed = await getTask(deps.db, taskId)
+      if (failed !== null) emitTaskStatus(failed)
+      return c.json({ decision: 'reject', exhausted: true })
+    }
+    const { generatedDef: _dropped, ...dwRest } = dw
+    const nextDw: DwState = {
+      ...dwRest,
+      phase: 'generating',
+      generateAttempts: 0,
+      rejectRounds,
+      rejectionComment: comment,
+    }
+    await deps.db
+      .update(tasks)
+      .set({ workgroupConfigJson: JSON.stringify({ ...raw, dw: nextDw }) })
+      .where(eq(tasks.id, taskId))
+    kickResume(taskId)
+    return c.json({ decision: 'reject' })
+  })
+
+  // RFC-167 (design §3.2 另存) — persist the generated one-shot DAG as a
+  // reusable workflows-table row. Available whenever a generated definition
+  // exists (awaiting_confirm onward). Creating a NEW workflow is a new-refs
+  // event (RFC-099 D15) — the same gate as POST /api/workflows.
+  app.post('/api/workgroup-tasks/:taskId/dw-save-as-workflow', async (c) => {
+    const taskId = c.req.param('taskId')
+    const actor = actorOf(c)
+    const { config, raw } = await loadVisibleWorkgroupTask(actor, taskId)
+    const parsed = SaveAsWorkflowSchema.safeParse(await safeJson(c.req.raw))
+    if (!parsed.success) {
+      throw new ValidationError('workgroup-save-as-invalid', 'invalid save-as-workflow body', {
+        issues: parsed.error.issues,
+      })
+    }
+    const dw = parseDwState(raw.dw)
+    if (config.mode !== 'dynamic_workflow' || dw === null || dw.generatedDef === undefined) {
+      throw new ConflictError(
+        'dw-no-generated-workflow',
+        'this task has no generated workflow to save',
+      )
+    }
+    const generated = WorkflowDefinitionSchema.safeParse(dw.generatedDef)
+    if (!generated.success) {
+      throw new ConflictError(
+        'dw-generated-def-invalid',
+        'the stored generated workflow is unreadable',
+      )
+    }
+    await assertNewRefsUsable(deps.db, actor, [
+      { type: 'agent', names: [...extractWorkflowAgentNames(generated.data)] },
+    ])
+    const created = await createWorkflow(
+      deps.db,
+      {
+        name: parsed.data.name,
+        description: parsed.data.description ?? '',
+        definition: generated.data,
+      },
+      { ownerUserId: actor.user.id },
+    )
+    return c.json({ id: created.id, name: created.name }, 201)
   })
 
   // PR-5 (design §8.4) — mid-run config edits on the TASK COPY (the resource

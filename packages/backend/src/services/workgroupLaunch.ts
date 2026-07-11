@@ -20,6 +20,7 @@
 
 import {
   applySpaceFields,
+  initialDwState,
   StartTaskSchema,
   workgroupLaunchReadiness,
   WorkgroupRuntimeConfigSchema,
@@ -30,6 +31,7 @@ import {
   type WorkgroupRuntimeConfig,
 } from '@agent-workflow/shared'
 import { buildClarifyEdges } from '@agent-workflow/shared'
+import { buildDynamicWorkflowGenerateSnapshot } from '@/services/orchestratorAgent'
 import type { Actor } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { workflows } from '@/db/schema'
@@ -158,18 +160,6 @@ export async function startWorkgroupTask(
     throw new NotFoundError('workgroup-not-found', `workgroup '${workgroupName}' not found`)
   }
 
-  // RFC-167 PR-1 intermediate state: dynamic_workflow groups SAVE + configure
-  // fine (mode is selectable, members are the pool), but the
-  // generate→confirm→execute engine lands in PR-2. Refuse to launch until then
-  // rather than fall through to the leader_worker/free_collab turn engine, which
-  // would mis-run the group. Same pattern as RFC-164 PR-6's staged guard.
-  if (group.mode === 'dynamic_workflow') {
-    throw new ValidationError(
-      'workgroup-dynamic-not-implemented',
-      'launching a dynamic_workflow workgroup is not yet supported (RFC-167 PR-2)',
-    )
-  }
-
   const readiness = workgroupLaunchReadiness(group)
   if (!readiness.ready) {
     throw new ValidationError('workgroup-not-ready', 'workgroup is not launch-ready', {
@@ -185,7 +175,16 @@ export async function startWorkgroupTask(
 
   await ensureWorkgroupHostWorkflow(db)
   const config = buildWorkgroupRuntimeConfig(group, input.goal)
-  const snapshot = buildWorkgroupHostSnapshot(config)
+  // RFC-167: a dynamic_workflow group launches into the GENERATE phase — the
+  // snapshot is a single built-in orchestrator node (swapped for the generated
+  // DAG on human confirm), and the config carries the `dw` state slot beside
+  // the runtime config (the lw `gate` free-slot pattern). Turn-engine modes
+  // keep the three-node chatroom host snapshot.
+  const isDynamic = group.mode === 'dynamic_workflow'
+  const snapshot = isDynamic
+    ? buildDynamicWorkflowGenerateSnapshot()
+    : buildWorkgroupHostSnapshot(config)
+  const configJson = JSON.stringify(isDynamic ? { ...config, dw: initialDwState() } : config)
 
   // Compose the full StartTask candidate and validate through StartTaskSchema
   // so repo-source cross-field rules stay single-sourced (schemas/task.ts).
@@ -220,7 +219,7 @@ export async function startWorkgroupTask(
     ...deps,
     workgroupLaunch: {
       workgroupId: group.id,
-      configJson: JSON.stringify(config),
+      configJson,
       snapshotJson: JSON.stringify(snapshot),
     },
   })

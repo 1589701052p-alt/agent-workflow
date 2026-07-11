@@ -179,6 +179,14 @@ import {
   type WorkgroupHostRunRequest,
   type WorkgroupHostRunResult,
 } from '@/services/workgroupRunner'
+import { runDynamicWorkflowGenerate } from '@/services/dynamicWorkflowRunner'
+import { DW_ORCHESTRATOR_NODE_ID } from '@/services/orchestratorAgent'
+import {
+  deriveWorkgroupDispatch,
+  parseDwState,
+  WorkgroupModeSchema,
+  type WorkgroupDispatch,
+} from '@agent-workflow/shared'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -494,15 +502,46 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
     // RFC-164: workgroup tasks are driven by the round engine, NEVER by the
     // DAG frontier (design §4). The host snapshot's nodes exist only as mint
     // anchors + clarify wiring; runScope/deriveFrontier must not see them.
+    // RFC-167: dynamic_workflow workgroups are the exception — their dispatch
+    // follows dw.phase (deriveWorkgroupDispatch, the shared single oracle):
+    // the GENERATE engine until the human-confirmed DAG is swapped into the
+    // snapshot (phase 'executing'), after which runScope executes it like any
+    // ordinary workflow task.
+    const wgDispatch: WorkgroupDispatch | null =
+      task.workgroupId !== null ? readWorkgroupDispatch(task.workgroupConfigJson) : null
+    if (
+      wgDispatch === 'dw-execute' &&
+      definition.nodes.some((n) => n.id === DW_ORCHESTRATOR_NODE_ID)
+    ) {
+      // Fail-fast invariant (design §3): phase='executing' promises the
+      // snapshot is the confirmed generated DAG. Running the generation host
+      // snapshot through runScope would dispatch the orchestrator node as a
+      // regular agent — refuse loudly instead.
+      await failTask(
+        db,
+        taskId,
+        'dw-phase-invariant',
+        `task is phase='executing' but its snapshot still contains the generation host node`,
+      )
+      return
+    }
     result =
-      task.workgroupId !== null
-        ? await runWorkgroupEngine({
-            db,
-            taskId,
-            log,
-            ...(opts.signal ? { signal: opts.signal } : {}),
-            hooks: buildWorkgroupHooks(state),
-          })
+      task.workgroupId !== null && wgDispatch !== 'dw-execute'
+        ? wgDispatch === 'dw-generate'
+          ? await runDynamicWorkflowGenerate({
+              db,
+              taskId,
+              log,
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              hooks: buildWorkgroupHooks(state),
+            })
+          : await runWorkgroupEngine({
+              db,
+              taskId,
+              log,
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              hooks: buildWorkgroupHooks(state),
+            })
         : await runScope(state, {
             scopeIds: topLevelIds,
             iteration: 0,
@@ -603,6 +642,28 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
   }
 }
 
+/**
+ * RFC-167 — extract (mode, dw.phase) from a workgroup task's config JSON and
+ * derive which engine drives it. Defensive on shape: an unreadable config or
+ * an unknown mode routes to the turn engine, which fails with its own precise
+ * "config missing or invalid" diagnostics (the pre-167 behavior for corrupt
+ * config). zod-parsed, no casts.
+ */
+function readWorkgroupDispatch(configJson: string | null): WorkgroupDispatch {
+  if (configJson === null) return 'turn-engine'
+  let raw: unknown
+  try {
+    raw = JSON.parse(configJson)
+  } catch {
+    return 'turn-engine'
+  }
+  if (typeof raw !== 'object' || raw === null) return 'turn-engine'
+  const rec = raw as Record<string, unknown>
+  const mode = WorkgroupModeSchema.safeParse(rec.mode)
+  if (!mode.success) return 'turn-engine'
+  return deriveWorkgroupDispatch(mode.data, parseDwState(rec.dw)?.phase ?? null)
+}
+
 // -----------------------------------------------------------------------------
 // RFC-164 — workgroup engine integration. The engine (workgroupRunner.ts) owns
 // orchestration; this hook owns the MECHANICS of one host-node run, copied
@@ -680,7 +741,9 @@ export function buildWorkgroupHooks(state: SchedulerState): WorkgroupEngineHooks
           })),
         },
         promptTemplate: req.promptTemplate,
-        workgroupProtocolBlock: req.workgroupProtocolBlock,
+        ...(req.workgroupProtocolBlock !== undefined
+          ? { workgroupProtocolBlock: req.workgroupProtocolBlock }
+          : {}),
         ...(opts.defaultPerNodeTimeoutMs !== undefined
           ? { timeoutMs: opts.defaultPerNodeTimeoutMs }
           : {}),

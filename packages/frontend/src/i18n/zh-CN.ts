@@ -3850,7 +3850,7 @@ export const zhCN: Resources = {
     modeHintDynamicWorkflow:
       '内置 agent 根据你的目标把成员编排成一条 workflow，你确认后顺序执行。无聊天室——成员即可编排的 agent 池。',
     dynamicModeNotice:
-      '动态工作流没有回合制聊天室，故三个协作开关、最大回合、完成确认门均不适用。下方成员即可编排的 agent 池。启动能力将在后续变更中支持。',
+      '动态工作流没有回合制聊天室，故三个协作开关、最大回合、完成确认门均不适用。下方成员即可编排的 agent 池。',
     readiness: {
       noAgentMember: '还没有 agent 成员，无法启动。',
       leaderMissing: 'Leader-Worker 模式需要指定一名 agent 成员为 leader。',
