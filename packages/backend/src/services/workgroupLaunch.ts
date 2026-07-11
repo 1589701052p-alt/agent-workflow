@@ -158,6 +158,18 @@ export async function startWorkgroupTask(
     throw new NotFoundError('workgroup-not-found', `workgroup '${workgroupName}' not found`)
   }
 
+  // RFC-167 PR-1 intermediate state: dynamic_workflow groups SAVE + configure
+  // fine (mode is selectable, members are the pool), but the
+  // generate→confirm→execute engine lands in PR-2. Refuse to launch until then
+  // rather than fall through to the leader_worker/free_collab turn engine, which
+  // would mis-run the group. Same pattern as RFC-164 PR-6's staged guard.
+  if (group.mode === 'dynamic_workflow') {
+    throw new ValidationError(
+      'workgroup-dynamic-not-implemented',
+      'launching a dynamic_workflow workgroup is not yet supported (RFC-167 PR-2)',
+    )
+  }
+
   const readiness = workgroupLaunchReadiness(group)
   if (!readiness.ready) {
     throw new ValidationError('workgroup-not-ready', 'workgroup is not launch-ready', {

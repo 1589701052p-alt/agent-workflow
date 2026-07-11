@@ -427,6 +427,17 @@ describe('WorkgroupForm — free_collab switch gating', () => {
     expect(screen.queryByTestId('workgroup-fc-switches-notice')).toBeNull()
   })
 
+  // RFC-167: dynamic_workflow has no chatroom — the switches / maxRounds /
+  // completion gate section is replaced by a notice; members are the pool.
+  test('dynamic_workflow hides the switches section and shows the notice', () => {
+    render(<Harness />)
+    expect(switchInput(/Share outputs/)).toBeTruthy() // present in leader_worker
+    fireEvent.click(screen.getByRole('radio', { name: 'Dynamic workflow' }))
+    expect(screen.queryByRole('checkbox', { name: /Share outputs/ })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /Completion gate/ })).toBeNull()
+    expect(screen.getByTestId('workgroup-dynamic-notice')).toBeTruthy()
+  })
+
   test('completion gate switch stays editable in fc mode', () => {
     const draft = baseDraft()
     draft.mode = 'free_collab'

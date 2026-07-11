@@ -993,6 +993,7 @@ export interface Resources {
     colUpdated: string
     modeLeaderWorker: string
     modeFreeCollab: string
+    modeDynamicWorkflow: string
     deleteTitle: string
     deleteBody: string
     newTitle: string
@@ -1012,6 +1013,8 @@ export interface Resources {
     fieldMode: string
     modeHintLeaderWorker: string
     modeHintFreeCollab: string
+    modeHintDynamicWorkflow: string
+    dynamicModeNotice: string
     // Launch-readiness banner (shared workgroupLaunchReadiness reasons).
     readiness: {
       noAgentMember: string
@@ -3818,6 +3821,7 @@ export const zhCN: Resources = {
     colUpdated: '更新时间',
     modeLeaderWorker: 'Leader-Worker',
     modeFreeCollab: '自由协作',
+    modeDynamicWorkflow: '动态工作流',
     deleteTitle: '删除工作组',
     deleteBody: '确认删除工作组「{{name}}」？已启动的任务保留启动时的配置快照，不受影响。',
     newTitle: '新建工作组',
@@ -3837,6 +3841,10 @@ export const zhCN: Resources = {
     fieldMode: '模式',
     modeHintLeaderWorker: 'Leader 逐轮派活给 worker，启动前需指定一名 agent 成员为 leader。',
     modeHintFreeCollab: '无 leader 的自由协作，三个协作开关强制全开。',
+    modeHintDynamicWorkflow:
+      '内置 agent 根据你的目标把成员编排成一条 workflow，你确认后顺序执行。无聊天室——成员即可编排的 agent 池。',
+    dynamicModeNotice:
+      '动态工作流没有回合制聊天室，故三个协作开关、最大回合、完成确认门均不适用。下方成员即可编排的 agent 池。启动能力将在后续变更中支持。',
     readiness: {
       noAgentMember: '还没有 agent 成员，无法启动。',
       leaderMissing: 'Leader-Worker 模式需要指定一名 agent 成员为 leader。',

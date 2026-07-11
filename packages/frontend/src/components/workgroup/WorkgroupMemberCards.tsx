@@ -154,15 +154,20 @@ export function WorkgroupMemberCards(props: WorkgroupMemberCardsProps) {
         >
           {t('workgroups.addAgentMember')}
         </button>
-        <button
-          type="button"
-          className="btn btn--sm"
-          disabled={props.applying}
-          onClick={() => setAddHumanOpen(true)}
-          data-testid="workgroup-add-human-member"
-        >
-          {t('workgroups.addHumanMember')}
-        </button>
+        {/* RFC-167: dynamic_workflow members are the agent-only orchestratable
+            pool — human members are rejected at save, so hide the add-human
+            button in that mode (leader_worker / free_collab keep it). */}
+        {props.group.mode !== 'dynamic_workflow' && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            disabled={props.applying}
+            onClick={() => setAddHumanOpen(true)}
+            data-testid="workgroup-add-human-member"
+          >
+            {t('workgroups.addHumanMember')}
+          </button>
+        )}
       </div>
 
       {/* Dialogs mount on open so every open starts from a fresh draft. */}

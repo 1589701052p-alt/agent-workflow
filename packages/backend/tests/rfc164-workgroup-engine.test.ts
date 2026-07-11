@@ -286,6 +286,28 @@ describe('RFC-164 engine — launch path', () => {
     expect(body.details?.reasons).toEqual(['leader-missing'])
   })
 
+  // RFC-167 PR-1: dynamic_workflow groups save + configure but are NOT
+  // launchable until the generate→confirm→execute engine (PR-2); the launch
+  // guard refuses rather than mis-running them on the turn engine.
+  test('dynamic_workflow launch → 422 workgroup-dynamic-not-implemented (RFC-167 PR-1 guard)', async () => {
+    await createWorkgroup(db, {
+      name: 'dyn',
+      description: '',
+      instructions: '',
+      mode: 'dynamic_workflow',
+      switches: { shareOutputs: true, directMessages: false, blackboard: false },
+      maxRounds: 5,
+      completionGate: false,
+      members: [{ memberType: 'agent', agentName: 'a1', displayName: 'a1', roleDesc: '' }],
+    })
+    const res = await req('/api/workgroups/dyn/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ name: 't', goal: 'g' }),
+    })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe('workgroup-dynamic-not-implemented')
+  })
+
   test('human-member groups launch past the gate (PR-5/T24 撤守卫回归锁)', async () => {
     const u = await createUser(db, {
       username: 'pm',

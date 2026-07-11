@@ -146,7 +146,9 @@ function WorkgroupsPage() {
                   <span className="chip chip--tight">
                     {w.mode === 'leader_worker'
                       ? t('workgroups.modeLeaderWorker')
-                      : t('workgroups.modeFreeCollab')}
+                      : w.mode === 'dynamic_workflow'
+                        ? t('workgroups.modeDynamicWorkflow')
+                        : t('workgroups.modeFreeCollab')}
                   </span>
                 </td>
                 <td className="data-table__nowrap">{w.members.length}</td>

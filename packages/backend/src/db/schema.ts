@@ -434,7 +434,7 @@ export const workgroups = sqliteTable('workgroups', {
   description: text('description').notNull().default(''),
   /** Group charter — injected for EVERY member each turn (RFC-164 决策 #18). */
   instructions: text('instructions').notNull().default(''),
-  mode: text('mode', { enum: ['leader_worker', 'free_collab'] })
+  mode: text('mode', { enum: ['leader_worker', 'free_collab', 'dynamic_workflow'] })
     .notNull()
     .default('leader_worker'),
   /** FK workgroup_members.id (soft — full-replace regenerates member rows).

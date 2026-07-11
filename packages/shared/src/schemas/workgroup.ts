@@ -24,7 +24,15 @@ export const WorkgroupNameSchema = z
   .max(128, 'name too long')
   .regex(WORKGROUP_NAME_RE, 'name must start with [a-z0-9] and contain only [a-z0-9_-]')
 
-export const WORKGROUP_MODES = ['leader_worker', 'free_collab'] as const
+// RFC-167: `dynamic_workflow` is the THIRD execution mode (user 2026-07-11
+// "工作组有三种执行模式：leader/自由/动态工作流"). Unlike the two turn-based
+// chatroom modes, a dynamic_workflow group's agent members are an orchestratable
+// POOL: launching runs a built-in orchestrator that reads their capability cards
+// + a goal, emits a workflow DAG, a human confirms it, then the ordinary engine
+// executes it. Human members / leader / the three switches / maxRounds do not
+// apply to this mode (mode-conditional, same shape as free_collab's switch
+// overrides). The generate→confirm→execute engine lands in RFC-167 PR-2.
+export const WORKGROUP_MODES = ['leader_worker', 'free_collab', 'dynamic_workflow'] as const
 export const WorkgroupModeSchema = z.enum(WORKGROUP_MODES)
 export type WorkgroupMode = z.infer<typeof WorkgroupModeSchema>
 
@@ -161,6 +169,17 @@ function validateGroupShape(
   const names = g.members.map((m) => m.displayName)
   if (new Set(names).size !== names.length) {
     ctx.addIssue({ code: 'custom', message: 'member displayName must be unique within the group' })
+  }
+  // RFC-167: a dynamic_workflow group's members are the orchestratable AGENT
+  // pool — human members have no place in the generate→confirm→execute model
+  // (no chatroom, no turns). Reject them at save time (a clear modeling error,
+  // not a lenient launch-time gate); an empty pool is still SAVE-valid (quick
+  // create) and only rejected at launch via workgroupLaunchReadiness.
+  if (g.mode === 'dynamic_workflow' && g.members.some((m) => m.memberType === 'human')) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'dynamic_workflow groups may only have agent members (the orchestratable pool)',
+    })
   }
   // A designated leader (when provided) must resolve to an agent member.
   // Leaderless leader_worker groups are SAVE-valid (quick create) and only

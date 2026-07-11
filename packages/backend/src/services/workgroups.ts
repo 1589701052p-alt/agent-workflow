@@ -27,6 +27,7 @@ import type {
   UpdateWorkgroup,
   Workgroup,
   WorkgroupMember,
+  WorkgroupMode,
 } from '@agent-workflow/shared'
 import { and, eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
@@ -284,9 +285,10 @@ function buildMemberValues(
 }
 
 function resolveLeaderMemberId(
-  input: { mode: 'leader_worker' | 'free_collab'; leaderDisplayName?: string | undefined },
+  input: { mode: WorkgroupMode; leaderDisplayName?: string | undefined },
   memberValues: ReadonlyArray<typeof workgroupMembers.$inferInsert>,
 ): string | null {
+  // Only leader_worker has a leader; free_collab AND dynamic_workflow return null.
   if (input.mode !== 'leader_worker') return null
   // 决策 #21 quick create: a leaderless leader_worker group is SAVE-valid;
   // launch enforces readiness via workgroupLaunchReadiness.

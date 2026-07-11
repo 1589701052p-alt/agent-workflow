@@ -30,6 +30,16 @@ export function WorkgroupForm({ value, onChange, errors }: WorkgroupFormProps) {
   }
 
   const fc = value.mode === 'free_collab'
+  // RFC-167: dynamic_workflow has no chatroom/turns — the three switches,
+  // maxRounds and the completion gate don't apply (the confirm gate is built
+  // into the generate→confirm→execute flow). Members are the orchestratable pool.
+  const dyn = value.mode === 'dynamic_workflow'
+
+  const modeHint = dyn
+    ? t('workgroups.modeHintDynamicWorkflow')
+    : fc
+      ? t('workgroups.modeHintFreeCollab')
+      : t('workgroups.modeHintLeaderWorker')
 
   return (
     <div className="workgroup-form">
@@ -61,11 +71,7 @@ export function WorkgroupForm({ value, onChange, errors }: WorkgroupFormProps) {
       <FormSection title={t('workgroups.sectionMode')}>
         {/* `group` — Segmented is a composite control; the default <label>
             wrapper would hijack each option's accessible name. */}
-        <Field
-          label={t('workgroups.fieldMode')}
-          group
-          hint={fc ? t('workgroups.modeHintFreeCollab') : t('workgroups.modeHintLeaderWorker')}
-        >
+        <Field label={t('workgroups.fieldMode')} group hint={modeHint}>
           <Segmented<WorkgroupMode>
             value={value.mode}
             onChange={(v) => set('mode', v)}
@@ -74,62 +80,71 @@ export function WorkgroupForm({ value, onChange, errors }: WorkgroupFormProps) {
             options={[
               { value: 'leader_worker', label: t('workgroups.modeLeaderWorker') },
               { value: 'free_collab', label: t('workgroups.modeFreeCollab') },
+              { value: 'dynamic_workflow', label: t('workgroups.modeDynamicWorkflow') },
             ]}
           />
         </Field>
       </FormSection>
 
-      <FormSection title={t('workgroups.sectionSwitches')}>
-        {fc && (
-          <p className="form-field__hint" data-testid="workgroup-fc-switches-notice">
-            {t('workgroups.fcSwitchesNotice')}
+      {dyn ? (
+        <FormSection title={t('workgroups.sectionSwitches')}>
+          <p className="form-field__hint" data-testid="workgroup-dynamic-notice">
+            {t('workgroups.dynamicModeNotice')}
           </p>
-        )}
-        <Switch
-          checked={fc ? true : value.switches.shareOutputs}
-          disabled={fc}
-          onChange={(v) => set('switches', { ...value.switches, shareOutputs: v })}
-          label={t('workgroups.fieldShareOutputs')}
-          hint={t('workgroups.fieldShareOutputsHint')}
-        />
-        <Switch
-          checked={fc ? true : value.switches.directMessages}
-          disabled={fc}
-          onChange={(v) => set('switches', { ...value.switches, directMessages: v })}
-          label={t('workgroups.fieldDirectMessages')}
-          hint={t('workgroups.fieldDirectMessagesHint')}
-        />
-        <Switch
-          checked={fc ? true : value.switches.blackboard}
-          disabled={fc}
-          onChange={(v) => set('switches', { ...value.switches, blackboard: v })}
-          label={t('workgroups.fieldBlackboard')}
-          hint={t('workgroups.fieldBlackboardHint')}
-        />
-
-        <Field
-          label={t('workgroups.fieldMaxRounds')}
-          hint={t('workgroups.fieldMaxRoundsHint')}
-          error={errors.maxRounds !== undefined ? t(errors.maxRounds) : undefined}
-        >
-          <NumberInput
-            value={value.maxRounds}
-            onChange={(v) => set('maxRounds', v)}
-            min={1}
-            max={WORKGROUP_MAX_ROUNDS_LIMIT}
-            step={1}
-            placeholder="20"
-            data-testid="workgroup-field-max-rounds"
+        </FormSection>
+      ) : (
+        <FormSection title={t('workgroups.sectionSwitches')}>
+          {fc && (
+            <p className="form-field__hint" data-testid="workgroup-fc-switches-notice">
+              {t('workgroups.fcSwitchesNotice')}
+            </p>
+          )}
+          <Switch
+            checked={fc ? true : value.switches.shareOutputs}
+            disabled={fc}
+            onChange={(v) => set('switches', { ...value.switches, shareOutputs: v })}
+            label={t('workgroups.fieldShareOutputs')}
+            hint={t('workgroups.fieldShareOutputsHint')}
           />
-        </Field>
+          <Switch
+            checked={fc ? true : value.switches.directMessages}
+            disabled={fc}
+            onChange={(v) => set('switches', { ...value.switches, directMessages: v })}
+            label={t('workgroups.fieldDirectMessages')}
+            hint={t('workgroups.fieldDirectMessagesHint')}
+          />
+          <Switch
+            checked={fc ? true : value.switches.blackboard}
+            disabled={fc}
+            onChange={(v) => set('switches', { ...value.switches, blackboard: v })}
+            label={t('workgroups.fieldBlackboard')}
+            hint={t('workgroups.fieldBlackboardHint')}
+          />
 
-        <Switch
-          checked={value.completionGate}
-          onChange={(v) => set('completionGate', v)}
-          label={t('workgroups.fieldCompletionGate')}
-          hint={t('workgroups.fieldCompletionGateHint')}
-        />
-      </FormSection>
+          <Field
+            label={t('workgroups.fieldMaxRounds')}
+            hint={t('workgroups.fieldMaxRoundsHint')}
+            error={errors.maxRounds !== undefined ? t(errors.maxRounds) : undefined}
+          >
+            <NumberInput
+              value={value.maxRounds}
+              onChange={(v) => set('maxRounds', v)}
+              min={1}
+              max={WORKGROUP_MAX_ROUNDS_LIMIT}
+              step={1}
+              placeholder="20"
+              data-testid="workgroup-field-max-rounds"
+            />
+          </Field>
+
+          <Switch
+            checked={value.completionGate}
+            onChange={(v) => set('completionGate', v)}
+            label={t('workgroups.fieldCompletionGate')}
+            hint={t('workgroups.fieldCompletionGateHint')}
+          />
+        </FormSection>
+      )}
     </div>
   )
 }
