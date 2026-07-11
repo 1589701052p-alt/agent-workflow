@@ -30,11 +30,15 @@ leader 共享清单），都是**回合制、聊天室主视图**。它们适合
 
 ## 目标
 
-1. **动态 workflow 空间资源**（决策：独立资源，非工作组第三 mode）：新资源
-   `dynamic_workflow_spaces`——名称 + 描述 + **agent 池**（选一组可编排的 agent，每个可在生成的
-   workflow 里出现多次）+ 编排 agent 配置。进 RFC-099 ACL（第七类资源）。
+1. **动态 workflow = 工作组第三种执行模式**（决策修订 2026-07-11，用户「工作组有三种执行模式：
+   leader 模式、自由模式、动态工作流模式」）：工作组 `mode` 枚举加 `dynamic_workflow`，与
+   `leader_worker` / `free_collab` 并列。**不新增资源**——复用 RFC-164 工作组资源/成员/ACL/启动
+   基建。该模式下：**agent 成员即可编排的 agent 池**（每个可在生成的 workflow 里出现多次；human
+   成员 / leader / 三开关 / maxRounds 等在此模式不适用，按 mode 条件收敛，同 free_collab 已有先例）。
+   〔**原 v1 稿曾拍「独立 `dynamic_workflow_spaces` 资源、第七类 ACL」——已被本决策推翻并回退。**〕
 2. **内置编排 agent**（`buildOrchestratorAgent`，照 buildMergeAgent 先例，不入 agents 表）：
-   - 输入：人给的**目标文本**（决策）+ 空间 agent 池的能力卡（RFC-166 `renderRosterCapabilityCards`）。
+   - 输入：**工作组章程（instructions，固定背景）+ 启动时填的本次目标**拼接（决策修订：两者结合）
+     + 工作组 agent 成员的能力卡（RFC-166 `renderRosterCapabilityCards`）。
    - 产出：一个 `WorkflowDefinition` JSON（`agent-single` 节点链 + 连线，可分支/并行；
      **v1 不允许 wrapper（loop/fanout/git）和 review 节点**——纯约束的 agent 节点链，决策）。
    - 每个节点：从池选 `agentName` + 生成 `promptTemplate`（给那个 agent 注入的用户提示词）+
@@ -62,7 +66,9 @@ leader 共享清单），都是**回合制、聊天室主视图**。它们适合
 - **不做 agent 输入端口强校验编排**：编排靠 RFC-166 能力卡（inputs/outputs kind）确定性匹配
   + description/prompt 语义推断 + `validateWorkflowDef` 兜底 + 人确认，不要求池内 agent 都声明
   inputs。
-- **不改工作组**：动态 workflow 是独立资源，不是工作组 mode（决策）；工作组三种形态不含它。
+- ~~**不改工作组**：动态 workflow 是独立资源，不是工作组 mode。~~ **（2026-07-11 推翻）** 改为
+  工作组第三种模式 `dynamic_workflow`；工作组三种形态 = leader_worker / free_collab /
+  dynamic_workflow。复用工作组成员作 agent 池、复用工作组启动/ACL/资源基建。
 - **不做多轮生成对话**：驳回重生是「带意见重跑编排 agent」，不是聊天式往返。
 
 ## 用户故事

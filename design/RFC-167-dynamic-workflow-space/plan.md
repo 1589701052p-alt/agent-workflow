@@ -1,9 +1,29 @@
 # RFC-167 plan——任务分解与 PR 拆分
 
-> 规模：子系统级（新资源 + 内置编排 agent + 三阶段引擎 + 前端）。前置 RFC-166 落地。
-> 4 PR，每个独立过全量门禁。改动即带测。
+> 规模：子系统级（工作组新 mode + 内置编排 agent + 三阶段引擎 + 前端）。前置 RFC-166 + RFC-164。
+> 每 PR 独立过全量门禁。改动即带测。
 
-## PR-1 空间资源 + shared 生成协议（自洽，未接引擎）
+> **⚠️ 架构修订 2026-07-11——动态 workflow 改为工作组第三 mode（详见 design.md 修订头）。
+> 下方旧「独立资源」PR 结构作废，以本修订 PR 结构为准：**
+>
+> - **PR-0 回退独立资源**（先落）：保留 `shared/dynamicWorkflow.ts`（生成协议 + `dwGeneratedToWorkflowDef`
+>   + `DW_VALIDATION_CODES`，reused）；删 `DynamicWorkflowSpace` schema / `services|routes/dynamicWorkflowSpaces.ts`
+>   / 前端 `dynamic-workflow-spaces*` + `dynamic-workflow-space-form` / ACL 第七类（shared 枚举 +
+>   resourceGrants 列枚举 + `ACL_TABLES`）/ nav + i18n + ResourceNameCell 第七类 / 契约注册表 6 端点；
+>   **migration 0088 表**走 forward DROP 迁移（已在 origin，append-only 清理，不改历史）。测试同删。
+> - **PR-1 工作组 dynamic_workflow mode（资源面）**：`WORKGROUP_MODES` 加 `dynamic_workflow`；
+>   workgroup schema/validator 按 mode 收敛（dynamic：仅 agent 成员、无 leader/开关/maxRounds 约束）；
+>   前端工作组建组 mode 选择 + 详情页 dynamic 区（成员=池 + RFC-166 能力卡预览已在 WorkgroupMemberCards）。
+> - **PR-2 编排 agent + 生成引擎 + 确认门**：`buildOrchestratorAgent`（读成员能力卡 + 章程+启动目标）；
+>   工作组 dynamic 启动合成生成阶段快照 + `runTask` 按 `workgroup.mode` 分 dynamic 分支 → 生成引擎
+>   （mint orchestrator 借壳 run → 解析 → `validateWorkflowDef` + `validateDynamicWorkflowDef` v1 约束 →
+>   park awaiting_review + holder run）；确认门（approve→swap snapshot+执行 / reject→重生）。
+> - **PR-3 执行阶段 + 确认门前端 + 收尾**：phase=executing 走 runScope；工作组任务详情 dynamic 的
+>   只读画布预览 + 确认/驳回 + 执行上色；全 AC 对照 + 门禁 + Codex。
+>
+> 下方旧 PR-1..4 段保留作历史。
+
+## PR-1 空间资源 + shared 生成协议（自洽，未接引擎）〔作废——见上修订〕
 
 - **T1** shared：`DynamicWorkflowSpace`/Create/Update schema；`DwGeneratedWorkflowSchema`
   （orchestrator 输出端口载荷）+ `dwGeneratedToWorkflowDef` 转换纯函数（节点→agent-single、

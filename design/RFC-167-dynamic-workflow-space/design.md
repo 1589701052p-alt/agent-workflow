@@ -1,7 +1,24 @@
-# RFC-167 design——动态 Workflow 空间技术设计
+# RFC-167 design——动态 Workflow（工作组第三种执行模式）技术设计
 
-> 配套 proposal.md（拍板 9 条）。前置 RFC-166。所有对现有代码的断言经调研核实，
-> file:line 基于 2026-07-10 工作树。
+> 配套 proposal.md。前置 RFC-166 + RFC-164（工作组）。file:line 基于 2026-07-10 工作树。
+>
+> **⚠️ 架构修订 2026-07-11（用户「工作组有三种执行模式：leader/自由/动态工作流」）**：
+> 动态 workflow **不再是独立第七类资源**，而是**工作组的第三种 `mode`**（`dynamic_workflow`，
+> 与 `leader_worker`/`free_collab` 并列）。下文 §1「数据模型」的 `dynamic_workflow_spaces` 表 /
+> 第七类 ACL / 独立 CRUD 全部**作废**——改用 RFC-164 工作组资源（`workgroups` + `workgroup_members`
+> + `workgroup_config_json`）承载：
+> - **agent 池 = 工作组 agent 成员**（每个可在生成 workflow 里多次；human/leader/开关/maxRounds
+>   在此模式不适用，按 mode 条件收敛，同 free_collab 先例）。
+> - **目标 = 工作组 instructions（章程，固定）+ 启动时本次目标**拼接喂 orchestrator。
+> - **启动/ACL/资源基建全复用工作组**；`runTask` 分流按 `workgroup.mode`（新增 dynamic 分支），
+>   不再有独立 dwspace 分流。
+> - **不变（原样复用）**：§2 编排 agent、§4 生成校验、§5 envelope 协议、`dynamicWorkflow.ts`
+>   生成协议 + `dwGeneratedToWorkflowDef` 转换、§3 生成→确认→执行三阶段引擎逻辑。
+> - **前端**（§6）：动态模式的 agent 池 + 目标编辑并入**工作组详情页**（mode-specific 区），
+>   不再有独立 `/dynamic-workflow-spaces` 页。
+>
+> 已实现的独立资源 PR-1（T1 schema〔留生成协议、删 space schema〕/T2 表+迁移/T3 CRUD+路由/
+> T4 前端）**回退**；PR 结构见修订后的 plan.md。下文旧「独立资源」段保留作历史，以上修订头为准。
 
 ## 0. 总览与关键抉择
 
