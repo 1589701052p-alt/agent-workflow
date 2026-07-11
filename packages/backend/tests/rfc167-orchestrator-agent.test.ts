@@ -10,8 +10,11 @@ import { describe, expect, test } from 'bun:test'
 import type { CapabilitySource, WorkflowDefinition } from '@agent-workflow/shared'
 import { DW_VALIDATION_CODES, dwGeneratedToWorkflowDef } from '@agent-workflow/shared'
 import {
+  DW_ORCHESTRATOR_NODE_ID,
+  DW_PHASES,
   ORCHESTRATOR_AGENT_NAME,
   ORCHESTRATOR_WORKFLOW_PORT,
+  buildDynamicWorkflowGenerateSnapshot,
   buildOrchestratorAgent,
   buildOrchestratorPrompt,
   validateDynamicWorkflowDef,
@@ -28,6 +31,21 @@ describe('buildOrchestratorAgent', () => {
     // v1 constraint stated in the protocol
     expect(a.bodyMd).toContain('agent nodes only')
     expect(a.bodyMd).toContain(`<port name="${ORCHESTRATOR_WORKFLOW_PORT}">`)
+  })
+})
+
+describe('buildDynamicWorkflowGenerateSnapshot + phases', () => {
+  test('generation snapshot is a single orchestrator agent-single node', () => {
+    const snap = buildDynamicWorkflowGenerateSnapshot()
+    expect(snap.$schema_version).toBe(4)
+    expect(snap.nodes).toEqual([
+      { id: DW_ORCHESTRATOR_NODE_ID, kind: 'agent-single', agentName: ORCHESTRATOR_AGENT_NAME },
+    ])
+    expect(snap.edges).toEqual([])
+  })
+
+  test('DW_PHASES lists the four lifecycle phases', () => {
+    expect(DW_PHASES).toEqual(['generating', 'awaiting_confirm', 'executing', 'rejected'])
   })
 })
 

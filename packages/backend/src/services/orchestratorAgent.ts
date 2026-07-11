@@ -26,6 +26,44 @@ import { DW_VALIDATION_CODES, renderRosterCapabilityCards } from '@agent-workflo
 export const ORCHESTRATOR_AGENT_NAME = 'aw-workflow-orchestrator'
 /** The single output port the orchestrator declares — carries the workflow JSON. */
 export const ORCHESTRATOR_WORKFLOW_PORT = 'workflow'
+/** Node id of the orchestrator node in the synthesized generation-phase snapshot. */
+export const DW_ORCHESTRATOR_NODE_ID = '__dw_orchestrator__'
+
+/**
+ * The lifecycle phases of a dynamic_workflow workgroup task (stored in the
+ * task's workgroup_config_json under `dwPhase`):
+ *   - generating:      the orchestrator run is producing / being validated.
+ *   - awaiting_confirm: a valid workflow was generated; parked for human review.
+ *   - executing:        confirmed; the generated DAG was swapped in and runs.
+ *   - rejected:         a human rejected; regenerate with feedback.
+ * The task-level status still moves through the ordinary running / awaiting_review
+ * / done states; dwPhase is the finer dynamic-mode sub-state (design §8).
+ */
+export const DW_PHASES = ['generating', 'awaiting_confirm', 'executing', 'rejected'] as const
+export type DynamicWorkflowPhase = (typeof DW_PHASES)[number]
+
+/**
+ * Synthesize the generation-phase host snapshot: a single agent-single node
+ * running the built-in orchestrator (mirrors buildWorkgroupHostSnapshot). It
+ * satisfies tasks.workflow_snapshot NOT NULL; the scheduler mints the
+ * orchestrator run against this node, then — on human confirm — swaps in the
+ * generated DAG (resumeKick extra) and runs it through runScope. Pure.
+ */
+export function buildDynamicWorkflowGenerateSnapshot(): {
+  $schema_version: number
+  inputs: unknown[]
+  nodes: unknown[]
+  edges: unknown[]
+} {
+  return {
+    $schema_version: 4,
+    inputs: [],
+    nodes: [
+      { id: DW_ORCHESTRATOR_NODE_ID, kind: 'agent-single', agentName: ORCHESTRATOR_AGENT_NAME },
+    ],
+    edges: [],
+  }
+}
 
 /**
  * The framework's built-in dynamic-workflow orchestrator. Not persisted to the
