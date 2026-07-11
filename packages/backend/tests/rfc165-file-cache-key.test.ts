@@ -55,8 +55,14 @@ async function seedRepo(name: string): Promise<string> {
 describe('RFC-165 T4 — file cache key v2 + verified lazy re-key', () => {
   beforeEach(() => {
     db = createInMemoryDb(MIGRATIONS)
-    tmp = mkdtempSync(join(tmpdir(), 'aw-rfc165-key-'))
-    appHome = mkdtempSync(join(tmpdir(), 'aw-rfc165-keyhome-'))
+    // The fixture prefix MUST contain an uppercase letter: when the repo path
+    // happens to be all-lowercase (a ~4% all-[a-z0-9] mkdtemp suffix draw on
+    // /tmp), the NEW canonicalization equals the LEGACY one for a `.git`-less
+    // name, the two hashes collapse, and K2's distinct-hash premise / K3's
+    // downgraded-row setup silently break (2026-07-11 CI: K2 then K3 red on
+    // ubuntu, unreproducible locally). Uppercase in the path pins new ≠ legacy.
+    tmp = mkdtempSync(join(tmpdir(), 'aw-RFC165-Key-'))
+    appHome = mkdtempSync(join(tmpdir(), 'aw-RFC165-KeyHome-'))
   })
 
   test('K1 new canonicalization preserves case + .git; legacy folds both', () => {
