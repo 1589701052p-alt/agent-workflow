@@ -13,7 +13,6 @@ export interface Resources {
     plugins: string
     workflows: string
     workgroups: string
-    dynamicWorkflowSpaces: string
     tasks: string
     scheduled: string
     reviews: string
@@ -1863,35 +1862,6 @@ export interface Resources {
     required: string
     noneDeclared: string
   }
-  dynamicWorkflowSpaces: {
-    title: string
-    newButton: string
-    emptyList: string
-    colName: string
-    colPool: string
-    colDescription: string
-    colUpdated: string
-    deleteTitle: string
-    deleteBody: string
-    newTitle: string
-    createButton: string
-    fieldName: string
-    fieldNameHint: string
-    fieldDescription: string
-    loading: string
-    sectionBasics: string
-    sectionPool: string
-    poolHint: string
-    poolAddPlaceholder: string
-    poolAddButton: string
-    poolEmpty: string
-    poolRemove: string
-    poolAgentMissing: string
-    errors: {
-      nameRequired: string
-      nameInvalid: string
-    }
-  }
   agentForm: {
     /** RFC-155 — form-section titles (visible + collapsible groups). */
     sectionBasics: string
@@ -2845,7 +2815,6 @@ export const zhCN: Resources = {
     plugins: '插件',
     workflows: '工作流',
     workgroups: '工作组',
-    dynamicWorkflowSpaces: '动态空间',
     tasks: '任务',
     scheduled: '定时任务',
     reviews: '评审',
@@ -4419,7 +4388,7 @@ export const zhCN: Resources = {
     stepConfirm: '确认',
     kindLabel: '执行方式',
     kindWorkflow: '工作流',
-    kindAgent: '单个 Agent',
+    kindAgent: 'Agent',
     kindWorkgroup: '工作组',
     kindHintWorkflow: '按工作流定义的输入启动一次编排任务。',
     kindHintAgent: '把任务描述直接交给一个 Agent 执行，支持反问。',
@@ -4702,35 +4671,6 @@ export const zhCN: Resources = {
     prompt: '提示词：',
     required: '必填',
     noneDeclared: '（未声明）',
-  },
-  dynamicWorkflowSpaces: {
-    title: '动态 Workflow 空间',
-    newButton: '新建空间',
-    emptyList: '还没有动态 Workflow 空间。创建一个来编排 agent 池。',
-    colName: '名称',
-    colPool: '池',
-    colDescription: '描述',
-    colUpdated: '更新时间',
-    deleteTitle: '删除空间',
-    deleteBody: '删除动态 Workflow 空间「{{name}}」？已启动的任务保留各自快照。',
-    newTitle: '新建动态 Workflow 空间',
-    createButton: '创建',
-    fieldName: '名称',
-    fieldNameHint: '小写字母、数字、短横线/下划线；用于 URL。',
-    fieldDescription: '描述',
-    loading: '加载空间中…',
-    sectionBasics: '基本信息',
-    sectionPool: 'Agent 池',
-    poolHint: '内置编排 agent 可编排的 agent 集合。每个可使用任意多次；非空要求在启动时校验。',
-    poolAddPlaceholder: 'agent 名',
-    poolAddButton: '添加',
-    poolEmpty: '池中还没有 agent。',
-    poolRemove: '移除',
-    poolAgentMissing: 'agent 不存在（可能已被删除）——启动时解析',
-    errors: {
-      nameRequired: '名称必填',
-      nameInvalid: '小写字母 + 数字 + 短横线/下划线，≤128 字符',
-    },
   },
   agentForm: {
     sectionBasics: '基本信息',

@@ -194,7 +194,10 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     const calls = installFetch()
     await renderWizard('/tasks/new')
 
-    // Step 1 — Next gated until an object is picked; builtin workflows hidden (W8).
+    // Step 1 — the default kind is now AGENT (用户 2026-07-11); switch to
+    // workflow first. Next gated until an object is picked; builtin
+    // workflows hidden (W8).
+    fireEvent.click(await screen.findByTestId('wizard-kind-workflow'))
     expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(await screen.findByTestId('wizard-object-workflow'))
     const listbox = await screen.findByRole('listbox')
@@ -203,7 +206,9 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(false)
     next()
 
-    // Step 2 — remote by default; Next gated until the URL parses (W4).
+    // Step 2 — scratch is the default space now; pick remote, then Next is
+    // gated until the URL parses (W4).
+    fireEvent.click(await screen.findByTestId('wizard-space-remote'))
     expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(true)
     const urlInput = await screen.findByTestId('repo-source-url-0')
     fireEvent.change(urlInput, { target: { value: 'https://github.com/o/r.git' } })
@@ -290,6 +295,7 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     fireEvent.mouseDown(within(listbox).getByRole('option', { name: /core/ }))
     next()
 
+    fireEvent.click(await screen.findByTestId('wizard-space-remote'))
     fireEvent.change(await screen.findByTestId('repo-source-url-0'), {
       target: { value: 'https://github.com/o/r.git' },
     })
@@ -409,6 +415,27 @@ describe('RFC-165 T12 — /tasks/new wizard', () => {
     expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByTestId('wizard-max-tokens'), { target: { value: '2000' } })
     expect((screen.getByTestId('stepper-next') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  test('W12: defaults — agent kind pre-selected, scratch space, clarify switch outside the advanced fold (用户 2026-07-11)', async () => {
+    installFetch()
+    await renderWizard('/tasks/new')
+
+    // Agent is the default kind and the first option.
+    const agentSeg = await screen.findByTestId('wizard-kind-agent')
+    expect(agentSeg.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(await screen.findByTestId('wizard-object-agent'))
+    fireEvent.mouseDown(await screen.findByRole('option', { name: /auditor/ }))
+    next()
+
+    // Scratch is the default space.
+    expect(await screen.findByTestId('wizard-scratch-hint')).toBeTruthy()
+    next()
+
+    // The clarify switch renders in the main content block, NOT inside the
+    // advanced <details> fold.
+    const clarify = await screen.findByText(/允许反问|Allow follow-up questions/)
+    expect(clarify.closest('details')).toBeNull()
   })
 
   test('W10: a 422 workgroup-not-ready launch renders the friendly reason copy', async () => {

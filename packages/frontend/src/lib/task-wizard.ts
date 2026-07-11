@@ -288,14 +288,15 @@ export function saveAutoCommitPushPref(v: boolean): void {
   }
 }
 
-/** RFC-165 D9: the space step defaults to remote and remembers the last choice. */
+/** RFC-165 D9（用户 2026-07-11 修订）: the space step defaults to SCRATCH and
+ *  remembers the last choice (an explicit 'remote' pick survives reloads). */
 export const SPACE_KIND_LS_KEY = 'agent-workflow.wizard.spaceKind'
 export function loadSpaceKindPref(): 'remote' | 'scratch' {
-  if (typeof window === 'undefined') return 'remote'
+  if (typeof window === 'undefined') return 'scratch'
   try {
-    return window.localStorage.getItem(SPACE_KIND_LS_KEY) === 'scratch' ? 'scratch' : 'remote'
+    return window.localStorage.getItem(SPACE_KIND_LS_KEY) === 'remote' ? 'remote' : 'scratch'
   } catch {
-    return 'remote'
+    return 'scratch'
   }
 }
 export function saveSpaceKindPref(v: 'remote' | 'scratch'): void {

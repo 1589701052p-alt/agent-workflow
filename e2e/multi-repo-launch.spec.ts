@@ -225,6 +225,8 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     // with the workflow pre-picked (lands on Step 2 — workspace).
     await page.goto(`${d.baseUrl}/workflows/${wfId}/launch`)
 
+    // Scratch is the default space (用户 2026-07-11) — pick remote first.
+    await page.getByTestId('wizard-space-remote').click()
     // Default: 1 row, no `−` button.
     await expect(page.getByTestId('repo-source-row-0')).toBeVisible({ timeout: 10_000 })
     await expect(page.getByTestId('repo-source-remove-0')).toHaveCount(0)
@@ -281,6 +283,7 @@ test.describe('RFC-066 PR-C — multi-repo launch', () => {
     // RFC-165: redirects into the wizard, landing on Step 2 (workspace).
     await page.goto(`${d.baseUrl}/workflows/${wfId}/launch`)
 
+    await page.getByTestId('wizard-space-remote').click()
     await expect(page.getByTestId('repo-source-row-0')).toBeVisible({ timeout: 10_000 })
 
     // Add a second repo → banner should fire on the workspace step.

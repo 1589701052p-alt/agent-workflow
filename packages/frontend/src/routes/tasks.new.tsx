@@ -111,7 +111,7 @@ function TaskWizardPage() {
         : search.kind === 'workgroup'
           ? search.workgroup
           : undefined
-  const [kind, setKind] = useState<WizardKind>(search.kind ?? 'workflow')
+  const [kind, setKind] = useState<WizardKind>(search.kind ?? 'agent')
   const [workflowId, setWorkflowId] = useState(
     search.kind === 'workflow' ? (search.workflow ?? '') : '',
   )
@@ -608,8 +608,8 @@ function TaskWizardPage() {
                 ariaLabel={t('taskWizard.kindLabel')}
                 testidPrefix="wizard-kind"
                 options={[
-                  { value: 'workflow', label: t('taskWizard.kindWorkflow') },
                   { value: 'agent', label: t('taskWizard.kindAgent') },
+                  { value: 'workflow', label: t('taskWizard.kindWorkflow') },
                   { value: 'workgroup', label: t('taskWizard.kindWorkgroup') },
                 ]}
               />
@@ -713,19 +713,28 @@ function TaskWizardPage() {
             </Field>
 
             {kind === 'agent' && (
-              <Field
-                label={t('taskWizard.contentDescription')}
-                required
-                hint={t('taskWizard.contentDescriptionHint')}
-              >
-                <TextArea
-                  value={description}
-                  onChange={setDescription}
-                  rows={8}
-                  maxLength={65536}
-                  data-testid="wizard-description"
+              <>
+                <Field
+                  label={t('taskWizard.contentDescription')}
+                  required
+                  hint={t('taskWizard.contentDescriptionHint')}
+                >
+                  <TextArea
+                    value={description}
+                    onChange={setDescription}
+                    rows={8}
+                    maxLength={65536}
+                    data-testid="wizard-description"
+                  />
+                </Field>
+                {/* 用户 2026-07-11：反问开关是核心行为选择，不藏进高级折叠。 */}
+                <Switch
+                  checked={allowClarify}
+                  onChange={setAllowClarify}
+                  label={t('taskWizard.allowClarify')}
+                  hint={t('taskWizard.allowClarifyHint')}
                 />
-              </Field>
+              </>
             )}
 
             {kind === 'workgroup' && (
@@ -789,14 +798,6 @@ function TaskWizardPage() {
             <details className="launch-collapsible" data-testid="wizard-advanced">
               <summary>{t('taskWizard.advanced')}</summary>
               <div className="launch-collapsible__body">
-                {kind === 'agent' && (
-                  <Switch
-                    checked={allowClarify}
-                    onChange={setAllowClarify}
-                    label={t('taskWizard.allowClarify')}
-                    hint={t('taskWizard.allowClarifyHint')}
-                  />
-                )}
                 {actor.data !== null &&
                   actor.data !== undefined &&
                   actor.data.source !== 'daemon' && (

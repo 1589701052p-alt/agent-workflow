@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from 'vitest'
 import {
+  SPACE_KIND_LS_KEY,
   buildAgentStartBody,
   buildScheduledEnvelope,
   buildWorkflowStartBody,
@@ -270,5 +271,17 @@ describe('payloadToWizardSeed (editScheduled backfill)', () => {
   test('legacy path-only payload degrades to one blank URL row', () => {
     const seed = payloadToWizardSeed('workflow', { workflowId: 'wf1', name: 'T', repoPath: '/x' })
     expect(seed?.space).toEqual(defaultWizardSpace('remote'))
+  })
+})
+
+describe('loadSpaceKindPref — default SCRATCH with sticky remote opt-in (用户 2026-07-11)', () => {
+  test('unset preference defaults to scratch; explicit remote survives', async () => {
+    const { loadSpaceKindPref, saveSpaceKindPref } = await import('../src/lib/task-wizard')
+    window.localStorage.removeItem(SPACE_KIND_LS_KEY)
+    expect(loadSpaceKindPref()).toBe('scratch')
+    saveSpaceKindPref('remote')
+    expect(loadSpaceKindPref()).toBe('remote')
+    saveSpaceKindPref('scratch')
+    expect(loadSpaceKindPref()).toBe('scratch')
   })
 })
