@@ -144,6 +144,25 @@ describe('buildConfigUpdatePayload', () => {
     if (built.ok) expect(built.payload.leaderDisplayName).toBeUndefined()
   })
 
+  test('RFC-168 F3 — draft mode dynamic_workflow + stored human members yields a stable `mode` error key', () => {
+    const draft = workgroupToConfigDraft(STORED) // STORED includes a human row
+    draft.mode = 'dynamic_workflow'
+    const built = buildConfigUpdatePayload(draft, STORED)
+    expect(built.ok).toBe(false)
+    if (!built.ok) expect(built.errors.mode).toBe('workgroups.errors.dynamicNoHumanMembers')
+    // agent-only groups switch modes freely
+    const agentOnly: Workgroup = {
+      ...STORED,
+      leaderMemberId: null,
+      members: STORED.members.filter((m) => m.memberType === 'agent'),
+    }
+    const ok = buildConfigUpdatePayload(
+      { ...workgroupToConfigDraft(agentOnly), mode: 'dynamic_workflow' },
+      agentOnly,
+    )
+    expect(ok.ok).toBe(true)
+  })
+
   test.each([[0], [501], [2.5]])('maxRounds=%p is rejected', (maxRounds) => {
     const draft = workgroupToConfigDraft(STORED)
     draft.maxRounds = maxRounds

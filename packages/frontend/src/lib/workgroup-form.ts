@@ -102,6 +102,13 @@ export function buildConfigUpdatePayload(
   if (draft.maxRounds !== undefined && !isValidMaxRounds(draft.maxRounds)) {
     errors.maxRounds = 'workgroups.errors.maxRoundsInvalid'
   }
+  // RFC-168 F3 — mode-transition error must be VISIBLE: switching the draft
+  // to dynamic_workflow while the group still has human members would only
+  // fail in the schema net below (an unexplained disabled Save). Surface it
+  // as a stable `mode` key the form renders under the mode control.
+  if (draft.mode === 'dynamic_workflow' && group.members.some((m) => m.memberType === 'human')) {
+    errors.mode = 'workgroups.errors.dynamicNoHumanMembers'
+  }
   if (Object.keys(errors).length > 0) return { ok: false, errors }
   const leader = storedLeaderDisplayName(group)
   const payload = {

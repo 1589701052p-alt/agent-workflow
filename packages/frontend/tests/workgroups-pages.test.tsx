@@ -1,4 +1,5 @@
-// RFC-164 PR-1 — /workgroups {list, detail} route pages + wiring locks.
+// RFC-164 PR-1 → RFC-168 — /workgroups {list, detail} route pages + wiring
+// locks.
 //
 // Locks:
 //   1. List page: empty state, row rendering (name link / mode chip / leader
@@ -12,11 +13,16 @@
 //      config save PUTs the draft with the CURRENT members passed through;
 //      leaderless lw groups still save (决策 #21); rename dialog POSTs
 //      /rename.
-//   4. Member cards: one card per member (role assertions), leader badge,
-//      set-leader / remove / add-agent flows each fire a full-document PUT.
+//   4. Member gallery + context panel (RFC-168): one card per member, leader
+//      badge; selecting a card opens the member editor in the PANEL (no
+//      dialogs) — set-leader / remove / member-save / add-agent flows each
+//      fire a full-document PUT identical to the RFC-164 dialog-era bodies.
+//      (Panel-specific behaviors — focus, Esc, saved-flash, failure paths —
+//      live in workgroup-studio-panel.test.tsx.)
 //   5. Wiring: router registers list + detail only (no /new route), nav
 //      lists /workgroups in the workflows group, zh/en bundles carry the
-//      RFC-164 keys (and dropped the obsolete strict-save error keys).
+//      RFC-164/168 keys (and dropped the dialog-era memberEdit /
+//      editMemberTitle keys).
 
 import { readFileSync } from 'node:fs'
 import path, { resolve } from 'node:path'
@@ -397,7 +403,7 @@ describe('/workgroups/$name — config editing', () => {
   })
 })
 
-describe('/workgroups/$name — member cards', () => {
+describe('/workgroups/$name — member gallery + context panel (RFC-168)', () => {
   test('renders one card per member with title / type chip / leader badge / reference', async () => {
     installFetch({ workgroups: [wg('review-squad')], calls: [] })
     await renderPage('/workgroups/review-squad')
@@ -408,22 +414,20 @@ describe('/workgroups/$name — member cards', () => {
     expect(screen.getByRole('heading', { name: 'Coder', level: 3 })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Alice', level: 3 })).toBeTruthy()
 
-    // Leader badge only on the leader card; set-leader only on NON-leader agents.
     const coder = screen.getByTestId('workgroup-card-Coder')
     expect(within(coder).getByTestId('workgroup-leader-badge')).toBeTruthy()
-    expect(within(coder).queryByTestId('workgroup-set-leader-Coder')).toBeNull()
-    const auditor = screen.getByTestId('workgroup-card-Auditor')
-    expect(within(auditor).getByTestId('workgroup-set-leader-Auditor')).toBeTruthy()
     const alice = screen.getByTestId('workgroup-card-Alice')
-    expect(within(alice).queryByTestId('workgroup-set-leader-Alice')).toBeNull()
     // Human card shows the resolved platform user name, never the raw id.
     await waitFor(() => expect(alice.textContent).toContain('Alice Wang'))
+    // Cards carry no action buttons anymore — actions live in the panel.
+    expect(within(coder).queryByRole('button', { name: 'Remove' })).toBeNull()
   })
 
-  test('set-leader PUTs the full document with the new leaderDisplayName', async () => {
+  test('selecting a NON-leader agent card offers set-leader in the panel; PUT carries the new leaderDisplayName', async () => {
     const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
     installFetch(state)
     await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-card-open-Auditor'))
     fireEvent.click(await screen.findByTestId('workgroup-set-leader-Auditor'))
     await waitFor(() => {
       const put = state.calls.find((c) => c.method === 'PUT')
@@ -434,14 +438,29 @@ describe('/workgroups/$name — member cards', () => {
     })
   })
 
-  test('remove confirms (two-click) then PUTs without the member; removing the leader clears it', async () => {
+  test('selecting the leader card shows the badge but no set-leader; human cards never offer it', async () => {
+    installFetch({ workgroups: [wg('review-squad')], calls: [] })
+    await renderPage('/workgroups/review-squad')
+    fireEvent.click(await screen.findByTestId('workgroup-card-open-Coder'))
+    const panel = await screen.findByTestId('workgroup-context-panel')
+    expect(within(panel).getByTestId('workgroup-leader-badge')).toBeTruthy()
+    expect(within(panel).queryByTestId('workgroup-set-leader-Coder')).toBeNull()
+    fireEvent.click(screen.getByTestId('workgroup-card-open-Alice'))
+    await waitFor(() => {
+      expect(within(panel).queryByTestId('workgroup-set-leader-Alice')).toBeNull()
+      expect(within(panel).getByTestId('workgroup-member-displayname-input')).toBeTruthy()
+    })
+  })
+
+  test('remove confirms (two-click) in the panel then PUTs without the member; removing the leader clears it', async () => {
     const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
     installFetch(state)
     await renderPage('/workgroups/review-squad')
-    const coder = await screen.findByTestId('workgroup-card-Coder')
-    const remove = within(coder).getByRole('button', { name: 'Remove' })
+    fireEvent.click(await screen.findByTestId('workgroup-card-open-Coder'))
+    const panel = await screen.findByTestId('workgroup-context-panel')
+    const remove = await within(panel).findByRole('button', { name: 'Remove' })
     fireEvent.click(remove) // arm
-    fireEvent.click(within(coder).getByRole('button', { name: 'Confirm?' }))
+    fireEvent.click(within(panel).getByRole('button', { name: 'Confirm?' }))
     await waitFor(() => {
       const put = state.calls.find((c) => c.method === 'PUT')
       expect(put).toBeTruthy()
@@ -454,17 +473,17 @@ describe('/workgroups/$name — member cards', () => {
     })
   })
 
-  test('edit dialog patches displayName/roleDesc and PUTs', async () => {
+  test('panel edit patches displayName/roleDesc via the member-save button and PUTs', async () => {
     const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
     installFetch(state)
     await renderPage('/workgroups/review-squad')
-    fireEvent.click(await screen.findByTestId('workgroup-member-edit-Alice'))
+    fireEvent.click(await screen.findByTestId('workgroup-card-open-Alice'))
     const input = (await screen.findByTestId(
       'workgroup-member-displayname-input',
     )) as HTMLInputElement
     expect(input.value).toBe('Alice')
     fireEvent.change(input, { target: { value: 'Alicia' } })
-    fireEvent.click(screen.getByTestId('workgroup-edit-member-confirm'))
+    fireEvent.click(screen.getByTestId('workgroup-member-save'))
     await waitFor(() => {
       const put = state.calls.find((c) => c.method === 'PUT')
       expect(put).toBeTruthy()
@@ -473,13 +492,16 @@ describe('/workgroups/$name — member cards', () => {
     })
   })
 
-  test('add-agent dialog defaults the alias to the agent name and PUTs the appended member', async () => {
+  test('add-agent panel defaults the alias to the agent name and PUTs the appended member', async () => {
     const state = { workgroups: [wg('review-squad')], calls: [] as Recorded['calls'] }
     installFetch(state)
     await renderPage('/workgroups/review-squad')
     fireEvent.click(await screen.findByTestId('workgroup-add-agent-member'))
 
-    const confirm = (await screen.findByTestId('workgroup-add-agent-confirm')) as HTMLButtonElement
+    // The panel (not a dialog) hosts the add form now.
+    await screen.findByTestId('workgroup-panel-add')
+    expect(screen.queryByTestId('workgroup-add-agent-dialog')).toBeNull()
+    const confirm = screen.getByTestId('workgroup-add-agent-confirm') as HTMLButtonElement
     expect(confirm.disabled).toBe(true) // empty draft
 
     fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
@@ -508,11 +530,11 @@ describe('/workgroups/$name — member cards', () => {
     })
   })
 
-  test('duplicate alias in the add dialog blocks the confirm with an inline error', async () => {
+  test('duplicate alias in the add panel blocks the confirm with an inline error', async () => {
     installFetch({ workgroups: [wg('review-squad')], calls: [] })
     await renderPage('/workgroups/review-squad')
     fireEvent.click(await screen.findByTestId('workgroup-add-agent-member'))
-    await screen.findByTestId('workgroup-add-agent-dialog')
+    await screen.findByTestId('workgroup-panel-add')
     fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
       target: { value: 'coder' },
     })
@@ -547,20 +569,23 @@ describe('RFC-164 /workgroups wiring', () => {
     expect(listIdx).toBeGreaterThan(detailIdx)
   })
 
-  test('detail page composes the shared form + member cards + header actions', () => {
+  test('detail page composes the gallery + context panel + header actions (RFC-168)', () => {
     const edit = readSrc('routes/workgroups.detail.tsx')
-    expect(edit).toContain("import { WorkgroupForm } from '@/components/workgroup/WorkgroupForm'")
     expect(edit).toContain(
-      "import { WorkgroupMemberCards } from '@/components/workgroup/WorkgroupMemberCards'",
+      "import { WorkgroupMemberGallery } from '@/components/workgroup/WorkgroupMemberGallery'",
     )
+    expect(edit).toContain('WorkgroupContextPanel')
     expect(edit).toContain('DetailHeaderActions')
     expect(edit).toContain('workgroupLaunchReadiness')
+    // The config form lives INSIDE the panel now, not on the page directly.
+    const panel = readSrc('components/workgroup/WorkgroupContextPanel.tsx')
+    expect(panel).toContain("import { WorkgroupForm } from './WorkgroupForm'")
     const list = readSrc('routes/workgroups.tsx')
     expect(list).toContain('buildQuickCreatePayload')
     expect(list).toContain('btn btn--primary')
   })
 
-  test('zh-CN and en-US both define the RFC-164 keys (and dropped the strict-save errors)', () => {
+  test('zh-CN and en-US both define the RFC-164/168 keys (and dropped the dialog-era keys)', () => {
     const mustExist = [
       'title',
       'newButton',
@@ -572,7 +597,6 @@ describe('RFC-164 /workgroups wiring', () => {
       'deleteTitle',
       'renameTitle',
       'membersEmpty',
-      'memberEdit',
       'memberRemove',
       'setLeaderButton',
       'leaderBadge',
@@ -580,10 +604,19 @@ describe('RFC-164 /workgroups wiring', () => {
       'addHumanMember',
       'addAgentTitle',
       'addHumanTitle',
-      'editMemberTitle',
       'fcSwitchesNotice',
       'fieldMaxRounds',
       'fieldCompletionGate',
+      // RFC-168 — context panel keys.
+      'panelConfigTitle',
+      'panelAria',
+      'panelClose',
+      'memberSave',
+      'editAgentDefinition',
+      'agentMissing',
+      'portsIn',
+      'portsOut',
+      'configSaved',
     ] as const
     for (const key of mustExist) {
       expect(zhCN.workgroups[key].length, `zh-CN workgroups.${key}`).toBeGreaterThan(0)
@@ -604,6 +637,7 @@ describe('RFC-164 /workgroups wiring', () => {
       'displayNameDuplicate',
       'leaderMustBeAgent',
       'maxRoundsInvalid',
+      'dynamicNoHumanMembers',
     ] as const
     for (const key of errorKeys) {
       expect(zhCN.workgroups.errors[key].length, `zh-CN errors.${key}`).toBeGreaterThan(0)
@@ -613,6 +647,9 @@ describe('RFC-164 /workgroups wiring', () => {
     // and empty member sets are save-valid now.
     expect('leaderRequired' in zhCN.workgroups.errors).toBe(false)
     expect('membersRequired' in zhCN.workgroups.errors).toBe(false)
+    // RFC-168: the edit-member dialog is gone (panel edits in place).
+    expect('memberEdit' in zhCN.workgroups).toBe(false)
+    expect('editMemberTitle' in zhCN.workgroups).toBe(false)
     expect(zhCN.nav.workgroups).toBe('工作组')
     expect(enUS.nav.workgroups).toBe('Workgroups')
   })

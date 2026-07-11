@@ -1,7 +1,8 @@
-// RFC-164 PR-1 — workgroup CONFIG form (detail page edit surface). Members
-// are managed by the card zone (<WorkgroupMemberCards>) with immediate PUTs;
-// this form only edits the config fields and the page passes the group's
-// current members through on save (PUT is full-replace).
+// RFC-164 PR-1 → RFC-168 — workgroup CONFIG form. Since RFC-168 it renders
+// inside the detail page's context panel (config state); members are managed
+// by the gallery + member panel with immediate PUTs. This form only edits the
+// config fields and the page passes the group's current members through on
+// save (PUT is full-replace).
 //
 // free_collab forces the three collaboration switches to read as ON
 // (disabled controls + notice) WITHOUT mutating the stored values — the
@@ -71,7 +72,12 @@ export function WorkgroupForm({ value, onChange, errors }: WorkgroupFormProps) {
       <FormSection title={t('workgroups.sectionMode')}>
         {/* `group` — Segmented is a composite control; the default <label>
             wrapper would hijack each option's accessible name. */}
-        <Field label={t('workgroups.fieldMode')} group hint={modeHint}>
+        <Field
+          label={t('workgroups.fieldMode')}
+          group
+          hint={modeHint}
+          error={errors.mode !== undefined ? t(errors.mode) : undefined}
+        >
           <Segmented<WorkgroupMode>
             value={value.mode}
             onChange={(v) => set('mode', v)}

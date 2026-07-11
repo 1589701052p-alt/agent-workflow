@@ -154,6 +154,13 @@ code {
 .app-shell {
   display: grid;
   grid-template-columns: 220px 1fr;
+  /* Pin the single row to the shell height. Without an explicit row the
+   * implicit `auto` row grows to the ITEMS' min-content — on short viewports
+   * the sidebar nav (~830px min-content) blew the row past 100vh and the
+   * `overflow: hidden` below CLIPPED the bottom of `.content`, so its own
+   * scrollbar bottomed out before the last fields on EVERY page (RFC-168
+   * user report; latent shell bug, not page-specific). */
+  grid-template-rows: minmax(0, 1fr);
   /* Lock the shell to the viewport so that any vertical scrolling happens
    * inside `.content` (or, on the workflow editor, inside the palette /
    * inspector / canvas panels). Without this the editor's tall agent
@@ -175,6 +182,11 @@ code {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Pair of the shell's minmax(0, 1fr) row: on viewports shorter than the
+   * nav's natural height the sidebar scrolls itself instead of blowing up
+   * the shared grid row. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sidebar__brand {
@@ -11823,9 +11835,11 @@ mark.comment-anchor[data-active='true'] {
 }
 
 /* ============================================================
-   RFC-164 — workgroup detail page (.workgroup- namespace).
-   Everything else on the /workgroups pages reuses the shared
-   page / data-table / form-section / card / dialog primitives.
+   RFC-164 → RFC-168 — workgroup detail STUDIO (.workgroup-
+   namespace): member card gallery (main zone) + sticky context
+   panel. Everything else on the /workgroups pages reuses the
+   shared page / data-table / form-section / card / dialog
+   primitives.
    ============================================================ */
 
 /* Launch-readiness banner: stack the reason lines (the base .info-box is a
@@ -11836,14 +11850,177 @@ mark.comment-anchor[data-active='true'] {
   gap: 4px;
 }
 
+/* Studio page frame — the page becomes a viewport-high flex column so the
+   two-column studio below the header can give the gallery and the panel
+   INDEPENDENT scrollbars (user 2026-07-11). */
+.page--studio {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Two-column studio: gallery (fluid) + context panel (fixed). Both columns
+   stretch to the remaining page height and scroll independently. Collapses
+   to a single column under 960px — panel stacks after the gallery and the
+   page falls back to normal document flow. */
+.workgroup-studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.workgroup-studio__main {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workgroup-studio__main-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-studio__main-title {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.workgroup-studio__count {
+  font-size: var(--font-sm);
+  color: var(--muted);
+}
+
+/* Context panel — a card-grade container filling its studio column and
+   scrolling internally. The column height comes from the studio row
+   (minmax(0,1fr) of the page flex), NOT a 100vh clamp — the first cut
+   clamped against the viewport and got clipped at its natural offset
+   whenever the page had no scroll range (user report 2026-07-11). */
+.workgroup-panel {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.workgroup-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-panel__title {
+  margin: 0;
+  font-size: var(--font-lg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workgroup-panel__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The panel hosts the same FormSections as the old full-width page — trim
+   their h2 scale down to panel density. */
+.workgroup-panel .form-section__title {
+  font-size: var(--font-md);
+}
+
+.workgroup-panel__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-panel__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.workgroup-panel__capability {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.workgroup-panel__agent-link {
+  font-size: var(--font-sm);
+}
+
 /* Member cards zone — responsive grid of shared <Card>s. */
 .workgroup-cards {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+/* The whole card is clickable through the title button's stretched hit-area
+   (::after covers the card) — RFC-168 F10: never wrap the Card in a native
+   <button> (content-model violation, runaway accessible name). */
+.workgroup-card {
+  position: relative;
+}
+
+/* Member-type tinting mirrors the workflow canvas palette so the two
+   surfaces read as one system: agent cards carry the `.canvas-node--agent`
+   accent border, human cards the review/clarify amber family (humans ARE
+   the human-in-the-loop kind). The shared `.card--highlighted` selection
+   look stays authoritative while a card is selected. */
+.workgroup-card--agent:not(.card--highlighted) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.workgroup-card--human:not(.card--highlighted) {
+  background: color-mix(in srgb, #d97706 10%, var(--panel));
+  border-color: color-mix(in srgb, #d97706 45%, var(--border));
+}
+
+.workgroup-card__open {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.workgroup-card__open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-lg);
+}
+
+.workgroup-card__open:focus-visible {
+  outline: none;
+}
+
+.workgroup-card__open:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .workgroup-card__head {
@@ -11878,16 +12055,48 @@ mark.comment-anchor[data-active='true'] {
   color: var(--muted);
 }
 
-.workgroup-card__actions {
+/* Port summary line on agent cards — reuses the capability-card port chip. */
+.workgroup-card__ports {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: var(--space-1);
   flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.workgroup-card__ports-label {
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+
+.workgroup-card__ports-more {
+  font-size: var(--font-xs);
+  color: var(--muted);
 }
 
 .workgroup-cards__actions {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+}
+
+@media (max-width: 960px) {
+  /* Single column: back to normal document flow (one page scrollbar). */
+  .page--studio {
+    display: block;
+    height: auto;
+  }
+
+  .workgroup-studio {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .workgroup-studio__main,
+  .workgroup-panel {
+    overflow-y: visible;
+    min-height: auto;
+  }
 }
 
 /* ============================================================

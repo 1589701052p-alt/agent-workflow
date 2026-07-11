@@ -1022,11 +1022,10 @@ export interface Resources {
       noAgentMember: string
       leaderMissing: string
     }
-    // Member cards zone (detail page).
+    // Member gallery + context panel (detail page, RFC-168).
     membersEmpty: string
     memberTypeAgent: string
     memberTypeHuman: string
-    memberEdit: string
     memberRemove: string
     setLeaderButton: string
     leaderBadge: string
@@ -1034,8 +1033,16 @@ export interface Resources {
     addHumanMember: string
     addAgentTitle: string
     addHumanTitle: string
-    editMemberTitle: string
     addMemberConfirm: string
+    panelConfigTitle: string
+    panelAria: string
+    panelClose: string
+    memberSave: string
+    editAgentDefinition: string
+    agentMissing: string
+    portsIn: string
+    portsOut: string
+    configSaved: string
     memberFieldAgent: string
     memberFieldUser: string
     memberFieldDisplayName: string
@@ -1184,6 +1191,7 @@ export interface Resources {
       displayNameDuplicate: string
       leaderMustBeAgent: string
       maxRoundsInvalid: string
+      dynamicNoHumanMembers: string
     }
   }
   scheduled: {
@@ -3888,7 +3896,6 @@ export const zhCN: Resources = {
     membersEmpty: '还没有成员。用下方按钮添加 agent 或人类成员。',
     memberTypeAgent: '代理',
     memberTypeHuman: '人类',
-    memberEdit: '编辑',
     memberRemove: '移除',
     setLeaderButton: '设为 leader',
     leaderBadge: 'Leader',
@@ -3896,8 +3903,16 @@ export const zhCN: Resources = {
     addHumanMember: '+ 添加人类成员',
     addAgentTitle: '添加 agent 成员',
     addHumanTitle: '添加人类成员',
-    editMemberTitle: '编辑成员',
     addMemberConfirm: '添加',
+    panelConfigTitle: '工作组配置',
+    panelAria: '上下文面板',
+    panelClose: '关闭',
+    memberSave: '保存成员',
+    editAgentDefinition: '编辑 agent 定义 →',
+    agentMissing: 'agent 不存在',
+    portsIn: '输入',
+    portsOut: '输出',
+    configSaved: '已保存',
     memberFieldAgent: '代理名',
     memberFieldUser: '平台用户',
     memberFieldDisplayName: '显示名',
@@ -4039,6 +4054,7 @@ export const zhCN: Resources = {
       displayNameDuplicate: '显示名在组内必须唯一。',
       leaderMustBeAgent: 'Leader 只能是 agent 成员。',
       maxRoundsInvalid: '最大轮数须为 1–500 的整数。',
+      dynamicNoHumanMembers: '动态工作流模式仅允许 agent 成员——请先移除人类成员再保存。',
     },
   },
   scheduled: {

@@ -125,7 +125,9 @@ interface FetchCall {
   body: unknown
 }
 
-function installFetch(overrides: { put?: () => Response } = {}): FetchCall[] {
+function installFetch(
+  overrides: { put?: () => Response; usersSearch?: unknown[] } = {},
+): FetchCall[] {
   const calls: FetchCall[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -149,7 +151,7 @@ function installFetch(overrides: { put?: () => Response } = {}): FetchCall[] {
         return overrides.put !== undefined ? overrides.put() : json({ changes: ['x'] })
       }
       if (url.includes('/api/agents')) return json([{ name: 'reviewer' }])
-      if (url.includes('/api/users/search')) return json([])
+      if (url.includes('/api/users/search')) return json(overrides.usersSearch ?? [])
       return json({})
     },
   )
@@ -278,5 +280,90 @@ describe('WorkgroupTaskConfigDialog', () => {
     const share = screen.getByLabelText('Share outputs') as HTMLInputElement
     expect(share.disabled).toBe(true)
     expect(share.checked).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// RFC-168 §8.1 — dialog-shell behavior contract (increment).
+// The detail page stopped opening these dialogs (the context panel edits in
+// place), so the mid-run flow above is their ONLY remaining consumer. The
+// MemberFields extraction must preserve the behaviors the shells relied on
+// implicitly; each is locked here so a future refactor cannot break the
+// Human path or the nested-dialog layering while everything else stays green.
+// ---------------------------------------------------------------------------
+
+describe('RFC-168 §8.1 — member dialog shell contract (mid-run)', () => {
+  const bob = { id: 'u9', username: 'bob', displayName: 'Bob Li', role: 'user', status: 'active' }
+
+  test('human staging full chain: pick → alias auto-follows → hand-edit stops it → roleDesc → staged + PUT', async () => {
+    const calls = installFetch({ usersSearch: [bob] })
+    renderDialog(makeConfig())
+    fireEvent.click(await screen.findByTestId('wg-config-add-human'))
+    await screen.findByTestId('workgroup-add-human-dialog')
+
+    fireEvent.focus(screen.getByTestId('workgroup-member-user-input'))
+    fireEvent.click(await screen.findByTestId('workgroup-member-user-option-bob'))
+    // alias auto-followed the picked user's sanitized display name
+    const alias = screen.getByTestId('workgroup-member-displayname-input') as HTMLInputElement
+    expect(alias.value).toBe('BobLi')
+    // hand-edit stops following
+    fireEvent.change(alias, { target: { value: 'Bobby' } })
+    fireEvent.change(screen.getByTestId('workgroup-member-role-input'), {
+      target: { value: 'PM' },
+    })
+    fireEvent.click(screen.getByTestId('workgroup-add-human-confirm'))
+
+    const staged = await screen.findByTestId('wg-config-add-Bobby')
+    expect(within(staged).getByText('New')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('wg-config-submit'))
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === 'PUT')
+      expect(put?.body).toEqual({
+        addMembers: [{ memberType: 'human', userId: 'u9', displayName: 'Bobby', roleDesc: 'PM' }],
+      })
+    })
+  })
+
+  test('duplicate alias against the post-patch roster disables the confirm', async () => {
+    installFetch()
+    renderDialog(makeConfig())
+    fireEvent.click(await screen.findByTestId('wg-config-add-agent'))
+    await screen.findByTestId('workgroup-add-agent-dialog')
+    fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
+      target: { value: 'reviewer' },
+    })
+    fireEvent.change(screen.getByTestId('workgroup-member-displayname-input'), {
+      target: { value: 'Worker' }, // clashes with the kept roster row
+    })
+    expect(screen.getByText('Display names must be unique within the group.')).toBeTruthy()
+    expect((screen.getByTestId('workgroup-add-agent-confirm') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+  })
+
+  test('nested-dialog Esc closes ONLY the inner add dialog — the config dialog survives', async () => {
+    installFetch()
+    renderDialog(makeConfig())
+    fireEvent.click(await screen.findByTestId('wg-config-add-agent'))
+    const inner = await screen.findByTestId('workgroup-add-agent-dialog')
+    fireEvent.keyDown(inner, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('workgroup-add-agent-dialog')).toBeNull())
+    expect(screen.getByTestId('workgroup-room-config-dialog')).toBeTruthy()
+  })
+
+  test('re-opening the add dialog starts from a FRESH draft (mount-on-open)', async () => {
+    installFetch()
+    renderDialog(makeConfig())
+    fireEvent.click(await screen.findByTestId('wg-config-add-agent'))
+    await screen.findByTestId('workgroup-add-agent-dialog')
+    fireEvent.change(screen.getByTestId('workgroup-agent-name-input'), {
+      target: { value: 'reviewer' },
+    })
+    // cancel via the footer button, then re-open
+    fireEvent.click(within(screen.getByTestId('workgroup-add-agent-dialog')).getByText('Cancel'))
+    await waitFor(() => expect(screen.queryByTestId('workgroup-add-agent-dialog')).toBeNull())
+    fireEvent.click(screen.getByTestId('wg-config-add-agent'))
+    await screen.findByTestId('workgroup-add-agent-dialog')
+    expect((screen.getByTestId('workgroup-agent-name-input') as HTMLInputElement).value).toBe('')
   })
 })

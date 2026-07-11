@@ -37,6 +37,9 @@ export interface DetailHeaderActionsProps {
     label?: string
     onClick: () => void
     disabled: boolean
+    /** Hover tooltip — RFC-168: explains WHY save is disabled (e.g. a mode /
+     *  member compatibility error) so the button is never mutely inert. */
+    title?: string
     testid?: string
   }
   del: {
@@ -72,6 +75,7 @@ export function DetailHeaderActions(props: DetailHeaderActionsProps) {
             className="btn btn--primary"
             disabled={props.save.disabled}
             onClick={props.save.onClick}
+            title={props.save.title}
             data-testid={props.save.testid}
           >
             {props.save.label ?? t('common.save')}
