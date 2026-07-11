@@ -1,60 +1,17 @@
-// RFC-167 T1 — dynamic workflow space schemas + generation-envelope conversion.
+// RFC-167 — dynamic workflow generation protocol: envelope + conversion.
+//
+// (The separate `DynamicWorkflowSpace` resource schemas were reverted in the
+// 2026-07-11 pivot — dynamic workflow became a workgroup mode. Only the
+// generation protocol survives, reused by the workgroup dynamic-mode engine.)
 //
 // Locks:
-//  1. DynamicWorkflowSpace / Create / Update schemas: name slug rule, agentPool
-//     default [], quick-create (name only), strict update.
-//  2. DwGeneratedWorkflowSchema: node shape, inputs default [], edges default [].
-//  3. dwGeneratedToWorkflowDef conversion matrix: node→agent-single, inputs→edges,
+//  1. DwGeneratedWorkflowSchema: node shape, inputs default [], edges default [].
+//  2. dwGeneratedToWorkflowDef conversion matrix: node→agent-single, inputs→edges,
 //     top-level edges, dedup of overlapping inputs/edges, branch / parallel /
 //     multi-same-agent, deterministic edge ids, NO synthetic IO nodes.
 
 import { describe, expect, test } from 'bun:test'
-import {
-  CreateDynamicWorkflowSpaceSchema,
-  DW_VALIDATION_CODES,
-  DwGeneratedWorkflowSchema,
-  DynamicWorkflowSpaceSchema,
-  UpdateDynamicWorkflowSpaceSchema,
-  dwGeneratedToWorkflowDef,
-} from '../src'
-
-describe('DynamicWorkflowSpace schemas', () => {
-  const base = {
-    id: 'dws_01',
-    name: 'my-space',
-    description: 'a space',
-    agentPool: ['coder', 'auditor'],
-    schemaVersion: 1,
-    createdAt: 0,
-    updatedAt: 0,
-  }
-
-  test('full resource parses', () => {
-    expect(DynamicWorkflowSpaceSchema.parse(base).agentPool).toEqual(['coder', 'auditor'])
-  })
-
-  test('rejects a non-slug name', () => {
-    expect(() => DynamicWorkflowSpaceSchema.parse({ ...base, name: 'Bad Name' })).toThrow()
-  })
-
-  test('create fills description + agentPool defaults (quick create = name only)', () => {
-    const parsed = CreateDynamicWorkflowSpaceSchema.parse({ name: 'quick' })
-    expect(parsed).toEqual({ name: 'quick', description: '', agentPool: [] })
-  })
-
-  test('create rejects a pool entry that is not a valid agent name', () => {
-    expect(() =>
-      CreateDynamicWorkflowSpaceSchema.parse({ name: 'x', agentPool: ['Bad Agent'] }),
-    ).toThrow()
-  })
-
-  test('update is strict (rejects unknown keys) + partial', () => {
-    expect(UpdateDynamicWorkflowSpaceSchema.parse({ agentPool: ['a'] })).toEqual({
-      agentPool: ['a'],
-    })
-    expect(() => UpdateDynamicWorkflowSpaceSchema.parse({ name: 'renamed' })).toThrow()
-  })
-})
+import { DW_VALIDATION_CODES, DwGeneratedWorkflowSchema, dwGeneratedToWorkflowDef } from '../src'
 
 describe('DwGeneratedWorkflowSchema', () => {
   test('node inputs + top-level edges default to []', () => {

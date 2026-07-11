@@ -3437,52 +3437,6 @@ details.form-section[open] > summary {
   margin-top: 4px;
 }
 
-/* ---- RFC-167 dynamic workflow space — agent pool editor ---- */
-.dwspace-pool__add {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-}
-
-.dwspace-pool__add .form-input {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.dwspace-pool__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.dwspace-pool__item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dwspace-pool__item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.dwspace-pool__item-name {
-  font-family: var(--font-mono, monospace);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.dwspace-pool__missing {
-  color: var(--danger, #d12c2c);
-  font-style: italic;
-}
-
 /* ---- RFC-080 kind selector (shared by OutputsEditor + canvas fanout) ---- */
 
 .kind-select {

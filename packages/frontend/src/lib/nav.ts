@@ -44,8 +44,6 @@ export const NAV_GROUPS: NavGroupEntry[] = [
       // RFC-164: workgroups are launched like workflows, so they live in
       // the same group.
       { to: '/workgroups', i18nKey: 'nav.workgroups' },
-      // RFC-167: dynamic workflow spaces — the AI-orchestrated third form.
-      { to: '/dynamic-workflow-spaces', i18nKey: 'nav.dynamicWorkflowSpaces' },
     ],
   },
   {

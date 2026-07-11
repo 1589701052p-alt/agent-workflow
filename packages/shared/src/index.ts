@@ -51,7 +51,10 @@ export * from './task-questions' // RFC-120
 // helpers — agent-multi NodeKind has been removed in favor of wrapper-fanout).
 export * from './kindParser'
 export * from './agentCapability' // RFC-166
-export * from './schemas/dynamicWorkflowSpace' // RFC-167
+// RFC-167 generation protocol (orchestrator output → WorkflowDefinition). The
+// separate `dynamic_workflow_spaces` resource was reverted (2026-07-11 pivot:
+// dynamic workflow became a workgroup mode); only the generation protocol +
+// conversion survive, reused by the workgroup dynamic-mode engine.
 export * from './dynamicWorkflow' // RFC-167
 export * from './shardingRegistry'
 export * from './signalPromptGuard'

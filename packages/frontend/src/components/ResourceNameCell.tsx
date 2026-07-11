@@ -30,7 +30,6 @@ export interface ResourceNameCellProps {
     | '/plugins/$id'
     | '/workflows/$id'
     | '/workgroups/$name'
-    | '/dynamic-workflow-spaces/$name'
   params: { name: string } | { id: string }
   name: string
   visibility?: ResourceVisibility | undefined

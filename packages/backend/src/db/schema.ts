@@ -403,7 +403,7 @@ export const resourceGrants = sqliteTable(
   'resource_grants',
   {
     resourceType: text('resource_type', {
-      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow', 'workgroup', 'dynamic_workflow_space'],
+      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow', 'workgroup'],
     }).notNull(),
     resourceId: text('resource_id').notNull(),
     userId: text('user_id')
@@ -461,32 +461,9 @@ export const workgroups = sqliteTable('workgroups', {
     .default(sql`(unixepoch() * 1000)`),
 })
 
-// -----------------------------------------------------------------------------
-// dynamic_workflow_spaces — RFC-167. SEVENTH ACL resource: a pinned pool of
-// agent names (soft references, same as a workflow node's agentName; each agent
-// usable any number of times) that a built-in orchestrator composes into a
-// workflow DAG. Save-lenient (empty pool is a valid quick-create); the non-empty
-// + all-resolvable requirement is enforced at LAUNCH. See design §1.1.
-// -----------------------------------------------------------------------------
-export const dynamicWorkflowSpaces = sqliteTable('dynamic_workflow_spaces', {
-  id: text('id').primaryKey(), // ULID
-  name: text('name').notNull().unique(),
-  description: text('description').notNull().default(''),
-  /** JSON string[] of agent names (the orchestratable pool). */
-  agentPoolJson: text('agent_pool_json').notNull().default('[]'),
-  // RFC-099 ACL (see agents table comment).
-  ownerUserId: text('owner_user_id'),
-  visibility: text('visibility', { enum: ['private', 'public'] })
-    .notNull()
-    .default('public'),
-  schemaVersion: integer('schema_version').notNull().default(1),
-  createdAt: integer('created_at')
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`),
-  updatedAt: integer('updated_at')
-    .notNull()
-    .default(sql`(unixepoch() * 1000)`),
-})
+// RFC-167 pivot (2026-07-11): the `dynamic_workflow_spaces` table (0088) was
+// dropped (0089) — dynamic workflow became a workgroup mode, not a separate
+// resource. See design/RFC-167-dynamic-workflow-space/design.md revision header.
 
 // -----------------------------------------------------------------------------
 // workgroup_members — RFC-164. Member roster of a workgroup. `display_name` is

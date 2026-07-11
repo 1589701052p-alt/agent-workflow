@@ -23,7 +23,6 @@ export const ACL_RESOURCE_TYPES = [
   'plugin',
   'workflow',
   'workgroup', // RFC-164 — sixth resource type
-  'dynamic_workflow_space', // RFC-167 — seventh resource type
 ] as const
 
 export const AclResourceTypeSchema = z.enum(ACL_RESOURCE_TYPES)

@@ -36,8 +36,6 @@ import {
 } from '@/routes/workflows'
 import { Route as workgroupsRoute } from '@/routes/workgroups'
 import { Route as workgroupDetailRoute } from '@/routes/workgroups.detail'
-import { Route as dynamicWorkflowSpacesRoute } from '@/routes/dynamic-workflow-spaces'
-import { Route as dynamicWorkflowSpaceDetailRoute } from '@/routes/dynamic-workflow-spaces.detail'
 import { EditRoute as workflowEditRoute } from '@/routes/workflows.edit'
 import { ReposRoute as reposRoute } from '@/routes/repos'
 import { Route as memoryRoute } from '@/routes/memory'
@@ -103,9 +101,6 @@ const routeTree = rootRoute.addChildren([
   workgroupLaunchRedirect,
   workgroupDetailRoute,
   workgroupsRoute,
-  // RFC-167: '/dynamic-workflow-spaces/$name' (detail) before the list literal.
-  dynamicWorkflowSpaceDetailRoute,
-  dynamicWorkflowSpacesRoute,
   // RFC-105: '/tasks/$id/preview' (longer literal) before '/tasks/$id'.
   taskPreviewRoute,
   taskDetailRoute,
