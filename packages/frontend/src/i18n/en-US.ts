@@ -607,6 +607,8 @@ export const enUS: Resources = {
     skipLink: 'Skip onboarding, open the agent list →',
   },
   common: {
+    searchEllipsis: 'Search…',
+    noMatches: 'No matches',
     loading: 'Loading…',
     open: 'Open',
     delete: 'Delete',
@@ -1671,6 +1673,8 @@ export const enUS: Resources = {
     spaceLabel: 'Workspace',
     spaceRemote: 'Remote repository',
     spaceScratch: 'Scratch space',
+    spaceScratchDesc: 'An empty Git repo is created; output ships as a diff',
+    spaceRemoteDesc: 'Clone a remote repo (URL) and work on its tree',
     spaceScratchHint:
       'The platform creates an empty Git repo as the working directory; output is delivered as a diff against it and the directory is kept for manual pickup.',
     contentDescription: 'Task description',

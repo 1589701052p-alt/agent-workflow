@@ -711,6 +711,8 @@ export interface Resources {
     skipLink: string
   }
   common: {
+    searchEllipsis: string
+    noMatches: string
     loading: string
     open: string
     delete: string
@@ -1590,6 +1592,8 @@ export interface Resources {
     spaceLabel: string
     spaceRemote: string
     spaceScratch: string
+    spaceScratchDesc: string
+    spaceRemoteDesc: string
     spaceScratchHint: string
     contentDescription: string
     contentDescriptionHint: string
@@ -3390,6 +3394,8 @@ export const zhCN: Resources = {
     skipLink: '跳过引导，直接打开 agent 列表 →',
   },
   common: {
+    searchEllipsis: '搜索…',
+    noMatches: '无匹配项',
     loading: '加载中…',
     open: '打开',
     delete: '删除',
@@ -4410,6 +4416,8 @@ export const zhCN: Resources = {
     spaceLabel: '执行空间',
     spaceRemote: '远端仓库',
     spaceScratch: '临时空间',
+    spaceScratchDesc: '平台建一个空 Git 仓库，产出以 diff 交付',
+    spaceRemoteDesc: '克隆远端仓库（URL），在其工作树上执行',
     spaceScratchHint:
       '平台会创建一个空 Git 仓库作为工作目录；产出以对空仓的 diff 形式交付，目录保留可手动取用。',
     contentDescription: '任务描述',

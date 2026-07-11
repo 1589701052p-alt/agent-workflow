@@ -32,7 +32,7 @@ import { api } from '@/api/client'
 import { Field, NumberInput, Switch, TextArea, TextInput } from '@/components/Form'
 import { LoadingState } from '@/components/LoadingState'
 import { ScheduleDialog } from '@/components/ScheduleDialog'
-import { Segmented } from '@/components/Segmented'
+import { ChoiceCards } from '@/components/ChoiceCards'
 import { Select } from '@/components/Select'
 import { Stepper } from '@/components/Stepper'
 import { UserPicker } from '@/components/UserPicker'
@@ -487,7 +487,7 @@ function TaskWizardPage() {
   )
 
   return (
-    <div className="page" data-testid="task-wizard">
+    <div className="page task-wizard" data-testid="task-wizard">
       <header className="page__header">
         <h1>
           {isEdit
@@ -592,7 +592,7 @@ function TaskWizardPage() {
         {step === STEP_MODE && (
           <div className="form-grid">
             <Field label={t('taskWizard.kindLabel')} group>
-              <Segmented<WizardKind>
+              <ChoiceCards<WizardKind>
                 value={kind}
                 onChange={(next) => {
                   if (next === kind) return
@@ -608,9 +608,24 @@ function TaskWizardPage() {
                 ariaLabel={t('taskWizard.kindLabel')}
                 testidPrefix="wizard-kind"
                 options={[
-                  { value: 'agent', label: t('taskWizard.kindAgent') },
-                  { value: 'workflow', label: t('taskWizard.kindWorkflow') },
-                  { value: 'workgroup', label: t('taskWizard.kindWorkgroup') },
+                  {
+                    value: 'agent',
+                    label: t('taskWizard.kindAgent'),
+                    description: t('taskWizard.kindHintAgent'),
+                    icon: <AgentIcon />,
+                  },
+                  {
+                    value: 'workflow',
+                    label: t('taskWizard.kindWorkflow'),
+                    description: t('taskWizard.kindHintWorkflow'),
+                    icon: <WorkflowIcon />,
+                  },
+                  {
+                    value: 'workgroup',
+                    label: t('taskWizard.kindWorkgroup'),
+                    description: t('taskWizard.kindHintWorkgroup'),
+                    icon: <WorkgroupIcon />,
+                  },
                 ]}
               />
             </Field>
@@ -625,13 +640,6 @@ function TaskWizardPage() {
                     : t('taskWizard.objectWorkgroup')
               }
               required
-              hint={
-                kind === 'workflow'
-                  ? t('taskWizard.kindHintWorkflow')
-                  : kind === 'agent'
-                    ? t('taskWizard.kindHintAgent')
-                    : t('taskWizard.kindHintWorkgroup')
-              }
             >
               {(kind === 'workflow' && workflowOptions.length === 0) ||
               (kind === 'agent' && agentOptions.length === 0) ||
@@ -644,6 +652,7 @@ function TaskWizardPage() {
                   value={workflowId}
                   onChange={setWorkflowId}
                   options={workflowOptions}
+                  searchable
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-workflow"
                 />
@@ -652,6 +661,7 @@ function TaskWizardPage() {
                   value={agentName}
                   onChange={setAgentName}
                   options={agentOptions}
+                  searchable
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-agent"
                 />
@@ -660,6 +670,7 @@ function TaskWizardPage() {
                   value={workgroupName}
                   onChange={setWorkgroupName}
                   options={workgroupOptions}
+                  searchable
                   placeholder={t('taskWizard.objectPlaceholder')}
                   data-testid="wizard-object-workgroup"
                 />
@@ -671,7 +682,7 @@ function TaskWizardPage() {
         {step === STEP_SPACE && (
           <div className="form-grid">
             <Field label={t('taskWizard.spaceLabel')} group>
-              <Segmented<'remote' | 'scratch'>
+              <ChoiceCards<'remote' | 'scratch'>
                 value={space.kind}
                 onChange={(next) => {
                   if (next === space.kind) return
@@ -681,8 +692,18 @@ function TaskWizardPage() {
                 ariaLabel={t('taskWizard.spaceLabel')}
                 testidPrefix="wizard-space"
                 options={[
-                  { value: 'remote', label: t('taskWizard.spaceRemote') },
-                  { value: 'scratch', label: t('taskWizard.spaceScratch') },
+                  {
+                    value: 'scratch',
+                    label: t('taskWizard.spaceScratch'),
+                    description: t('taskWizard.spaceScratchDesc'),
+                    icon: <ScratchIcon />,
+                  },
+                  {
+                    value: 'remote',
+                    label: t('taskWizard.spaceRemote'),
+                    description: t('taskWizard.spaceRemoteDesc'),
+                    icon: <RemoteIcon />,
+                  },
                 ]}
               />
             </Field>
@@ -1003,6 +1024,103 @@ function TaskWizardPage() {
         />
       )}
     </div>
+  )
+}
+
+function AgentIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="5" y="8" width="14" height="10" rx="2" />
+      <path d="M12 8V5" />
+      <circle cx="12" cy="4" r="1" />
+      <path d="M9.5 12.5v1M14.5 12.5v1" />
+    </svg>
+  )
+}
+
+function WorkflowIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="4" width="6" height="6" rx="1.5" />
+      <rect x="15" y="14" width="6" height="6" rx="1.5" />
+      <path d="M9 7h5a2 2 0 0 1 2 2v5" />
+    </svg>
+  )
+}
+
+function WorkgroupIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 19c.8-2.9 3-4.5 5.5-4.5s4.7 1.6 5.5 4.5" />
+      <circle cx="17" cy="9" r="2.2" />
+      <path d="M15.5 14.7c2 .3 3.9 1.7 4.6 4.3" />
+    </svg>
+  )
+}
+
+function ScratchIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="4" width="16" height="16" rx="2" strokeDasharray="4 3" />
+      <path d="M12 8.5v7M8.5 12h7" />
+    </svg>
+  )
+}
+
+function RemoteIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="7" cy="6" r="2.2" />
+      <circle cx="7" cy="18" r="2.2" />
+      <circle cx="17" cy="12" r="2.2" />
+      <path d="M7 8.2v7.6M9 17l6-4M9 7l6 4" />
+    </svg>
   )
 }
 

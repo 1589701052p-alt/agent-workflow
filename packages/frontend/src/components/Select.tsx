@@ -44,6 +44,12 @@ interface Props<V extends string> {
   /** Render a custom row body. Default = `option.label`. */
   renderOption?: (opt: SelectOption<V>) => React.ReactNode
   /**
+   * RFC-165 UI 精修 — show a filter input at the top of the popover and
+   * narrow the options to case-insensitive label/value matches. Keyboard
+   * focus lands on the input; arrows/Enter/Escape keep working.
+   */
+  searchable?: boolean
+  /**
    * Render the trigger's selected-value display. Default = `option.label`.
    * Useful when the option rows are rich (icons, badges, mono-font sub-text)
    * and the same layout should appear on the closed trigger button.
@@ -54,12 +60,24 @@ interface Props<V extends string> {
 export function Select<V extends string>(props: Props<V>) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState<number>(() =>
     Math.max(
       0,
       props.options.findIndex((o) => o.value === props.value),
     ),
   )
+  // The list every render path (keyboard nav, aria ids, option rows) works
+  // on. Without `searchable` it is exactly props.options, so the pre-existing
+  // behaviour is untouched.
+  const visible = useMemo(() => {
+    if (props.searchable !== true) return props.options
+    const q = query.trim().toLowerCase()
+    if (q === '') return props.options
+    return props.options.filter(
+      (o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q),
+    )
+  }, [props.options, props.searchable, query])
   // Listbox is portaled out of the trigger's parent so containers with
   // overflow:hidden (e.g. .data-table — used for border-radius rounding)
   // don't clip it. We position it manually with the trigger's
@@ -112,13 +130,20 @@ export function Select<V extends string>(props: Props<V>) {
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // Focus the listbox when opening so arrow keys work immediately.
+  // Focus the listbox (or the filter input) when opening so keys work
+  // immediately; reset the filter on every open.
+  const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (open) {
-      const t = window.setTimeout(() => listRef.current?.focus(), 0)
+      setQuery('')
+      const t = window.setTimeout(() => {
+        if (props.searchable === true) searchRef.current?.focus()
+        else listRef.current?.focus()
+      }, 0)
       return () => window.clearTimeout(t)
     }
     return undefined
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   function onTriggerKey(e: React.KeyboardEvent<HTMLButtonElement>) {
@@ -128,8 +153,8 @@ export function Select<V extends string>(props: Props<V>) {
     }
   }
 
-  function onListKey(e: React.KeyboardEvent<HTMLUListElement>) {
-    const last = props.options.length - 1
+  function onListKey(e: React.KeyboardEvent<HTMLElement>) {
+    const last = visible.length - 1
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActiveIndex((i) => Math.min(last, i + 1))
@@ -142,9 +167,18 @@ export function Select<V extends string>(props: Props<V>) {
     } else if (e.key === 'End') {
       e.preventDefault()
       setActiveIndex(last)
-    } else if (e.key === 'Enter' || e.key === ' ') {
+    } else if (e.key === 'Enter') {
       e.preventDefault()
-      const opt = props.options[activeIndex]
+      const opt = visible[activeIndex]
+      if (opt && !opt.disabled) {
+        props.onChange(opt.value)
+        setOpen(false)
+        triggerRef.current?.focus()
+      }
+    } else if (e.key === ' ' && props.searchable !== true) {
+      // Space selects in the plain listbox; in searchable mode it types.
+      e.preventDefault()
+      const opt = visible[activeIndex]
       if (opt && !opt.disabled) {
         props.onChange(opt.value)
         setOpen(false)
@@ -207,13 +241,38 @@ export function Select<V extends string>(props: Props<V>) {
               minWidth: popPos.width,
             }}
           >
-            {props.options.map((opt, i) => {
+            {props.searchable === true && (
+              <li className="select__search" role="presentation">
+                <input
+                  ref={searchRef}
+                  className="select__search-input"
+                  value={query}
+                  placeholder={t('common.searchEllipsis')}
+                  data-testid={
+                    props['data-testid'] !== undefined
+                      ? `${props['data-testid']}-search`
+                      : undefined
+                  }
+                  onChange={(e) => {
+                    setQuery(e.target.value)
+                    setActiveIndex(0)
+                  }}
+                  onKeyDown={onListKey}
+                />
+              </li>
+            )}
+            {visible.length === 0 && (
+              <li className="select__empty" role="presentation">
+                {t('common.noMatches')}
+              </li>
+            )}
+            {visible.map((opt, i) => {
               const active = i === activeIndex
               const selected = opt.value === props.value
               // Render a group header whenever the (non-empty) group changes
-              // from the previous option. Index `i` stays the props.options
-              // index so keyboard nav / aria-activedescendant remain aligned.
-              const prevGroup = i > 0 ? props.options[i - 1]?.group : undefined
+              // from the previous option. Index `i` is the VISIBLE index so
+              // keyboard nav / aria-activedescendant stay aligned.
+              const prevGroup = i > 0 ? visible[i - 1]?.group : undefined
               const showHeader =
                 opt.group !== undefined && opt.group !== '' && opt.group !== prevGroup
               return (
