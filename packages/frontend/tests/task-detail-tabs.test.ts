@@ -39,13 +39,16 @@ function makeRun(over: Partial<NodeRun>): NodeRun {
 }
 
 describe('TAB_ORDER', () => {
-  test('is the canonical 8-tab order from the RFC (RFC-083 inserted worktree-structure)', () => {
+  test('is the canonical 10-tab order from the RFC (RFC-083 inserted worktree-structure, RFC-W002 inserted timeline)', () => {
     // RFC-065 added `worktree-files` between `outputs` and `worktree-diff`.
     // RFC-083 added `worktree-structure` immediately after `worktree-diff`.
+    // RFC-W002 added `timeline` (评论区 interaction feed) right after the
+    // task-question board, grouped with the interaction views.
     // `feedback` remains last as the RFC-041 reflective tab.
     expect(TAB_ORDER).toEqual([
       'workflow-status',
       'task-questions',
+      'timeline',
       'node-runs',
       'details',
       'outputs',
@@ -57,7 +60,7 @@ describe('TAB_ORDER', () => {
   })
 
   test('is readonly (frozen at the type level — defense against accidental sort)', () => {
-    expect(TAB_ORDER).toHaveLength(9)
+    expect(TAB_ORDER).toHaveLength(10)
   })
 
   test('worktree-structure sits immediately after worktree-diff', () => {
@@ -72,10 +75,11 @@ describe('TAB_ORDER', () => {
 })
 
 describe('availableTabs', () => {
-  test('returns all 8 tabs when the workflow declares outputs', () => {
+  test('returns all 10 tabs when the workflow declares outputs', () => {
     expect(availableTabs({ hasOutputs: true })).toEqual([
       'workflow-status',
       'task-questions',
+      'timeline',
       'node-runs',
       'details',
       'outputs',
@@ -91,6 +95,7 @@ describe('availableTabs', () => {
     expect(tabs).toEqual([
       'workflow-status',
       'task-questions',
+      'timeline',
       'node-runs',
       'details',
       'worktree-files',

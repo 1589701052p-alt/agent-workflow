@@ -38,6 +38,7 @@ describe('TaskDetailPage tab structure', () => {
       'worktree-diff',
       'worktree-structure',
       'feedback',
+      'timeline',
     ]
     for (const k of tabs) {
       expect(SRC).toMatch(new RegExp(`hidden=\\{tab !== '${k}'\\}`))
@@ -74,6 +75,7 @@ describe('TaskDetailPage tab structure', () => {
       'tabWorktreeDiff',
       'tabWorktreeStructure',
       'tabFeedback',
+      'tabTimeline',
     ]) {
       expect(SRC).toMatch(new RegExp(`'tasks\\.${key}'`))
     }
@@ -84,8 +86,9 @@ describe('TaskDetailPage tab structure', () => {
     // should appear exactly once and contain every `.task-detail__pane`.
     // RFC-065 added the worktree-files pane between outputs and worktree-diff.
     // RFC-120 added the task-questions pane (board) after feedback.
+    // RFC-W002 added the timeline (评论区) pane after task-questions.
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(9)
+    expect(paneCount).toBe(10)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })

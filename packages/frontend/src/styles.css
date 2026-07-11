@@ -9462,6 +9462,184 @@ mark.comment-anchor[data-active='true'] {
   color: var(--success);
 }
 
+/* RFC-W002 - task「评论区」interaction timeline. Reuses .card / .btn / .prose /
+ * .info-box; this is only the namespaced layout for the timeline list + cards. */
+.task-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.task-timeline__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.task-timeline__title {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.task-timeline__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.task-timeline__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.task-timeline__item {
+  list-style: none;
+}
+
+.task-timeline__card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-xs);
+}
+
+.task-timeline__kind {
+  font-size: var(--font-xs);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.task-timeline__actor {
+  font-weight: 600;
+}
+
+.task-timeline__time {
+  margin-left: auto;
+}
+
+.task-timeline__inputs {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.task-timeline__input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.task-timeline__input-key {
+  flex: 0 0 auto;
+  min-width: 80px;
+  font-size: var(--font-xs);
+}
+
+.task-timeline__input-val {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-timeline__outputs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.task-timeline__port-name {
+  margin: 0 0 var(--space-1) 0;
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.task-timeline__questions,
+.task-timeline__answers {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.task-timeline__question-title {
+  font-weight: 600;
+}
+
+.task-timeline__options {
+  list-style: none;
+  margin: var(--space-1) 0 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.task-timeline__option-desc {
+  font-size: var(--font-xs);
+}
+
+.task-timeline__rec-badge {
+  color: var(--warn);
+  margin-left: var(--space-1);
+}
+
+.task-timeline__answer-text {
+  margin-top: var(--space-1);
+}
+
+.task-timeline__answer-labels {
+  font-weight: 600;
+}
+
+.task-timeline__review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.task-timeline__review-comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.task-timeline__review-comment {
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.task-timeline__review-quote {
+  margin: 0;
+  font-style: italic;
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+
+.task-timeline__review-author {
+  font-size: var(--font-xs);
+}
+
 /* RFC-043 — admin distill job detail page. Scoped under
  * `.distill-job-detail`; consumes the same design tokens as RFC-035 so
  * the page visually fits between Approval Queue and Reviews. */

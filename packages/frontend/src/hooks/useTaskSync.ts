@@ -27,6 +27,11 @@ export function useTaskSync(taskId: string | null): void {
       }
       if (msg.type === 'node.status') {
         void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
+        // RFC-W002: a run flipping to done surfaces a new node_output timeline
+        // item (the feed aggregates node_run_outputs). node.event is intentionally
+        // NOT invalidated - it fires per opencode event (per token) and the feed
+        // only changes on the done transition, which this branch already covers.
+        void qc.invalidateQueries({ queryKey: ['task-timeline', taskId] })
         // RFC-120: the question board's phases derive from node_runs (handler
         // pending→running→done) — refresh it on every node status change.
         void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
@@ -60,6 +65,8 @@ export function useTaskSync(taskId: string | null): void {
         // RFC-142: a decision / fresh round also changes the round history
         // (list expand + multi-doc historical view both key off it).
         void qc.invalidateQueries({ queryKey: ['reviews', 'rounds', msg.nodeRunId] })
+        // RFC-W002: a review decision / comment adds a review_decision timeline item.
+        void qc.invalidateQueries({ queryKey: ['task-timeline', taskId] })
         // The decision flip also moves the host task between statuses
         // (awaiting_review ↔ running ↔ done), so refresh that too.
         if (msg.type === 'review.decision_made') {
@@ -75,6 +82,9 @@ export function useTaskSync(taskId: string | null): void {
         void qc.invalidateQueries({ queryKey: ['clarify', 'detail', msg.nodeRunId] })
         void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
         void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
+        // RFC-W002: a clarify round creates a question item; an answer creates an
+        // answer item. Both are timeline events.
+        void qc.invalidateQueries({ queryKey: ['task-timeline', taskId] })
         // RFC-120: a new/answered clarify round lazily collects new question
         // entries and moves their phase — refresh the board.
         void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
@@ -94,6 +104,8 @@ export function useTaskSync(taskId: string | null): void {
       // single-source toggle needs.)
       if (msg.type === 'cross-clarify.answered' || msg.type === 'cross-clarify.rejected') {
         void qc.invalidateQueries({ queryKey: ['task-clarify-directives', taskId] })
+        // RFC-W002: a cross-clarify answer adds a clarify_answer timeline item.
+        void qc.invalidateQueries({ queryKey: ['task-timeline', taskId] })
       }
     },
   })
