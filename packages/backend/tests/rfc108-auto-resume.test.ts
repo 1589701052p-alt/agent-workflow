@@ -32,6 +32,7 @@ async function seedTask(
   db: DbClient,
   status: string,
   errorSummary: string | null,
+  workgroup?: { workgroupId: string; mode: string },
 ): Promise<string> {
   const wfId = ulid()
   const taskId = ulid()
@@ -50,6 +51,12 @@ async function seedTask(
     errorSummary,
     inputs: '{}',
     startedAt: Date.now(),
+    ...(workgroup !== undefined
+      ? {
+          workgroupId: workgroup.workgroupId,
+          workgroupConfigJson: JSON.stringify({ mode: workgroup.mode }),
+        }
+      : {}),
   })
   return taskId
 }
@@ -74,6 +81,30 @@ describe('RFC-108 T18 — boot auto-resume', () => {
     expect((await listRecoveryEventsForTask(db, a)).some((e) => e.kind === 'auto-resume')).toBe(
       true,
     )
+  })
+
+  test('RFC-167: turn-engine workgroup tasks stay interrupted; dynamic_workflow tasks auto-resume', async () => {
+    const db = createInMemoryDb(MIGRATIONS)
+    await seedTask(db, 'interrupted', 'daemon-restart', {
+      workgroupId: 'wg-lw',
+      mode: 'leader_worker',
+    })
+    await seedTask(db, 'interrupted', 'daemon-restart', {
+      workgroupId: 'wg-fc',
+      mode: 'free_collab',
+    })
+    const dyn = await seedTask(db, 'interrupted', 'daemon-restart', {
+      workgroupId: 'wg-dyn',
+      mode: 'dynamic_workflow',
+    })
+    const res = await autoResumeInterruptedTasks({
+      db,
+      breaker: BREAKER,
+      resume: async () => {},
+    })
+    // dynamic tasks are runScope-backed state machines behind generic resume
+    // (Codex impl-gate P1); turn-engine modes remain engine-re-entry territory.
+    expect(res.resumed).toEqual([dyn])
   })
 
   test('skips a quarantined task', async () => {

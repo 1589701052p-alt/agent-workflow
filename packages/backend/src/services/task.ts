@@ -1553,19 +1553,21 @@ export async function resumeTask(db: DbClient, id: string, deps: StartTaskDeps):
 }
 
 /**
- * RFC-167 — approve path of the dynamic-workflow confirm gate: swap the
- * human-confirmed generated DAG into `workflow_snapshot` AND flip
- * dw.phase='executing' (inside `workgroupConfigJson`) ATOMICALLY within the
- * resume ownership CAS, then re-kick the scheduler — which re-reads the task
- * row and runs the new snapshot through runScope (design §3.2: the swap and
- * the resume cannot tear; a concurrent resume loses the CAS with zero side
- * effects). Thin shell over `resumeKick`, mirroring syncTaskWorkflow.
+ * RFC-167 — the dynamic-workflow confirm gate's resume core: write the
+ * decision's durable state ATOMICALLY within the resume ownership CAS, then
+ * re-kick the scheduler. approve passes BOTH columns (swap the confirmed DAG
+ * into `workflow_snapshot` + flip dw.phase='executing'); reject passes only
+ * `workgroupConfigJson` (phase='generating' + the feedback) — either way a
+ * failed resume (lost CAS / 410 worktree preflight) leaves the task exactly
+ * as it was, so the gate stays open and the decision can be retried (Codex
+ * impl-gate P1: no torn phase-vs-status stranding). Thin shell over
+ * `resumeKick`, mirroring syncTaskWorkflow.
  */
 export async function resumeDynamicWorkflowExecution(
   db: DbClient,
   id: string,
   deps: StartTaskDeps,
-  swap: { workflowSnapshot: string; workgroupConfigJson: string },
+  swap: { workflowSnapshot?: string; workgroupConfigJson: string },
 ): Promise<Task> {
   return resumeKick(db, id, deps, {
     event: { kind: 'resume' },

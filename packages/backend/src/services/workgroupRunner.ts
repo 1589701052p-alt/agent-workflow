@@ -91,6 +91,12 @@ export interface WorkgroupHostRunRequest {
    *  always pass one; the RFC-167 orchestrator run omits it so the STANDARD
    *  <workflow-output> protocol for its declared ports applies. */
   workgroupProtocolBlock?: string
+  /** RFC-167 (Codex impl-gate P1): drop the run's iso-worktree delta instead
+   *  of merging it back — the orchestrator GENERATION run only produces an
+   *  envelope; its worktree writes must never reach canonical (validation +
+   *  the human confirm gate happen after the run). Workgroup turns leave this
+   *  unset (their writes are the work product). */
+  discardWrites?: boolean
 }
 
 export interface WorkgroupHostRunResult {

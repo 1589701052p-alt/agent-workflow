@@ -24,7 +24,7 @@
 
 import { z } from 'zod'
 import { PortRefSchema, type WorkflowDefinition, type WorkflowEdge } from './schemas/workflow'
-import type { WorkgroupMode } from './schemas/workgroup'
+import { WorkgroupModeSchema, type WorkgroupMode } from './schemas/workgroup'
 
 /**
  * The lifecycle phases of a dynamic_workflow workgroup task (stored in the
@@ -95,6 +95,65 @@ export function deriveWorkgroupDispatch(
 ): WorkgroupDispatch {
   if (mode !== 'dynamic_workflow') return 'turn-engine'
   return dwPhase === 'executing' ? 'dw-execute' : 'dw-generate'
+}
+
+/**
+ * Extract the workgroup mode from a task's raw `workgroup_config_json`.
+ * Returns null for a missing / unparsable config or an unknown mode — callers
+ * treat that as "not a recognizable workgroup config" and fall back to their
+ * conservative default. Pure, zod-validated, never throws.
+ */
+export function workgroupModeOf(configJson: string | null | undefined): WorkgroupMode | null {
+  if (configJson == null) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(configJson)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null) return null
+  const mode = WorkgroupModeSchema.safeParse((raw as Record<string, unknown>).mode)
+  return mode.success ? mode.data : null
+}
+
+/**
+ * The dispatch oracle applied straight to a task row's config JSON (what the
+ * scheduler reads at runTask entry). An unreadable config or unknown mode
+ * routes to the turn engine, which fails with its own precise "config missing
+ * or invalid" diagnostics (the pre-RFC-167 behavior for corrupt config).
+ */
+export function deriveWorkgroupDispatchFromConfig(
+  configJson: string | null | undefined,
+): WorkgroupDispatch {
+  const mode = workgroupModeOf(configJson)
+  if (mode === null) return 'turn-engine'
+  if (mode !== 'dynamic_workflow') return 'turn-engine'
+  let dwPhase: DynamicWorkflowPhase | null = null
+  try {
+    const raw = JSON.parse(configJson as string) as Record<string, unknown>
+    dwPhase = parseDwState(raw.dw)?.phase ?? null
+  } catch {
+    dwPhase = null
+  }
+  return deriveWorkgroupDispatch(mode, dwPhase)
+}
+
+/**
+ * True when a task row belongs to a TURN-ENGINE workgroup (leader_worker /
+ * free_collab) — the modes whose recovery is RFC-164 engine re-entry, not
+ * generic resume/retry/repair (those guards refuse them). dynamic_workflow
+ * tasks are runScope-backed state machines and ARE generically recoverable
+ * (RFC-167: generating re-enters the generate pass idempotently,
+ * awaiting_confirm re-parks, executing resumes the real DAG). A corrupt or
+ * unknown config counts as turn-engine — fail-closed toward refusing generic
+ * recovery.
+ */
+export function isTurnEngineWorkgroupTask(row: {
+  workgroupId?: string | null
+  workgroupConfigJson?: string | null
+}): boolean {
+  if (row.workgroupId == null || row.workgroupId === '') return false
+  return workgroupModeOf(row.workgroupConfigJson ?? null) !== 'dynamic_workflow'
 }
 
 /** One declared input on a generated node: local `port` fed by an upstream port. */

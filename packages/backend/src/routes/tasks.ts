@@ -10,6 +10,7 @@
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
 import {
+  isTurnEngineWorkgroupTask,
   RepairRequestSchema,
   rejectRetiredStartTaskKeys,
   StartTaskSchema,
@@ -653,9 +654,15 @@ async function visibilityCheck(c: Context, deps: AppDeps): Promise<void> {
  *   snapshot is a REAL DAG run by the normal engine, so generic resume /
  *   node retry semantics hold → ALLOWED (this is the only carve-out from
  *   the builtin-workflow lock; the __agent_host__ FK anchor is builtin).
- * - 'workgroup' host tasks: generic resume/retry does not apply (the engine
- *   adopts only pending rows; recovery belongs to RFC-164's engine re-entry)
- *   → stays 403 via the builtin host row, explicitly LOCKED by tests.
+ * - TURN-ENGINE 'workgroup' host tasks (leader_worker / free_collab): generic
+ *   resume/retry does not apply (the engine adopts only pending rows;
+ *   recovery belongs to RFC-164's engine re-entry) → stays 403 via the
+ *   builtin host row, explicitly LOCKED by tests.
+ * - RFC-167 dynamic_workflow workgroup tasks (Codex impl-gate P1): every
+ *   phase IS generically recoverable (generating re-enters the generate pass
+ *   idempotently, awaiting_confirm re-parks, executing resumes the real DAG
+ *   through runScope) — without this carve-out an executing dynamic task that
+ *   failed or was interrupted had NO recovery endpoint at all → ALLOWED.
  * - plain workflow tasks whose workflow is builtin (fusion): 403 — only the
  *   fusion engine drives aw-skill-fusion; its own continuation + daemon
  *   recovery call the SERVICE directly, bypassing these user routes.
@@ -665,6 +672,23 @@ async function assertTaskWorkflowNotBuiltin(deps: AppDeps, taskId: string): Prom
   const task = await getTask(deps.db, taskId)
   if (task === null) return
   if (taskExecutionKind(task) === 'agent') return
+  if (task.workgroupId != null && task.workgroupId !== '') {
+    const row = (
+      await deps.db
+        .select({ workgroupConfigJson: tasksTable.workgroupConfigJson })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, taskId))
+        .limit(1)
+    )[0]
+    if (
+      !isTurnEngineWorkgroupTask({
+        workgroupId: task.workgroupId,
+        workgroupConfigJson: row?.workgroupConfigJson ?? null,
+      })
+    ) {
+      return // dynamic_workflow — generically recoverable (see doc above)
+    }
+  }
   const wf = await getWorkflow(deps.db, task.workflowId)
   if (wf !== null) assertNotBuiltin('workflow', wf)
 }

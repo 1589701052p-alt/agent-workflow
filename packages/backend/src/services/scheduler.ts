@@ -181,12 +181,7 @@ import {
 } from '@/services/workgroupRunner'
 import { runDynamicWorkflowGenerate } from '@/services/dynamicWorkflowRunner'
 import { DW_ORCHESTRATOR_NODE_ID } from '@/services/orchestratorAgent'
-import {
-  deriveWorkgroupDispatch,
-  parseDwState,
-  WorkgroupModeSchema,
-  type WorkgroupDispatch,
-} from '@agent-workflow/shared'
+import { deriveWorkgroupDispatchFromConfig, type WorkgroupDispatch } from '@agent-workflow/shared'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -503,12 +498,12 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
     // DAG frontier (design §4). The host snapshot's nodes exist only as mint
     // anchors + clarify wiring; runScope/deriveFrontier must not see them.
     // RFC-167: dynamic_workflow workgroups are the exception — their dispatch
-    // follows dw.phase (deriveWorkgroupDispatch, the shared single oracle):
-    // the GENERATE engine until the human-confirmed DAG is swapped into the
-    // snapshot (phase 'executing'), after which runScope executes it like any
-    // ordinary workflow task.
+    // follows dw.phase (deriveWorkgroupDispatchFromConfig, the shared single
+    // oracle): the GENERATE engine until the human-confirmed DAG is swapped
+    // into the snapshot (phase 'executing'), after which runScope executes it
+    // like any ordinary workflow task.
     const wgDispatch: WorkgroupDispatch | null =
-      task.workgroupId !== null ? readWorkgroupDispatch(task.workgroupConfigJson) : null
+      task.workgroupId !== null ? deriveWorkgroupDispatchFromConfig(task.workgroupConfigJson) : null
     if (
       wgDispatch === 'dw-execute' &&
       definition.nodes.some((n) => n.id === DW_ORCHESTRATOR_NODE_ID)
@@ -640,28 +635,6 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
   } else {
     log.warn('done write lost to a concurrent transition — respecting winner', { taskId })
   }
-}
-
-/**
- * RFC-167 — extract (mode, dw.phase) from a workgroup task's config JSON and
- * derive which engine drives it. Defensive on shape: an unreadable config or
- * an unknown mode routes to the turn engine, which fails with its own precise
- * "config missing or invalid" diagnostics (the pre-167 behavior for corrupt
- * config). zod-parsed, no casts.
- */
-function readWorkgroupDispatch(configJson: string | null): WorkgroupDispatch {
-  if (configJson === null) return 'turn-engine'
-  let raw: unknown
-  try {
-    raw = JSON.parse(configJson)
-  } catch {
-    return 'turn-engine'
-  }
-  if (typeof raw !== 'object' || raw === null) return 'turn-engine'
-  const rec = raw as Record<string, unknown>
-  const mode = WorkgroupModeSchema.safeParse(rec.mode)
-  if (!mode.success) return 'turn-engine'
-  return deriveWorkgroupDispatch(mode.data, parseDwState(rec.dw)?.phase ?? null)
 }
 
 // -----------------------------------------------------------------------------
@@ -805,6 +778,22 @@ export function buildWorkgroupHooks(state: SchedulerState): WorkgroupEngineHooks
           outputs: {},
           errorMessage: result.errorMessage ?? `run-${result.status}`,
         }
+      }
+      if (!iso.passthrough && req.discardWrites === true) {
+        // RFC-167 (Codex impl-gate P1): the orchestrator GENERATION run must
+        // never mutate the canonical worktree — validation and the human
+        // confirm gate happen AFTER this run, so even a syntactically perfect
+        // (let alone malformed or later-rejected) attempt's worktree writes
+        // are dropped wholesale. The iso row closes as 'abandoned' (this
+        // generation's delta never reaches canonical — exactly the abandon
+        // semantics), so runTask-entry replays can never materialize it;
+        // discardNodeIso in the finally removes the worktree itself.
+        await tryTransitionMergeState({
+          db,
+          nodeRunId: req.nodeRunId,
+          event: { kind: 'abandon', reason: 'discard-writes' },
+        })
+        return { status: 'done', outputs: result.outputs }
       }
       if (!iso.passthrough) {
         const nodeTrees = await snapshotNodeIsoFinal(iso, log)

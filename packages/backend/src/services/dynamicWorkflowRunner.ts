@@ -88,15 +88,43 @@ async function loadDwDbState(db: DbClient, taskId: string): Promise<DwDbState | 
   return { config: config.data, dw, rawConfig }
 }
 
+/**
+ * Persist the dw slot over the FRESHEST config row (Codex impl-gate P2): a
+ * generation run can take minutes, and the mid-run config endpoint (PUT
+ * /api/workgroup-tasks/:id/config) may have legitimately edited members /
+ * switches since this pass loaded its snapshot — a stale full-column spread
+ * would silently roll those edits back. Only the `dw` key is ours to write;
+ * everything else is re-read at write time. The dw slot itself has a single
+ * writer while the task runs (the engine — dw-confirm only writes while the
+ * task is parked awaiting_review), so dw-level last-write-wins is safe.
+ */
 async function persistDwState(
   db: DbClient,
   taskId: string,
-  rawConfig: Record<string, unknown>,
+  fallbackRawConfig: Record<string, unknown>,
   dw: DwState,
 ): Promise<void> {
+  let base = fallbackRawConfig
+  const row = (
+    await db
+      .select({ workgroupConfigJson: tasks.workgroupConfigJson })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1)
+  )[0]
+  if (row?.workgroupConfigJson != null) {
+    try {
+      const fresh = JSON.parse(row.workgroupConfigJson) as unknown
+      if (typeof fresh === 'object' && fresh !== null) {
+        base = fresh as Record<string, unknown>
+      }
+    } catch {
+      // unreadable fresh row — fall back to the pass-start snapshot
+    }
+  }
   await db
     .update(tasks)
-    .set({ workgroupConfigJson: JSON.stringify({ ...rawConfig, dw }) })
+    .set({ workgroupConfigJson: JSON.stringify({ ...base, dw }) })
     .where(eq(tasks.id, taskId))
 }
 
@@ -282,6 +310,10 @@ export async function runDynamicWorkflowGenerate(
       promptTemplate: prompt,
       // No workgroupProtocolBlock: the orchestrator uses the STANDARD
       // <workflow-output> protocol for its declared `workflow` port.
+      // Generation only produces an envelope — its worktree writes are
+      // discarded (never merged back): the graph it proposes has not passed
+      // validation or the human confirm gate yet (Codex impl-gate P1).
+      discardWrites: true,
     })
     if (result.status === 'canceled') return { kind: 'canceled' }
 

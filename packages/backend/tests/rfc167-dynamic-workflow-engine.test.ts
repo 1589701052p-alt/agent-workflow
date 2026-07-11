@@ -41,7 +41,7 @@ import {
 import { buildActor } from '../src/auth/actor'
 import { createSession } from '../src/auth/sessionStore'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { nodeRuns, tasks, workflows } from '../src/db/schema'
+import { nodeRuns, runtimes, tasks, workflows } from '../src/db/schema'
 import { createApp } from '../src/server'
 import { createAgent } from '../src/services/agent'
 import {
@@ -118,6 +118,18 @@ const GENERATION_SNAPSHOT = {
 }
 
 async function seedPoolAgents(db: DbClient): Promise<void> {
+  // A registered runtime whose binary does not exist: any REAL dispatch of a
+  // pool agent (post-approve runScope in the HTTP tests) fails fast at spawn
+  // (ENOENT) instead of launching an actual opencode process on the dev box.
+  await db
+    .insert(runtimes)
+    .values({
+      id: ulid(),
+      name: 'aw-test-broken-rt',
+      protocol: 'opencode',
+      binaryPath: '/nonexistent-aw-test-binary',
+    })
+    .onConflictDoNothing()
   const base = {
     description: '',
     syncOutputsOnIterate: true,
@@ -127,6 +139,7 @@ async function seedPoolAgents(db: DbClient): Promise<void> {
     mcp: [],
     plugins: [],
     frontmatterExtra: {},
+    runtime: 'aw-test-broken-rt',
   }
   await createAgent(db, { ...base, name: 'wg-planner', outputs: ['plan'], bodyMd: 'plan' }).catch(
     () => undefined,
@@ -145,7 +158,7 @@ async function seedDynamicTask(
     dw: DwState
     config?: WorkgroupRuntimeConfig
     snapshot?: unknown
-    status?: 'pending' | 'running' | 'awaiting_review'
+    status?: 'pending' | 'running' | 'awaiting_review' | 'failed'
     worktreePath?: string
     ownerUserId?: string
   },
@@ -155,7 +168,7 @@ async function seedDynamicTask(
   await db.insert(workflows).values({
     id: `wf-anchor-${taskId}`,
     name: `dw-anchor-${taskId}`,
-    definition: '{}',
+    definition: '{"$schema_version":1,"inputs":[],"nodes":[],"edges":[]}',
     builtin: true,
   })
   await db.insert(tasks).values({
@@ -246,6 +259,9 @@ describe('RFC-167 engine — generation pass', () => {
     expect(req.agent.name).toBe(ORCHESTRATOR_AGENT_NAME)
     // the orchestrator uses the STANDARD workflow-output protocol
     expect(req.workgroupProtocolBlock).toBeUndefined()
+    // Codex impl-gate P1: the generation run's worktree writes are discarded
+    // (never merged back) — validation + human confirm happen after the run
+    expect(req.discardWrites).toBe(true)
     // prompt carries charter + goal + the pool's capability cards
     expect(req.promptTemplate).toContain('章程：先审计后修复')
     expect(req.promptTemplate).toContain('修掉支付回调里的竞态')
@@ -532,11 +548,14 @@ describe('RFC-167 — dynamic launch + runTask dispatch', () => {
       'utf8',
     )
     expect(src).toContain('task.workgroupId !== null') // RFC-164 lock stays
-    expect(src).toContain('readWorkgroupDispatch(task.workgroupConfigJson)')
+    expect(src).toContain('deriveWorkgroupDispatchFromConfig(task.workgroupConfigJson)')
     expect(src).toContain("wgDispatch === 'dw-generate'")
     expect(src).toContain('runDynamicWorkflowGenerate({')
     expect(src).toContain("'dw-phase-invariant'")
-    expect(src).toContain('deriveWorkgroupDispatch(')
+    // Codex impl-gate P1: the generation run's iso delta is dropped, never
+    // merged into the canonical worktree (abandon + skip merge-back).
+    expect(src).toContain('req.discardWrites === true')
+    expect(src).toContain("{ kind: 'abandon', reason: 'discard-writes' }")
   })
 })
 
@@ -584,6 +603,16 @@ describe('RFC-167 — dw-confirm gate + save-as (HTTP)', () => {
     edges: [],
   }
 
+  /** In-pool single-node def — passes the approve-time revalidation (Codex
+   *  P2); the resumed runScope then fails fast at iso setup (the temp
+   *  worktree is not a git repo), still without spawning any subprocess. */
+  const POOL_DEF = {
+    $schema_version: 4,
+    inputs: [],
+    nodes: [{ id: 'p1', kind: 'agent-single', agentName: 'wg-planner', promptTemplate: 'x' }],
+    edges: [],
+  }
+
   async function seedConfirmable(opts: {
     dwOverrides?: Partial<DwState>
     worktreePath?: string
@@ -617,10 +646,24 @@ describe('RFC-167 — dw-confirm gate + save-as (HTTP)', () => {
     return { taskId }
   }
 
+  /** Poll the background fire-and-forget runTask to a terminal state so it
+   *  can't bleed into other tests. */
+  async function settleTask(taskId: string): Promise<typeof tasks.$inferSelect | undefined> {
+    const deadline = Date.now() + 5000
+    let final: typeof tasks.$inferSelect | undefined
+    while (Date.now() < deadline) {
+      final = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+      const s = final?.status
+      if (s !== 'pending' && s !== 'running' && s !== 'awaiting_review') break
+      await Bun.sleep(25)
+    }
+    return final
+  }
+
   test('approve: snapshot swap + phase=executing land atomically; holder closes; resumed run executes the new DAG', async () => {
     const wt = mkdtempSync(join(tmpdir(), 'aw-rfc167-wt-'))
     try {
-      const { taskId } = await seedConfirmable({ worktreePath: wt })
+      const { taskId } = await seedConfirmable({ worktreePath: wt, generatedDef: POOL_DEF })
       const res = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
         method: 'POST',
         body: JSON.stringify({ decision: 'approve' }),
@@ -628,7 +671,7 @@ describe('RFC-167 — dw-confirm gate + save-as (HTTP)', () => {
       expect(res.status).toBe(200)
 
       const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-      expect(JSON.parse(row?.workflowSnapshot ?? '{}')).toEqual(GHOST_DEF)
+      expect(JSON.parse(row?.workflowSnapshot ?? '{}')).toEqual(POOL_DEF)
       const raw = JSON.parse(row?.workgroupConfigJson ?? '{}') as Record<string, unknown>
       expect(parseDwState(raw.dw)?.phase).toBe('executing')
       const holders = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
@@ -636,50 +679,153 @@ describe('RFC-167 — dw-confirm gate + save-as (HTTP)', () => {
       )
       expect(holders[0]?.status).toBe('done')
 
-      // the fire-and-forget resume drives runScope over the new DAG (ghost
-      // agent → fast deterministic failure, no subprocess). Wait for the
-      // background runTask to settle so it can't bleed into other tests.
-      const deadline = Date.now() + 5000
-      let final: typeof tasks.$inferSelect | undefined
-      while (Date.now() < deadline) {
-        final = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-        const s = final?.status
-        if (s !== 'pending' && s !== 'running' && s !== 'awaiting_review') break
-        await Bun.sleep(25)
-      }
-      // runScope's agent-resolution failure over the SWAPPED def (node g1)
+      // the fire-and-forget resume drives runScope over the new DAG — the
+      // node p1 is minted and fails fast at iso setup (temp dir is not a git
+      // repo), proving the swapped snapshot reached the frontier. No spawn.
+      const final = await settleTask(taskId)
       expect(final?.status).toBe('failed')
-      expect(final?.failedNodeId).toBe('g1')
+      const runs = await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+      expect(runs.some((r) => r.nodeId === 'p1')).toBe(true)
+      expect(runs.some((r) => r.rerunCause === DW_GENERATE_CAUSE)).toBe(false)
     } finally {
       rmSync(wt, { recursive: true, force: true })
     }
   })
 
-  test('reject: comment required; resets the pass with feedback; holder closes; generatedDef dropped', async () => {
-    const { taskId } = await seedConfirmable({})
-    const noComment = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
-      method: 'POST',
-      body: JSON.stringify({ decision: 'reject' }),
-    })
-    expect(noComment.status).toBe(422)
-
+  test('approve refuses a proposal that no longer validates against the current pool (409 dw-generated-def-stale)', async () => {
+    // GHOST_DEF references an agent outside the pool — as if members changed
+    // (or the agent was deleted) between generation and approval (Codex P2).
+    const { taskId } = await seedConfirmable({ generatedDef: GHOST_DEF })
     const res = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
       method: 'POST',
-      body: JSON.stringify({ decision: 'reject', comment: '粒度太粗，按模块拆' }),
+      body: JSON.stringify({ decision: 'approve' }),
     })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('dw-generated-def-stale')
+    // gate untouched: still confirmable (reject-with-feedback path stays open)
     const dw = await readDw(db, taskId)
-    expect(dw?.phase).toBe('generating')
-    expect(dw?.generateAttempts).toBe(0)
-    expect(dw?.rejectRounds).toBe(1)
-    expect(dw?.rejectionComment).toBe('粒度太粗，按模块拆')
-    expect(dw?.generatedDef).toBeUndefined()
+    expect(dw?.phase).toBe('awaiting_confirm')
     const holders = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
       (r) => r.rerunCause === DW_GATE_CAUSE,
     )
-    expect(holders[0]?.status).toBe('done')
-    // kickResume against the nonexistent worktree 410s silently — the task
-    // stays parked; a later manual resume re-enters the generate engine.
+    expect(holders[0]?.status).toBe('awaiting_review')
+  })
+
+  test('reject: comment required; the phase reset rides the resume CAS; holder closes; generatedDef dropped', async () => {
+    const wt = mkdtempSync(join(tmpdir(), 'aw-rfc167-rj-'))
+    try {
+      // ghost pool: the re-entered generate pass fails at pool resolution
+      // BEFORE any host-node run — no subprocess risk from the sync resume.
+      const ghostPool = dynamicConfig({
+        members: [
+          {
+            id: 'm-ghost',
+            memberType: 'agent',
+            agentName: 'ghost-agent',
+            userId: null,
+            displayName: 'ghost',
+            roleDesc: '',
+          },
+        ],
+      })
+      const { taskId } = await seedDynamicTask(db, {
+        dw: { ...initialDwState(), phase: 'awaiting_confirm', generatedDef: GHOST_DEF },
+        config: ghostPool,
+        status: 'awaiting_review',
+        worktreePath: wt,
+        ownerUserId: ownerId,
+      })
+      await db.insert(nodeRuns).values({
+        id: ulid(),
+        taskId,
+        nodeId: DW_ORCHESTRATOR_NODE_ID,
+        status: 'awaiting_review',
+        rerunCause: DW_GATE_CAUSE,
+        retryIndex: 0,
+        iteration: 0,
+        reviewIteration: 0,
+        startedAt: Date.now(),
+      })
+
+      const noComment = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'reject' }),
+      })
+      expect(noComment.status).toBe(422)
+
+      const res = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'reject', comment: '粒度太粗，按模块拆' }),
+      })
+      expect(res.status).toBe(200)
+      const dw = await readDw(db, taskId)
+      expect(dw?.phase).toBe('generating')
+      expect(dw?.generateAttempts).toBe(0)
+      expect(dw?.rejectRounds).toBe(1)
+      expect(dw?.rejectionComment).toBe('粒度太粗，按模块拆')
+      expect(dw?.generatedDef).toBeUndefined()
+      const holders = (await db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))).filter(
+        (r) => r.rerunCause === DW_GATE_CAUSE,
+      )
+      expect(holders[0]?.status).toBe('done')
+      // the sync resume re-entered the generate engine, which failed at pool
+      // resolution — the generate-engine failure shape, no orchestrator run.
+      const final = await settleTask(taskId)
+      expect(final?.status).toBe('failed')
+      expect(final?.errorSummary).toContain('agent pool is empty')
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
+  test('generic /resume applies to dynamic tasks (Codex P1: executing recovery); turn-engine workgroups stay 403', async () => {
+    const wt = mkdtempSync(join(tmpdir(), 'aw-rfc167-rs-'))
+    try {
+      // an executing dynamic task that failed mid-DAG — before the carve-out
+      // the builtin host anchor 403'd every generic recovery endpoint.
+      const { taskId } = await seedDynamicTask(db, {
+        dw: { ...initialDwState(), phase: 'executing' },
+        snapshot: POOL_DEF,
+        status: 'failed',
+        worktreePath: wt,
+        ownerUserId: ownerId,
+      })
+      const res = await req(`/api/tasks/${taskId}/resume`, { method: 'POST' })
+      expect(res.status).toBe(200)
+      const final = await settleTask(taskId)
+      expect(final?.status).toBe('failed') // re-ran runScope; p1 iso fails fast
+
+      // control: a turn-engine workgroup task keeps the 403 lock.
+      const lw = dynamicConfig({ mode: 'leader_worker', leaderMemberId: 'm-planner' })
+      const { taskId: lwTask } = await seedDynamicTask(db, {
+        dw: initialDwState(), // ignored by turn-engine dispatch
+        config: lw,
+        status: 'failed',
+        worktreePath: wt,
+        ownerUserId: ownerId,
+      })
+      const lwRes = await req(`/api/tasks/${lwTask}/resume`, { method: 'POST' })
+      expect(lwRes.status).toBe(403)
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
+  test('reject propagates a failed resume and leaves the gate re-triable (Codex P1: no stranding)', async () => {
+    // nonexistent worktree → the resume ownership CAS never runs (410
+    // preflight) → the phase reset must NOT have been written.
+    const { taskId } = await seedConfirmable({ generatedDef: POOL_DEF })
+    const res = await req(`/api/workgroup-tasks/${taskId}/dw-confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'reject', comment: '再拆细一点' }),
+    })
+    expect(res.status).toBe(410)
+    const dw = await readDw(db, taskId)
+    expect(dw?.phase).toBe('awaiting_confirm') // untouched — gate still open
+    expect(dw?.rejectRounds).toBe(0)
+    expect(dw?.generatedDef).toBeDefined()
+    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+    expect(row?.status).toBe('awaiting_review')
   })
 
   test('reject at the DW_MAX_REJECT_ROUNDS cap fails the task (dw-reject-exhausted)', async () => {

@@ -26,6 +26,7 @@ import { and, asc, eq, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import {
+  isTurnEngineWorkgroupTask,
   REPAIR_OPTION_IDS,
   type LifecycleAlertRule,
   type RepairOption,
@@ -145,10 +146,12 @@ export async function listRepairOptionsForAlert(
   }
   const options: RepairOption[] = []
   for (const def of defs) {
-    // RFC-165 (F13-r4): execution-reviving repairs don't apply to workgroup
-    // host tasks — surface them as unavailable WITHOUT running preflight
-    // (preflights may inspect DAG state that doesn't exist for the host).
-    if (task.workgroupId !== null && def.revivesExecution === true) {
+    // RFC-165 (F13-r4): execution-reviving repairs don't apply to TURN-ENGINE
+    // workgroup host tasks — surface them as unavailable WITHOUT running
+    // preflight (preflights may inspect DAG state that doesn't exist for the
+    // host). RFC-167 dynamic_workflow tasks ARE generically repairable
+    // (runScope-backed) and fall through to the normal preflight.
+    if (isTurnEngineWorkgroupTask(task) && def.revivesExecution === true) {
       options.push({
         id: def.id,
         rule: def.rule,
@@ -243,12 +246,12 @@ export async function applyRepairOption(args: ApplyRepairOptionArgs): Promise<Re
   }
 
   // RFC-165 (F13-r4): mirror the list-side refusal — a stale dialog (or a
-  // direct API call) must not revive a workgroup host task via generic
-  // resume/node-revive repairs.
-  if (task.workgroupId !== null && def.revivesExecution === true) {
+  // direct API call) must not revive a TURN-ENGINE workgroup host task via
+  // generic resume/node-revive repairs (RFC-167 dynamic_workflow tasks pass).
+  if (isTurnEngineWorkgroupTask(task) && def.revivesExecution === true) {
     throw new ValidationError(
       'workgroup-repair-unsupported',
-      `repair option '${def.id}' revives task execution — not applicable to workgroup tasks (RFC-164 engine re-entry pending)`,
+      `repair option '${def.id}' revives task execution — not applicable to turn-engine workgroup tasks (RFC-164 engine re-entry pending)`,
     )
   }
 
@@ -434,6 +437,7 @@ async function loadTaskOrThrow(db: DbClient, taskId: string): Promise<RepairTask
       status: tasks.status,
       workflowSnapshot: tasks.workflowSnapshot,
       workgroupId: tasks.workgroupId,
+      workgroupConfigJson: tasks.workgroupConfigJson,
     })
     .from(tasks)
     .where(eq(tasks.id, taskId))
