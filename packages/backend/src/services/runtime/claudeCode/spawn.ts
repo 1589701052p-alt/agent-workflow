@@ -20,6 +20,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLogger, type Logger } from '@/util/log'
+import { normalizePathKey } from '@/util/platform'
 import type { SpawnPlan } from '../types'
 import { type ClaudeSkillInjection, prepareClaudeConfigDir } from './config'
 
@@ -123,6 +124,11 @@ export function buildClaudeSpawn(ctx: ClaudeSpawnContext): SpawnPlan {
     // inherited IS_SANDBOX=0 (claude's gate wants the exact string '1').
     ...claudeSandboxEnv(process.getuid?.()),
   }
+  // Windows GUI-launch fix: the spread above copies the registry `Path` (mixed
+  // case) on a GUI-launched daemon, leaving the child with no uppercase `PATH`
+  // that Bun.spawn can resolve -> `uv_spawn 'claude'` ENOENT. Promote it.
+  // No-op on POSIX / bash-launched Windows (PATH already uppercase).
+  normalizePathKey(env)
   const gitName = typeof ctx.gitUserName === 'string' ? ctx.gitUserName : ''
   const gitEmail = typeof ctx.gitUserEmail === 'string' ? ctx.gitUserEmail : ''
   if (gitName.length > 0 && gitEmail.length > 0) {

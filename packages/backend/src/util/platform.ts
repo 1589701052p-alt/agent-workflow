@@ -92,6 +92,47 @@ export function fromFileUrl(spec: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Spawn-env PATH normalization (Windows GUI-launch fix)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Promote a Windows mixed-case `Path` env key to uppercase `PATH` IN PLACE on a
+ * `Bun.spawn` child-env object, so the child can resolve PATH for bare commands.
+ *
+ * Why this exists: `Bun.spawn`'s child PATH resolution is CASE-SENSITIVE -
+ * libuv consults only a var literally named `PATH` (uppercase). Windows stores
+ * the registry PATH as `Path` (mixed case), and a GUI/explorer-launched daemon
+ * (double-clicked .exe / Start-menu shortcut) inherits it under that casing, so
+ * a naive `{ ...process.env }` copies a `Path` key and the child is spawned
+ * with NO resolvable PATH -> `ENOENT: no such file or directory, uv_spawn
+ * '<binary>'` for every bare command (opencode / claude / git). A shell-launched
+ * daemon (bash, CI) gets `PATH` (uppercase) and is unaffected - which is why
+ * this only bites the distributed .exe, and why the boot `--version` probe
+ * (which spawns with NO `env` option, inheriting the OS env directly /
+ * case-insensitively) still passes while the Settings "Test" button (which
+ * passes `env: { ...process.env }`) fails with exactly that ENOENT.
+ *
+ * No-op when `PATH` (uppercase) is already present (POSIX, or bash-launched
+ * Windows). Pure: reads only the passed env object, never `process.env`, so it
+ * is deterministic to unit-test. Call this on every env object built from
+ * `...process.env` before handing it to `Bun.spawn` (the opencode / claude /
+ * git spawn env builders).
+ */
+export function normalizePathKey(env: Record<string, string | undefined>): void {
+  if (env.PATH !== undefined) return
+  for (const k of Object.keys(env)) {
+    if (k !== 'PATH' && k.toLowerCase() === 'path') {
+      const v = env[k]
+      if (v !== undefined) {
+        env.PATH = v
+        delete env[k]
+      }
+      return
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Long paths (RFC-windows PR-2 T10)
 // ─────────────────────────────────────────────────────────────────────────────
 

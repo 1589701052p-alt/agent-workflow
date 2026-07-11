@@ -57,6 +57,18 @@ describe('nonInteractiveGitEnv()', () => {
       else process.env[key] = prev
     }
   })
+
+  test('exposes an uppercase PATH a Bun.spawn child can resolve (Windows GUI-launch fix)', () => {
+    // Regression for the distributed-.exe failure: a GUI-launched daemon's
+    // process.env keys PATH as `Path` (mixed case), and `{ ...process.env }`
+    // copies it that way, leaving the git child with no uppercase `PATH` that
+    // Bun.spawn can resolve -> `uv_spawn 'git'` ENOENT. nonInteractiveGitEnv
+    // normalizes via normalizePathKey, so PATH (uppercase) is always present.
+    const env = nonInteractiveGitEnv()
+    expect(env.PATH).toBeDefined()
+    // The mixed-case duplicate must not linger (it would shadow / confuse).
+    expect(env.Path).toBeUndefined()
+  })
 })
 
 describe('git spawn sites wire nonInteractiveGitEnv()', () => {
