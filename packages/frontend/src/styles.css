@@ -12002,6 +12002,15 @@ mark.comment-anchor[data-active='true'] {
   border-color: color-mix(in srgb, #d97706 45%, var(--border));
 }
 
+/* Selected human card keeps its amber TYPE background — only the border
+   flips to the accent selection color (same grammar as a selected review
+   node on the canvas: blue ring over amber body). Without this override the
+   shared .card--highlighted washed the freshly-added, auto-selected human
+   member in the accent tint and the type reading was lost (user report). */
+.workgroup-card--human.card--highlighted {
+  background: color-mix(in srgb, #d97706 10%, var(--panel));
+}
+
 .workgroup-card__open {
   background: none;
   border: 0;
