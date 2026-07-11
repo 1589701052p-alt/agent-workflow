@@ -283,10 +283,55 @@ describe('DynamicWorkflowPanel — canceled tasks (Codex P2)', () => {
     expect(await screen.findByTestId('dw-canceled-notice')).toBeTruthy()
     expect(screen.queryByTestId('dw-generating-card')).toBeNull()
     expect(screen.queryByTestId('dw-gate-approve')).toBeNull()
+    // no generated def yet → no save-as either
+    expect(screen.queryByTestId('dw-save-as-btn')).toBeNull()
+  })
+
+  test('cancel AFTER approval keeps save-as available (final round: the def is still persistable)', async () => {
+    // dw.phase froze at 'executing' with a retained generatedDef.
+    installFetch(
+      makeRoom(
+        {
+          phase: 'executing',
+          generateAttempts: 0,
+          rejectRounds: 0,
+          generatedDef: GENERATED_DEF,
+        },
+        'canceled',
+      ),
+    )
+    renderPanel('canceled')
+    expect(await screen.findByTestId('dw-canceled-notice')).toBeTruthy()
+    expect(screen.queryByTestId('dw-executing-card')).toBeNull()
+    expect(screen.getByTestId('dw-save-as-btn')).toBeTruthy()
   })
 })
 
 describe('DynamicWorkflowPanel — saved-as note lifecycle (Codex P2)', () => {
+  test('approving keeps the saved-as acknowledgement (same proposal — final round)', async () => {
+    installFetch(
+      makeRoom(
+        {
+          phase: 'awaiting_confirm',
+          generateAttempts: 0,
+          rejectRounds: 0,
+          generatedDef: GENERATED_DEF,
+        },
+        'awaiting_review',
+      ),
+    )
+    renderPanel('awaiting_review')
+    fireEvent.click(await screen.findByTestId('dw-save-as-btn'))
+    fireEvent.change(await screen.findByTestId('dw-save-as-name'), {
+      target: { value: 'saved-dw' },
+    })
+    fireEvent.click(screen.getByTestId('dw-save-as-submit'))
+    expect(await screen.findByTestId('dw-saved-note')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('dw-gate-approve'))
+    // the note survives the approval (the executing card would show it)
+    await waitFor(() => expect(screen.getByTestId('dw-saved-note')).toBeTruthy())
+  })
+
   test('rejecting the proposal clears the saved-as acknowledgement', async () => {
     installFetch(
       makeRoom(

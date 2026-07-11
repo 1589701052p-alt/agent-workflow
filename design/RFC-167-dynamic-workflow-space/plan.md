@@ -2,6 +2,15 @@
 
 > 规模：子系统级（工作组新 mode + 内置编排 agent + 三阶段引擎 + 前端）。前置 RFC-166 + RFC-164。
 > 每 PR 独立过全量门禁。改动即带测。
+>
+> **✅ 完工 2026-07-11（全部 origin/main + 权威 CI 绿）**：PR-0 `f52ef2e1` · PR-1 `7b9edaf8` ·
+> PR-2 `f4e21c6f`+`a141c292`+`731a612f`〔+Codex 实现门两轮 8 findings：`1a1f0bca`（3P1+2P2：
+> 生成写入 discard/reject 进 resume CAS/dynamic 恢复放行/persistDwState 防覆写/approve 重校验）
+> +`e1dfa194`（确认门 TOCTOU freshGateView/json_set 原子槽写/耗尽 resume 新预算）〕 ·
+> PR-3 `49055e15`〔T13 mock-opencode 生成→确认→执行全真链 e2e + interrupted autoResume 恢复；
+> T14 DynamicWorkflowPanel+DYNAMIC_WORKGROUP_TAB_ORDER+相位默认 tab；T15 task.status 帧失效
+> room 聚合〕+Codex 4 P2 `12b8fe54`〔tab 竞态/终态轮询/终态渲染/另存残留〕。AC-1..8 对照全过
+> （AC-1 的独立空间按 pivot 等效为 PR-1 工作组 dynamic mode 资源面）。
 
 > **⚠️ 架构修订 2026-07-11——动态 workflow 改为工作组第三 mode（详见 design.md 修订头）。
 > 下方旧「独立资源」PR 结构作废，以本修订 PR 结构为准：**

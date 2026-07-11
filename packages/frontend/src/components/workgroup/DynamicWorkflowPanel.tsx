@@ -89,12 +89,14 @@ export function DynamicWorkflowPanel({
         `/api/workgroup-tasks/${encodeURIComponent(taskId)}/dw-confirm`,
         input,
       ),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       setRejectOpen(false)
       setRejectComment('')
-      // Codex impl-gate P2: a rejection discards the proposal — the saved-as
-      // note belonged to it and must not survive onto the regenerated one.
-      setSavedName(null)
+      // Codex impl-gate P2 (final round): only a REJECTION discards the
+      // proposal — its saved-as note must not survive onto the regenerated
+      // one. An approval keeps the same proposal, so the acknowledgement
+      // stays (clearing it there invited a duplicate save).
+      if (variables.decision === 'reject') setSavedName(null)
       void qc.invalidateQueries({ queryKey: workgroupRoomKey(taskId) })
       // approve resumes into execution / reject re-enters generation — both
       // move the task status and (on approve) swap the snapshot the canvas
@@ -125,17 +127,12 @@ export function DynamicWorkflowPanel({
     return <EmptyState size="comfortable" title={t('workgroups.dw.previewEmpty')} />
   }
   // Codex impl-gate P2: dw.phase freezes at its last substate on cancel
-  // (e.g. 'generating') — without this gate a canceled task would spin the
-  // generation card forever and the confirm buttons would 409.
-  if (taskStatus === 'canceled') {
-    return (
-      <EmptyState
-        size="comfortable"
-        title={t('workgroups.dw.canceledNotice')}
-        data-testid="dw-canceled-notice"
-      />
-    )
-  }
+  // (e.g. 'generating') — a canceled task must not spin the generation card
+  // forever or offer confirm buttons that would 409. NOT an early return
+  // (final round): a generated def may still exist (cancel after approval)
+  // and save-as deliberately stays available on terminal tasks — the
+  // canceled card below shares the save-as button + dialogs.
+  const canceled = taskStatus === 'canceled'
 
   const saveAsButton =
     generated !== null ? (
@@ -155,8 +152,28 @@ export function DynamicWorkflowPanel({
 
   return (
     <div className="task-canvas-layout" data-testid="dw-orchestration-panel">
+      {/* ── canceled: the orchestration flow ended (dw.phase froze at its
+          last substate) — but a generated def may still exist (cancel after
+          approval) and save-as stays available on terminal tasks. ── */}
+      {canceled && (
+        <Card
+          header={<h3 className="workgroup-room__side-title">{t('workgroups.dw.title')}</h3>}
+          data-testid="dw-canceled-notice"
+          footer={
+            saveAsButton && <div className="workgroup-room__card-actions">{saveAsButton}</div>
+          }
+        >
+          <p className="workgroup-room__gate-state">{t('workgroups.dw.canceledNotice')}</p>
+          {savedName !== null && (
+            <p className="workgroup-room__gate-state" data-testid="dw-saved-note">
+              {t('workgroups.dw.saved', { name: savedName })}
+            </p>
+          )}
+        </Card>
+      )}
+
       {/* ── generating / rejected: progress (or exhaustion) card ────────── */}
-      {(dw.phase === 'generating' || dw.phase === 'rejected') && (
+      {!canceled && (dw.phase === 'generating' || dw.phase === 'rejected') && (
         <Card
           header={<h3 className="workgroup-room__side-title">{t('workgroups.dw.title')}</h3>}
           data-testid="dw-generating-card"
@@ -187,7 +204,7 @@ export function DynamicWorkflowPanel({
       )}
 
       {/* ── awaiting_confirm: read-only preview + the confirm gate ──────── */}
-      {dw.phase === 'awaiting_confirm' && (
+      {!canceled && dw.phase === 'awaiting_confirm' && (
         <>
           <Card
             header={<h3 className="workgroup-room__side-title">{t('workgroups.dw.gateTitle')}</h3>}
@@ -247,7 +264,7 @@ export function DynamicWorkflowPanel({
           impl-gate P2: dw.phase stays 'executing' after the run terminates —
           the card's copy follows the TASK status so a finished / failed DAG
           is never labeled as still running. ── */}
-      {dw.phase === 'executing' && (
+      {!canceled && dw.phase === 'executing' && (
         <Card
           header={<h3 className="workgroup-room__side-title">{t('workgroups.dw.title')}</h3>}
           data-testid="dw-executing-card"

@@ -1171,7 +1171,8 @@ export const enUS: Resources = {
       saveAsSubmit: 'Save',
       saved: 'Saved as {{name}}.',
       executing: 'Approved — the DAG is executing. See the Workflow status tab for progress.',
-      executingDone: 'Execution finished — see the Workflow status canvas and the Outputs tab.',
+      executingDone:
+        'Execution finished — see the Workflow status canvas and the Worktree diff tab for the result.',
       executingFailed:
         'Execution failed — the failing node is on the Workflow status canvas; resume from the task header to retry.',
       canceledNotice: 'The task was canceled; the orchestration flow ended.',

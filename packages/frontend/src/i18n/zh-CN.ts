@@ -3954,7 +3954,7 @@ export const zhCN: Resources = {
       saveAsSubmit: '保存',
       saved: '已另存为 {{name}}。',
       executing: '已确认，DAG 正在执行——进度见「运行状态」页签。',
-      executingDone: '执行完成——结果见「运行状态」画布与产出页签。',
+      executingDone: '执行完成——结果见「运行状态」画布与「工作树差异」页签。',
       executingFailed: '执行失败——失败节点见「运行状态」画布，可从任务头部重试。',
       canceledNotice: '任务已取消，编排流程终止。',
       exhausted: 'workflow 生成失败（重试已耗尽）。可在详情页查看错误后重试任务。',
