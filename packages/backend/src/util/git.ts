@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Logger } from '@/util/log'
+import { normalizePathKey } from '@/util/platform'
 
 export interface GitRunResult {
   stdout: string
@@ -29,7 +30,7 @@ export interface GitRunResult {
  *   - GIT_TERMINAL_PROMPT=0 — same treatment for HTTPS credential prompts.
  */
 export function nonInteractiveGitEnv(): Record<string, string | undefined> {
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     GIT_SSH_COMMAND: [
       process.env.GIT_SSH_COMMAND ?? 'ssh',
@@ -40,6 +41,13 @@ export function nonInteractiveGitEnv(): Record<string, string | undefined> {
     ].join(' '),
     GIT_TERMINAL_PROMPT: '0',
   }
+  // Windows GUI-launch fix: spread copies the registry `Path` (mixed case) on a
+  // GUI-launched daemon, leaving the git child with no uppercase `PATH` that
+  // Bun.spawn can resolve -> `uv_spawn 'git'` ENOENT (breaks every worktree /
+  // commit / snapshot op from the double-clicked .exe). Promote it; no-op on
+  // POSIX / bash-launched Windows.
+  normalizePathKey(env)
+  return env
 }
 
 /**

@@ -9,6 +9,8 @@
 //
 // Leaf module: imports nothing from runner.ts → no module-init cycle.
 
+import { normalizePathKey } from '@/util/platform'
+
 /** Minimal shape buildCommand needs (a structural subset of RunNodeOptions). */
 export interface OpencodeCommandOptions {
   /** Override `['opencode']` (tests pass `['bun','run',mock]`). */
@@ -87,6 +89,11 @@ export function buildOpencodeEnv(ctx: OpencodeEnvContext): Record<string, string
     OPENCODE_CONFIG_DIR: ctx.runDir,
     OPENCODE_CONFIG_CONTENT: ctx.inlineConfigSerialized,
   }
+  // Windows GUI-launch fix: the spread above copies the registry `Path` (mixed
+  // case) on a GUI-launched daemon, leaving the child with no uppercase `PATH`
+  // that Bun.spawn can resolve -> `uv_spawn 'opencode'` ENOENT. Promote it.
+  // No-op on POSIX / bash-launched Windows (PATH already uppercase).
+  normalizePathKey(env)
   // RFC-029: tell the dump plugin where to write the snapshot file. Set only
   // when the plugin was actually injected — otherwise leaving it unset keeps
   // any externally-set value (mock-opencode) from being hijacked.
