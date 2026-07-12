@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay } from './helpers/slow-runner'
 // Locked regression — cancelling a running wrapper-fanout leaves the wrapper
 // node_run row 'failed' instead of 'canceled'.
 //
@@ -163,43 +164,47 @@ describe('regression: cancelling a running wrapper-fanout must mark the wrapper 
   // fanout maps the canceled shards → kind:'failed' → markWrapperTerminal('failed').
   // DELAY (1000ms) >> abort delay (200ms) gives ample timing margin: the shards
   // cannot complete before the abort fires.
-  test('aborting mid-fanout leaves task=canceled but wrapper row must NOT be failed', async () => {
-    await seedAgent(h.db, 'worker', ['result'])
-    const def = fanoutDef()
-    const taskId = await seedWorkflowAndTask(h, def, { docs: 'a.md\nb.md\nc.md' })
+  test(
+    'aborting mid-fanout leaves task=canceled but wrapper row must NOT be failed',
+    async () => {
+      await seedAgent(h.db, 'worker', ['result'])
+      const def = fanoutDef()
+      const taskId = await seedWorkflowAndTask(h, def, { docs: 'a.md\nb.md\nc.md' })
 
-    const controller = new AbortController()
-    const abortTimer = setTimeout(() => controller.abort(), 200)
+      const controller = new AbortController()
+      const abortTimer = setTimeout(() => controller.abort(), 200)
 
-    await withEnv(
-      {
-        MOCK_OPENCODE_DELAY_MS: '1000',
-        MOCK_OPENCODE_OUTPUTS: JSON.stringify({ result: 'ok' }),
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
-          signal: controller.signal,
-        }),
-    )
-    clearTimeout(abortTimer)
+      await withEnv(
+        {
+          MOCK_OPENCODE_DELAY_MS: String(testDelay(1000)),
+          MOCK_OPENCODE_OUTPUTS: JSON.stringify({ result: 'ok' }),
+        },
+        () =>
+          runTask({
+            taskId,
+            db: h.db,
+            appHome: h.appHome,
+            opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
+            signal: controller.signal,
+          }),
+      )
+      clearTimeout(abortTimer)
 
-    // Sanity: the task itself ends 'canceled' via the signal short-circuit.
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('canceled')
+      // Sanity: the task itself ends 'canceled' via the signal short-circuit.
+      const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+      expect(t?.status).toBe('canceled')
 
-    // Headline RED assertion: the wrapper-fanout node_run row (nodeId='fan')
-    // must reflect the cancel, NOT 'failed'. Today dispatchFanoutShard maps the
-    // canceled shards to kind:'failed' and markWrapperTerminal stamps 'failed'.
-    const fanRow = (
-      await h.db
-        .select()
-        .from(nodeRuns)
-        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'fan')))
-    )[0]
-    expect(fanRow?.status).toBe('canceled')
-  }, 30_000)
+      // Headline RED assertion: the wrapper-fanout node_run row (nodeId='fan')
+      // must reflect the cancel, NOT 'failed'. Today dispatchFanoutShard maps the
+      // canceled shards to kind:'failed' and markWrapperTerminal stamps 'failed'.
+      const fanRow = (
+        await h.db
+          .select()
+          .from(nodeRuns)
+          .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, 'fan')))
+      )[0]
+      expect(fanRow?.status).toBe('canceled')
+    },
+    testDelay(30_000),
+  )
 })

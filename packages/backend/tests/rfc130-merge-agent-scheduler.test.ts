@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay } from './helpers/slow-runner'
 // RFC-130 §6.2 — end-to-end scheduler wiring of the built-in merge agent.
 //
 // Two writer nodes at the same level each run in their OWN iso worktree and both
@@ -177,7 +178,7 @@ describe('RFC-130 §6.2 — merge agent scheduler wiring (real conflict, real di
     await seedWriter(h.db, 'w2')
     const shim = writeShim(h.appHome)
     const taskId = await seedTask(h, twoWriterDef())
-    await withEnv({ MOCK_OPENCODE_DELAY_MS: '0' }, () =>
+    await withEnv({ MOCK_OPENCODE_DELAY_MS: String(testDelay(0)) }, () =>
       runTask({
         taskId,
         db: h.db,
@@ -207,7 +208,7 @@ describe('RFC-130 §6.2 — merge agent scheduler wiring (real conflict, real di
     await seedWriter(h.db, 'w2')
     const shim = writeShim(h.appHome)
     const taskId = await seedTask(h, twoWriterDef())
-    await withEnv({ MOCK_OPENCODE_DELAY_MS: '0', MERGE_SHOULD_FAIL: '1' }, () =>
+    await withEnv({ MOCK_OPENCODE_DELAY_MS: String(testDelay(0)), MERGE_SHOULD_FAIL: '1' }, () =>
       runTask({
         taskId,
         db: h.db,
