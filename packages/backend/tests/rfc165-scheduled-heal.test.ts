@@ -108,16 +108,18 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     expect(r1.disabled).toBe(0)
 
     const p = await rawPayload(id)
-    // RFC-W001: compare via realpathSync on both sides. The production heal
-    // stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes from
-    // `git rev-parse --show-toplevel` (forward-slash, long name); on a Windows
-    // runner realpathSync is form-sensitive (backslash long-name input -> 8.3
-    // short name like RUNNER~1, forward-slash -> long), so the stored URL's path
-    // form can differ from pathToFileURL(realpathSync(repo)).href even though
-    // they resolve to the same file. Round-tripping the stored URL through
-    // fileURLToPath -> realpathSync normalizes both sides to the same canonical
-    // realpath. No-op on POSIX (no 8.3 names).
-    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(repo))
+    // RFC-W001: compare via realpathSync.native on both sides. The production
+    // heal stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes
+    // from `git rev-parse --show-toplevel` (long name); the test's `repo` is
+    // built from os.tmpdir(), which on a Windows runner returns the 8.3 short
+    // form (RUNNER~1). Node's JS realpathSync does NOT expand 8.3 -> long (it
+    // preserves the input form), so realpathSync(repo) stays short while the
+    // stored URL carries the long name -> a spurious mismatch. realpathSync.native
+    // uses GetFinalPathNameByHandleW (FILE_NAME_NORMALIZED) which DOES expand
+    // 8.3, so both sides canonicalize to the long form. No-op on POSIX.
+    expect(realpathSync.native(fileURLToPath(p['repoUrl'] as string))).toBe(
+      realpathSync.native(repo),
+    )
     expect(p['ref']).toBe('main')
     expect('repoPath' in p).toBe(false)
     expect('baseBranch' in p).toBe(false)
@@ -319,10 +321,12 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     expect(r.converted).toBe(1)
     expect(r.disabled).toBe(0)
     const p = await rawPayload(id)
-    // RFC-W001: see H1 - round-trip the stored URL through fileURLToPath +
-    // realpathSync so the short/long-name form on Windows doesn't cause a
-    // spurious mismatch. No-op on POSIX.
-    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(bare))
+    // RFC-W001: see H1 - use realpathSync.native (expands 8.3 short names on
+    // Windows via GetFinalPathNameByHandleW) on both sides so the runneradmin
+    // vs RUNNER~1 form doesn't cause a spurious mismatch. No-op on POSIX.
+    expect(realpathSync.native(fileURLToPath(p['repoUrl'] as string))).toBe(
+      realpathSync.native(bare),
+    )
     expect('repoPath' in p).toBe(false)
     rimrafDir(tmp)
   })
@@ -345,16 +349,18 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     const r = await healScheduledLaunchPayloads(db)
     expect(r.converted).toBe(1)
     const p = await rawPayload(id)
-    // RFC-W001: compare via realpathSync on both sides. The production heal
-    // stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes from
-    // `git rev-parse --show-toplevel` (forward-slash, long name); on a Windows
-    // runner realpathSync is form-sensitive (backslash long-name input -> 8.3
-    // short name like RUNNER~1, forward-slash -> long), so the stored URL's path
-    // form can differ from pathToFileURL(realpathSync(repo)).href even though
-    // they resolve to the same file. Round-tripping the stored URL through
-    // fileURLToPath -> realpathSync normalizes both sides to the same canonical
-    // realpath. No-op on POSIX (no 8.3 names).
-    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(repo))
+    // RFC-W001: compare via realpathSync.native on both sides. The production
+    // heal stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes
+    // from `git rev-parse --show-toplevel` (long name); the test's `repo` is
+    // built from os.tmpdir(), which on a Windows runner returns the 8.3 short
+    // form (RUNNER~1). Node's JS realpathSync does NOT expand 8.3 -> long (it
+    // preserves the input form), so realpathSync(repo) stays short while the
+    // stored URL carries the long name -> a spurious mismatch. realpathSync.native
+    // uses GetFinalPathNameByHandleW (FILE_NAME_NORMALIZED) which DOES expand
+    // 8.3, so both sides canonicalize to the long form. No-op on POSIX.
+    expect(realpathSync.native(fileURLToPath(p['repoUrl'] as string))).toBe(
+      realpathSync.native(repo),
+    )
     rimrafDir(tmp)
   })
 
