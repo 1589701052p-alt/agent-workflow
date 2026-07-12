@@ -65,9 +65,12 @@ export function stubCmd(stubPath: string): string[] {
  * only, spawn not asserted" case.
  */
 export function noopOpencodeCmd(): string[] {
-  // `bun -e` runs the inline script; the trailing `run` arg the runtime
-  // appends is ignored. No shell, so `(` `)` need no quoting (argv element).
-  return ['bun', '-e', 'process.exit(0)']
+  // `process.execPath` is the absolute path to the bun binary running the
+  // tests - zero PATH-dependence, so it resolves even in a sanitized spawn
+  // env (the `uv_spawn 'bun' ENOENT` when relying on PATH lookup). `-e`
+  // runs the inline script; the trailing `run` arg the runtime appends is
+  // ignored. No shell, so `(` `)` need no quoting (passed as one argv element).
+  return [process.execPath, '-e', 'process.exit(0)']
 }
 
 /**

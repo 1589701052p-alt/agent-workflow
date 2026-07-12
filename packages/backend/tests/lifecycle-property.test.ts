@@ -1,4 +1,6 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
+import { testDelay } from './helpers/slow-runner'
 // RFC-053 PR-A T1h — property-based: random event sequences preserve
 // cross-table invariants.
 //
@@ -321,7 +323,7 @@ async function applyEvent(h: Harness, ev: Event): Promise<boolean> {
       if (target === undefined) return false
       await retryNode(h.db, h.taskId, target.id, {
         cascade: true,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
       return true
     }
@@ -341,92 +343,111 @@ describe('RFC-053 PR-A T1h — property-based: random sequences preserve invaria
   // default 5s ceiling. f37ef44 widened the budget on the stress test
   // but missed this case (CI run 26302009314 macos timed out at
   // 5006.84ms / 5000ms default). Property-based tests want shrink-time
-  // budget, so we give it 15s here too.
-  test('after any sequence of 1-8 events, R1/R2/T1/U1 hold', async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.array(eventArbitrary, { minLength: 1, maxLength: 8 }), async (seq) => {
-        const h = await buildHarness()
-        try {
-          for (const ev of seq) {
-            await applyEvent(h, ev)
-          }
-          const violations = await checkInvariants(h.db, h.taskId)
-          if (violations.length > 0) {
-            // Print on failure for easier shrinking.
-            console.error('violations:', violations, 'sequence:', seq)
-          }
-          return violations.length === 0
-        } finally {
-          h.cleanup()
-        }
-      }),
-      { numRuns: 30 },
-    )
-  }, 15000)
-
-  test('after long sequences (10-15 events), invariants still hold', async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.array(eventArbitrary, { minLength: 10, maxLength: 15 }), async (seq) => {
-        const h = await buildHarness()
-        try {
-          for (const ev of seq) {
-            await applyEvent(h, ev)
-          }
-          const violations = await checkInvariants(h.db, h.taskId)
-          if (violations.length > 0) {
-            console.error('violations:', violations, 'sequence:', seq)
-          }
-          return violations.length === 0
-        } finally {
-          h.cleanup()
-        }
-      }),
-      { numRuns: 10 },
-    )
-  })
-
-  test('stress: approve-iterate-approve cycles never leave R1 violated', async () => {
-    // Targeted property: any interleaving of approve/iterate operations
-    // followed by a final approve should end with R1 satisfied (every
-    // approved dv has a done node_run).
-    //
-    // Per-test timeout 15s (bumped from bun:test's default 5s). Each
-    // fc.asyncProperty iteration calls `buildHarness()` which spawns ~5
-    // `runGit` subprocesses (init / 2× config / add / commit) + runs
-    // the full DB migration set + ~5 inserts. That's ~200-500ms per
-    // iteration on macos GHA runners (which lack ramfs for /tmp), so
-    // numRuns=20 stacks to 4-10s, right at the default timeout edge.
-    // Property-based testing wants a real budget to shrink on a real
-    // failure, so we give it 15s — confirmed unrelated flake on
-    // 2026-05-22 CI run 26297919707; same shape would re-occur every
-    // few macos runs until the budget was widened.
-    await fc.assert(
-      fc.asyncProperty(
-        fc.array(fc.oneof(fc.constant('A'), fc.constant('I')), {
-          minLength: 1,
-          maxLength: 6,
-        }),
-        async (ops) => {
+  // budget, so we give it testDelay(15000) here (RFC-W003: scales with
+  // AW_TEST_DELAY_MULTIPLIER on slow runners; the upstream-sync Windows run
+  // timed out at 15006ms). RFC-W003 C1: the retry-agent event opencodeCmd is
+  // now noopOpencodeCmd() (was POSIX-only /usr/bin/env -> Windows ENOENT
+  // retry churn that burned the budget).
+  test(
+    'after any sequence of 1-8 events, R1/R2/T1/U1 hold',
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(fc.array(eventArbitrary, { minLength: 1, maxLength: 8 }), async (seq) => {
           const h = await buildHarness()
           try {
-            for (const op of ops) {
-              await applyEvent(h, { kind: op === 'A' ? 'approve' : 'iterate' })
-              // After every op, re-enter dispatch (simulating scheduler resume).
-              await applyEvent(h, { kind: 'dispatch' })
+            for (const ev of seq) {
+              await applyEvent(h, ev)
             }
-            const violations = (await checkInvariants(h.db, h.taskId)).filter(
-              (v) => v.rule === 'R1',
-            )
+            const violations = await checkInvariants(h.db, h.taskId)
             if (violations.length > 0) {
-              console.error('R1 violations:', violations, 'ops:', ops)
+              // Print on failure for easier shrinking.
+              console.error('violations:', violations, 'sequence:', seq)
             }
             return violations.length === 0
           } finally {
             h.cleanup()
           }
-        },
-      ),
-      { numRuns: 20 },
-    )
-  }, 15000)
+        }),
+        { numRuns: 30 },
+      )
+    },
+    testDelay(15000),
+  )
+
+  test(
+    'after long sequences (10-15 events), invariants still hold',
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.array(eventArbitrary, { minLength: 10, maxLength: 15 }),
+          async (seq) => {
+            const h = await buildHarness()
+            try {
+              for (const ev of seq) {
+                await applyEvent(h, ev)
+              }
+              const violations = await checkInvariants(h.db, h.taskId)
+              if (violations.length > 0) {
+                console.error('violations:', violations, 'sequence:', seq)
+              }
+              return violations.length === 0
+            } finally {
+              h.cleanup()
+            }
+          },
+        ),
+        { numRuns: 10 },
+      )
+    },
+    testDelay(15000),
+  )
+
+  test(
+    'stress: approve-iterate-approve cycles never leave R1 violated',
+    async () => {
+      // Targeted property: any interleaving of approve/iterate operations
+      // followed by a final approve should end with R1 satisfied (every
+      // approved dv has a done node_run).
+      //
+      // Per-test timeout 15s (bumped from bun:test's default 5s). Each
+      // fc.asyncProperty iteration calls `buildHarness()` which spawns ~5
+      // `runGit` subprocesses (init / 2× config / add / commit) + runs
+      // the full DB migration set + ~5 inserts. That's ~200-500ms per
+      // iteration on macos GHA runners (which lack ramfs for /tmp), so
+      // numRuns=20 stacks to 4-10s, right at the default timeout edge.
+      // Property-based testing wants a real budget to shrink on a real
+      // failure, so we give it 15s — confirmed unrelated flake on
+      // 2026-05-22 CI run 26297919707; same shape would re-occur every
+      // few macos runs until the budget was widened.
+      await fc.assert(
+        fc.asyncProperty(
+          fc.array(fc.oneof(fc.constant('A'), fc.constant('I')), {
+            minLength: 1,
+            maxLength: 6,
+          }),
+          async (ops) => {
+            const h = await buildHarness()
+            try {
+              for (const op of ops) {
+                await applyEvent(h, { kind: op === 'A' ? 'approve' : 'iterate' })
+                // After every op, re-enter dispatch (simulating scheduler resume).
+                await applyEvent(h, { kind: 'dispatch' })
+              }
+              const violations = (await checkInvariants(h.db, h.taskId)).filter(
+                (v) => v.rule === 'R1',
+              )
+              if (violations.length > 0) {
+                console.error('R1 violations:', violations, 'ops:', ops)
+              }
+              return violations.length === 0
+            } finally {
+              h.cleanup()
+            }
+          },
+        ),
+        { numRuns: 20 },
+      )
+    },
+    testDelay(15000),
+  )
 })
