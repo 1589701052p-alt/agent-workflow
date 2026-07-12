@@ -46,6 +46,9 @@ describe('availableTabs — non-workgroup tasks stay item-by-item unchanged', ()
   const LEGACY_WITH_OUTPUTS = [
     'workflow-status',
     'task-questions',
+    // RFC-W002: interaction timeline tab is now part of the non-workgroup set
+    // (sits in TAB_ORDER right after task-questions); the golden lock includes it.
+    'timeline',
     'node-runs',
     'details',
     'outputs',

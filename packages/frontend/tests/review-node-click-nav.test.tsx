@@ -216,7 +216,10 @@ describe('tasks.detail review-node wiring', () => {
       /reviewNodeIds\.has\(sel\.id\)\)\s*\{\s*canvasRef\?\.current\?\.clearSelection\(\)\s*onSelectNodeRun\(null\)/,
     )
     const clearIdx = src.indexOf('canvasRef?.current?.clearSelection()')
-    const navIdx = src.indexOf("to: '/reviews/$nodeRunId'")
+    // Search for the navigate STARTING AT clearSelection: RFC-W002's
+    // handleTimelineJump (top of file) also routes to /reviews/$nodeRunId as a
+    // separate path; scoping finds the in-branch navigate, not the timeline-jump one.
+    const navIdx = src.indexOf("to: '/reviews/$nodeRunId'", clearIdx)
     expect(clearIdx).toBeGreaterThan(-1)
     expect(navIdx).toBeGreaterThan(clearIdx)
   })

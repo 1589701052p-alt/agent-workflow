@@ -258,7 +258,10 @@ describe('tasks.detail clarify-node wiring', () => {
     )
     // clarify branch's clearSelection precedes its /clarify navigate.
     const clarifyBranchIdx = src.indexOf('clarifyNodeIds.has(sel.id)')
-    const navIdx = src.indexOf("to: '/clarify/$nodeRunId'")
+    // Search for the navigate STARTING AT the branch: RFC-W002's handleTimelineJump
+    // (top of file) also routes to /clarify/$nodeRunId as a separate path; scoping
+    // to the branch finds the in-branch navigate, not the timeline-jump one.
+    const navIdx = src.indexOf("to: '/clarify/$nodeRunId'", clarifyBranchIdx)
     expect(navIdx).toBeGreaterThan(clarifyBranchIdx)
     // onSelectNodeRun(null) appears in the branch → drawer never opens for clarify.
     expect(src).toMatch(/onSelectNodeRun\(null\)\s*const nav = clarifyNavByNode\.get/)
