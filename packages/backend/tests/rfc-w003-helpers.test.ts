@@ -8,19 +8,25 @@ import { readTrace, waitForTraceEvent } from './helpers/trace-poll'
 import { testDelay, testDelayMultiplier, testTolerance } from './helpers/slow-runner'
 
 describe('RFC-W003 slow-runner - testDelay / testTolerance', () => {
-  const prev = process.env.AW_TEST_DELAY_MULTIPLIER
-  afterEach(() => {
-    if (prev === undefined) delete process.env.AW_TEST_DELAY_MULTIPLIER
-    else process.env.AW_TEST_DELAY_MULTIPLIER = prev
-  })
+  // MULT is captured ONCE at module load from AW_TEST_DELAY_MULTIPLIER (default 1).
+  // We must NOT mutate process.env here: MULT is already snapshotted (so mutating
+  // the env would be dead code), AND doing so would race with parallel test files
+  // that call testDelay (process.env is process-global; bun:test runs files in
+  // parallel). Instead assert the linear-scaling contract against the captured
+  // multiplier, which holds under any env value set at suite launch.
 
-  test('default multiplier 1 = identity (POSIX / fast machine byte-for-byte)', () => {
-    delete process.env.AW_TEST_DELAY_MULTIPLIER
-    // re-import would be cleaner, but MULT is read at module load; since the
-    // env is unset here the default path is exercised by the const at import.
-    // We assert the contract: testDelay/testTolerance are pure ms -> ms.
-    expect(testDelay(100)).toBe(100)
-    expect(testTolerance(50)).toBe(50)
+  test('testDelay / testTolerance scale ms by the module-load multiplier', () => {
+    // Dev box (no AW_TEST_DELAY_MULTIPLIER): MULT=1 -> byte-for-byte identity.
+    // CI Windows gate (AW_TEST_DELAY_MULTIPLIER=2): MULT=2 -> 2x scaling.
+    // The absolute factor is env-driven, so assert against testDelayMultiplier
+    // rather than a hard-coded 1 - this passes under either configuration.
+    expect(testDelay(100)).toBe(100 * testDelayMultiplier)
+    expect(testTolerance(50)).toBe(50 * testDelayMultiplier)
+    // When the multiplier is 1 (dev default), lock the identity explicitly:
+    if (testDelayMultiplier === 1) {
+      expect(testDelay(100)).toBe(100)
+      expect(testTolerance(50)).toBe(50)
+    }
   })
 
   test('multiplier is a positive finite number (>=1)', () => {
