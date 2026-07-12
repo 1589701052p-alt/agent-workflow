@@ -146,7 +146,6 @@ function TimelineCard({
   item: InteractionItem
   onJump: (target: InteractionJumpTarget) => void
 }): ReactElement {
-  const { t } = useTranslation()
   // Sanitize the id for the testid - item ids contain ':' which testing-library's
   // exact testid match treats as a CSS pseudo-class boundary if unescaped.
   const testId = item.id.replace(/:/g, '-')
