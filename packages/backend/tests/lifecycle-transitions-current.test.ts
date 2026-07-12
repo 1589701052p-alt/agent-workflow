@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-053 PR-A T1a — node_run.status transition matrix, *current* behavior.
 //
 // Each test exercises one service-layer entry point that mutates
@@ -531,7 +532,7 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
 
       await retryNode(h.db, h.taskId, agentRunId, {
         cascade: false,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const rows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, h.taskId))
@@ -563,7 +564,7 @@ describe('RFC-053 PR-A T1a — node_run.status transition matrix (current behavi
 
       await retryNode(h.db, h.taskId, agentRunId, {
         cascade: true,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const reviewRows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.nodeId, 'rev_1'))

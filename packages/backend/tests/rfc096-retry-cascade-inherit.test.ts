@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // LOCKS: RFC-096 (audit S-13 / 附录 C #2, design §3.2) — retryNode cascade
 // inheritance source + conservative nextRetry.
 //
@@ -151,7 +152,7 @@ async function waitForTerminalTask(db: DbClient, taskId: string): Promise<void> 
 const DEPS = (h: Harness) => ({
   db: h.db,
   appHome: h.appHome,
-  opencodeCmd: ['/usr/bin/env', 'true'],
+  opencodeCmd: noopOpencodeCmd(),
 })
 
 describe('RFC-096 §3.2 — retryNode cascade inheritance source (freshest TOP-LEVEL row)', () => {

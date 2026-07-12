@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // Locked regression: resumeTask picks the rollback row by retryIndex instead of
 // id (ULID) order.
 //
@@ -186,7 +187,7 @@ describe('resumeTask freshest-row selection locks isFresherNodeRun id-order (NOT
     await resumeTask(h.db, taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
 
     // HEADLINE: the freshest row by id (B) should drive the rollback → 'Y'.

@@ -25,6 +25,9 @@ function listTestFiles(dir: string): string[] {
     if (statSync(full).isDirectory()) {
       out.push(...listTestFiles(full))
     } else if (name.endsWith('.test.ts')) {
+      // Skip this lock file itself - its comments + regex mention '/usr/bin/env'
+      // as documentation, which is not a real opencodeCmd usage.
+      if (name === 'rfc-w003-no-posix-env-cmd.test.ts') continue
       out.push(full)
     }
   }

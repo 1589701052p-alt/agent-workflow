@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // CURRENT-BEHAVIOR LOCK — design/scheduler-audit-2026-06-10.md §⑥ 缺口1 (limits 墙钟把暂停时长计入)
 //
 // 当前缺陷行为（已对照源码核实）：
@@ -149,7 +150,7 @@ describe('gap1 — pause time counts toward maxDurationMs wall clock (current-be
     const returned = await resumeTask(h.db, taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'], // never spawned: empty workflow
+      opencodeCmd: noopOpencodeCmd(), // never spawned: empty workflow
     })
     expect(returned.status).toBe('pending')
 

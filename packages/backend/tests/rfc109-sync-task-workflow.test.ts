@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-109 — syncTaskWorkflow: pull the latest workflow definition into a task's
 // frozen snapshot and continue from the breakpoint. Locks the service contract:
 //   - atomic snapshot + version swap inside the ownership CAS (AC-1)
@@ -132,7 +133,7 @@ async function bumpWorkflow(
 }
 
 function syncDeps(h: Harness, expectedVersion: number) {
-  return { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'], expectedVersion }
+  return { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd(), expectedVersion }
 }
 async function codeOf(fn: () => Promise<unknown>): Promise<string | undefined> {
   try {
