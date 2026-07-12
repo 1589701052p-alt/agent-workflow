@@ -20,7 +20,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -324,8 +324,8 @@ async function launchTask(
       workflowId,
       name,
       inputs: { topic: 'lifecycle-test' },
-      repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(repoPath).href,
+      ref: 'main',
     }),
   })
   if (!res.ok) {

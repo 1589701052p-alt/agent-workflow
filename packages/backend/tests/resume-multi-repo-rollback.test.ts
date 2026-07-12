@@ -1,5 +1,8 @@
 import { rimrafDir } from './helpers/cleanup'
 // LOCKS: RFC-066 PR-B T13 — resume per-repo rollback. The single-repo path
+// RFC-165: multi-repo/pre-created PATH bodies are the framework-internal face
+// now (the wire is URL-only) — bodies are cast through the internal
+// RepoSourceSpec widening; runtime behavior is byte-identical to pre-165.
 // must stay byte-baseline (read `pre_snapshot`, roll `task.worktreePath`);
 // the multi-repo path reads `pre_snapshot_repos_json` as a `{dirName: sha}`
 // map and rolls each sub-worktree independently.
@@ -14,13 +17,14 @@ import { rimrafDir } from './helpers/cleanup'
 //      the stash) — proves the helper followed the right code path.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import type { StartTask } from '@agent-workflow/shared'
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { eq } from 'drizzle-orm'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { getTask, resumeTask, startTask } from '../src/services/task'
+import { getTask, resumeTask, startTask, startTaskWithLocalRepo } from '../src/services/task'
 import { nodeRuns, tasks as tasksTbl, workflows } from '../src/db/schema'
 import { gitStashSnapshot, runGit } from '../src/util/git'
 
@@ -72,7 +76,7 @@ describe('RFC-066 PR-B T13 — resume per-repo rollback', () => {
 
   test('B19 single-repo: rollback uses pre_snapshot single sha; pre_snapshot_repos_json stays NULL', async () => {
     h = await buildHarness(1)
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: 'wf-rb',
         name: 't',
@@ -121,7 +125,7 @@ describe('RFC-066 PR-B T13 — resume per-repo rollback', () => {
           { repoPath: h.repos[1]!, baseBranch: 'main' },
         ],
         inputs: {},
-      },
+      } as unknown as StartTask,
       { db: h.db, appHome: h.appHome, awaitScheduler: true },
     )
     const r0 = task.repos[0]!
@@ -166,7 +170,7 @@ describe('RFC-066 PR-B T13 — resume per-repo rollback', () => {
           { repoPath: h.repos[1]!, baseBranch: 'main' },
         ],
         inputs: {},
-      },
+      } as unknown as StartTask,
       { db: h.db, appHome: h.appHome, awaitScheduler: true },
     )
     // Garbage in repos_json AND provide a legacy single-stash fallback. The

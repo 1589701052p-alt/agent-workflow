@@ -1,0 +1,101 @@
+# RFC-162 任务分解
+
+> 这是对最延误子系统（clarify/scheduler，牵动 RFC-023/056/058/059/120/127/128/134/136/137/138/140）
+> 的大重构。分多个 PR，每个 PR 独立门禁、独立可回滚；结构收口先行、删除殿后、迁移单独。
+
+## 子任务 / PR 拆分
+
+- **RFC-162-T1（❌ 退役——重复已有件）**：原计划新造 shared `computeDispatchFrontier` 前沿 oracle
+  ——**校正后发现它与现有 `taskQuestionDispatch.ts:229 computeUpstreamFrontier` 语义重复**（frontier
+  + 级联自 RFC-120 §18 就有、RFC-132 后全任务走它）。**T1 应删除**（已在 `3f2c9640` 误提交，需
+  follow-up 撤回 `computeDispatchFrontier` + 其测试），dispatch 直接复用 `computeUpstreamFrontier`；
+  如需 shared 化则**上移它、不另造一份**。
+- **RFC-162-T2（backend：把现有 frontier dispatch 从 designer-scoped 推广到 handler-set）**——
+  **非换血**（frontier + 级联 + readiness-预门早已是现状，见 design §dispatch 校正）。实际改动：
+  条目查询/分组从 `roleKind='designer'`（`:406`）→ handler 行；cause 从 `causeClassForEntry(roleKind)`
+  → role-free oracle；`assertDesignerReady` → handler 层相关性就绪 barrier（语义保留）；
+  `computeUpstreamFrontier` / `buildFrontierMintPlan` / 级联 / `dbTxSync` stamp+mint **原样复用**。
+  **先与旧行为对拍黄金锁**（default 组=提问节点时逐字不变）。因依赖 handler 条目模型，本项**在 T4
+  切键后、随 T5 归一相一并落地**（不再是独立前置大件）。依赖：T4/T5。
+- **RFC-162-T3（准备相：影子键，行为逐字不变）**：加**非唯一影子列** `handler_node_id` 并 populate
+  （= 有效承接 `override ?? default`）；reconcile/dispatch 分组/前端**读** `handler_node_id`。
+  **旧 `role_kind` 唯一键、role-based 发射、以及 `causeClassForEntry(roleKind, sourceKind)` 的 cause
+  派生全部照旧不动**（Codex 复评 R6：cause oracle 若在此相替换，存量**被改派**的 questioner/self 行
+  会从 role 派生 cause 切成 handler 派生 cause，改掉 inline-resume/ledger 上界/auto-split，黄金锁不
+  成立）；`role_kind` 不收敛、不发多 handler、不删任何东西——本相纯准备、行为逐字不变（黄金锁）。
+  依赖：无（准备相独立；T1/T2 校正后不再是其前置）。
+- **RFC-162-T4（切换相：迁移 + 原子换唯一键）**：backfill `handler_node_id`；**碰撞矩阵**解决/park
+  存量同节点多行（Codex 复评 R3-H/R4：questioner override=B + designer default=B 异 cause/trigger 塞
+  不进一行——仅「至多一行已下发/已绑定」或「同 trigger + 兼容态」才合并，否则暂留归档 / park + 补救，
+  **绝不静默丢**）；**每条 echo 转成提问节点 handler 行**（Codex critical-2，保留 sealed/dispatched/
+  trigger/confirmation/staged）；碰撞全解决后**原子**切唯一键 old→`(origin, question_id,
+  handler_node_id)`、`role_kind` 出键。存量看板不丢问题/答案 + 混态（异 trigger / dispatched+staged /
+  awaiting_confirm / partial-seal）迁移锁（journal +1）。依赖：T3。
+- **RFC-162-T5（归一相：reconcile 处理组发射 + role 收敛 + 删 echo/collapse/scope）**——**均在 T4
+  切键之后**（此时多 handler 有新键承载、不撞）：`reconcileDesiredEntries` 改「一问一组处理节点」
+  发射（默认组只提问节点、增派=增 handler 行）、删 `scopes` 消费；`role_kind` 控流全收敛单值（展示/
+  审计、棘轮禁新控流读）；**无角色 cause oracle 替 `causeClassForEntry` 的 roleKind 读取**（Codex
+  high-4 + R6：在 role_kind 收敛后才切；AC-1 棘轮锁 default self→`clarify-answer` / default cross→
+  `cross-clarify-questioner-rerun` 逐字不变）；删 `planEchoEntries`/echo 物化/echo 守卫豁免、两个
+  collapse 及路由/错误码、
+  `scope`/`CLARIFY_QUESTION_SCOPE_DEFAULT`/`question_scopes_json` 控流。**不删
+  `evaluateDesignerRerunReadiness`**（T2 保留为相关性 barrier）。回归意图（RFC-134/138/140 的「同题
+  一次投递/提问节点拿到答案」）迁移为新 dispatch 端到端锁。self/cross 走同分支。依赖：T4。
+- **RFC-162-T6（frontend：卡片归一）**：删 scope picker、self/cross 同形卡、处理组增删（提问节点
+  不可删己）；`/clarify` 详情页去 scope。依赖：T5（DTO 归一在归一相）。
+- **RFC-162-T7（表合并·可选）**：评估 `clarifySessions` + `crossClarifySessions` 合表（scope 消失
+  后 lockstep 双写理由弱化）。**非强承诺**——实现门按收益/风险决定，可留独立后续 RFC。依赖：T5。
+- **RFC-162-T8（门禁 + 收尾）**：四项门禁 + binary smoke + 前端 vitest；各 PR Codex 实现门；
+  `STATE.md` 收尾、`design/plan.md` 索引 Draft→Done、标 RFC-160 Superseded。
+
+## 依赖序
+
+（T1 退役=与 `computeUpstreamFrontier` 重复；T2 缩水=非换血、并入 T5 归一相）→ **T3 准备相**（加影
+子列 `handler_node_id`、行为不变）→ **T4 切换相**（碰撞
+矩阵 + echo 转 handler + 原子切唯一键到新键、`role_kind` 出键）→ **T5 归一相**（reconcile 处理组
+发射 + role 收敛 + 删 echo/collapse/scope）→（并行）T6、T7(可选) → T8。**三相严格串行、切键
+（T4）居中**：准备相绝不收敛 role_kind / 不发多 handler（否则撞旧键）；归一相绝不早于切键（否则多
+handler 无新键承载）——Codex 复评 R4/R5 的分阶段铁律。结构/dispatch 先收口（行为不变），
+删除与迁移殿后，前端随 DTO 归一。
+
+## 与既有工作的关系
+
+- **取代 RFC-160**（cross 默认翻 questioner）：其目标由「默认处理组只含提问节点」自然达成；索引标
+  RFC-160 Superseded-by-RFC-162。
+- **吸收独立 bug 修复**：`collapseDesignerEntryToQuestioner` seal 守卫修复已单独落地（rfc138 回归
+  用例）；T4 删 collapse 时，该回归意图（未答不误 seal / 提问节点拿到答案）迁移进新 dispatch 的
+  端到端锁，rfc138 专属用例随 collapse 一并退役。
+- **多人树纪律**：并行 session 已占 RFC-161；本 RFC 用 162。各 PR 按精确路径提交、不扫他人改动
+  （[feedback_shared_index_commit_race] / [feedback_dont_delete_others_code_for_ci]）；`STATE.md` /
+  `design/plan.md` 只增本 RFC 行。
+
+## 实现落点（2026-07-10 校正——精简路径取代 8-PR 原方案）
+
+原 plan 的 T3/T4/T5 三相切键（影子列 `handler_node_id` → 碰撞矩阵 → 原子换唯一键）**未采用**；实测发现**保留 `role_kind` 作身份键**（唯一索引 `(origin_node_run_id, question_id, role_kind)` 不变）即可承载归一模型，且无建表/无三相切键铁律 → 显著低风险、同样满足 AC-1~7：
+
+- reconcile 归一为「一问一 asker 条目」（self→`self`、cross→`questioner`，删 designer-by-default）；
+- `reassignTaskQuestion` 改语义：clarify 条目不 move，而是「**增派/移除一条 `designer` handler 行、恒保 asker 条目**」（target≠提问节点→加/改 designer；target=提问节点→删 designer；manual 仍走 override move）——asker 恒重跑拿 Q&A → 无 strand → **无需 echo**；
+- 删 echo（物化/角色/confirm 豁免）+ 两 collapse + scope；`evaluateDesignerRerunReadiness`/`assertDesignerReady` 保留为相关性 barrier；
+- migration **0081**（journal 80→81）删存量 echo 行 + 未下发**非 manual** designer 行。
+
+**核验期抓修一个真实数据丢失 bug**：手工问题以 `role_kind='designer'`+`source_kind='manual'` 存储、正文（`manual_title`/`manual_body`）挂 `task_questions` 行上、创建即 staged（`dispatched_at IS NULL`，见 `createManualQuestion`），初版迁移谓词 `designer AND dispatched_at IS NULL` 会静默删掉**待下发手工问题** → 违反 AC-6；修为增 `AND source_kind <> 'manual'`（与 reassign 按 `source_kind` 分流一致），补 `packages/backend/tests/rfc162-migration-0081.test.ts` 行选择逐格锁（红→绿）。
+
+## 验收清单
+
+- [x] AC-1 self 与 default-cross 逐字同构（同代码路径）——前端同形单卡、reconcile 同分支，测试绿
+- [x] AC-2 增派上游 → 从上游起跑 + 级联重跑提问节点 + 两处各注入自己那份 + 提问节点产出（reassign 加 designer 行、`computeUpstreamFrontier` 级联、asker 条目恒保）
+- [x] AC-3 改派下游 → 提问节点仍起跑 + 级联下游（asker 条目 never touched）
+- [x] AC-4 起跑前沿实时计算；并行多起跑无 strand/无漏注入（asker 条目保留 → 无 strand）
+- [x] AC-5 全仓无 scope/role 控流、无 echo/collapse（**相关性就绪 barrier 保留**——grep 核验：`planEchoEntries`/`EchoPlan`/两 collapse 全 0 残留、scope 符号仅墓碑注释、`question_scopes_json` 零读写、`evaluateDesignerRerunReadiness`/`assertDesignerReady` 仍在）
+- [x] AC-6 迁移无损：存量不丢问题/答案/不误触发（答案在 `clarify_sessions`/`cross_clarify_sessions`，非 `task_questions`；**手工问题数据丢失 bug 已修 + 回归锁**）
+- [x] AC-7 门禁四项 + binary smoke + 前端 vitest（typecheck×3/lint 0/format/后端 4842-0/前端 3248-0/binary smoke 全绿）
+- [x] Codex 设计门（本 RFC 落档后——6 轮 12 findings 全折）
+- [x] `STATE.md` / `design/plan.md` 更新 + RFC-160 标 Superseded
+
+## 风险与回滚
+
+- 最高风险 = T2（dispatch 语义换血）与 T5（迁移）。缓解：T2 先与旧行为对拍黄金锁（default 组逐字
+  不变）再放开；T5 只映射「未来怎么看」、不动已 mint 的执行事实。每 PR 独立可回滚（结构收口 PR 不
+  删任何东西，删除 PR 在结构就位后才动）。
+- inline-resume 微差（提问节点级联重跑=全新 session）为有意行为，测试锁双态；若用户反对，可加「提问
+  节点级联重跑亦走 inline-resume」的兜底（后续微调，不阻塞主线）。

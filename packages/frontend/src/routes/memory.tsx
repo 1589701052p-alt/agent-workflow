@@ -23,6 +23,7 @@ import { MemoryByScopeBrowser } from '@/components/memory/MemoryByScopeBrowser'
 import { MemoryDistillJobsTable } from '@/components/memory/MemoryDistillJobsTable'
 import { MemoryFusionList } from '@/components/memory/MemoryFusionList'
 import { MemoryNewDialog } from '@/components/memory/MemoryNewDialog'
+import { TabBar } from '@/components/TabBar'
 import { useActor } from '@/hooks/useActor'
 import { useMemoryWs } from '@/hooks/useMemoryWs'
 import { useMemoryDistillJobWs } from '@/hooks/useMemoryDistillJobWs'
@@ -56,7 +57,6 @@ function MemoryPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('memory.title')}</h1>
-          <p className="muted">{t('memory.hint')}</p>
         </div>
         {/* RFC-099: resource owners may create memories for their own
             agents/workflows — show the button to everyone; the backend
@@ -81,21 +81,13 @@ function MemoryPage() {
         />
       )}
 
-      <nav role="tablist" className="tabs memory-tab-bar" data-testid="memory-tab-bar">
-        {TABS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={tab === k}
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-            data-testid={`memory-tab-${k}`}
-          >
-            {tabLabel(t, k)}
-          </button>
-        ))}
-      </nav>
+      <TabBar<MemoryTab>
+        className="memory-tab-bar"
+        rootTestid="memory-tab-bar"
+        tabs={TABS.map((k) => ({ key: k, label: tabLabel(t, k), testid: `memory-tab-${k}` }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
       <div className="page__content">
         {tab === 'approval-queue' && <MemoryApprovalQueue isAdmin={isAdmin} />}

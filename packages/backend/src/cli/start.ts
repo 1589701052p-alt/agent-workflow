@@ -14,6 +14,8 @@ import { startAutoRepairLoop } from '@/services/autoRepair'
 import { startHeartbeatKillLoop } from '@/services/autoKill'
 import { startOrphanReconcileLoop } from '@/services/orphanReconcile'
 import { resumeTask } from '@/services/task'
+import { buildScheduleLaunch } from '@/services/scheduleLaunch'
+import { startScheduledTaskLoop } from '@/services/scheduledTaskScheduler'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
 import { startEventsArchiver } from '@/services/eventsArchive'
 import { startWorktreeGc } from '@/services/gc'
@@ -227,6 +229,38 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     })
   }
 
+  // 5b4. RFC-165 (R3-2-r4): backfill workspace tombstones for terminal tasks
+  // whose directory vanished before the tombstone columns existed (pre-165 GC
+  // deleted dirs without stamping anything). Revive paths (resume / retry /
+  // sync / repair / auto-resume) then 410 deterministically instead of
+  // resurrecting a ghost. Must run BEFORE the HTTP server serves revive
+  // routes and before auto-resume (step 8+) — 幂等 + best-effort.
+  try {
+    const { reconcileLegacyPrunedWorkspaces } = await import('@/services/gc')
+    await reconcileLegacyPrunedWorkspaces(db)
+  } catch (err) {
+    log.warn('legacy pruned-workspace reconcile on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // 5b5. RFC-165 (§9): heal stored path-mode scheduled launch payloads to their
+  // faithful file:// form (fetchBeforeLaunch:true / missing dirs → disabled with
+  // an explanatory lastError). MUST run before the HTTP server serves the
+  // scheduled read/edit routes AND before the scheduler ticker fires — 幂等 +
+  // best-effort.
+  try {
+    const { healScheduledLaunchPayloads } = await import('@/services/scheduledTasks')
+    const healed = await healScheduledLaunchPayloads(db)
+    if (healed.converted > 0 || healed.disabled > 0) {
+      log.info('scheduled launch payloads healed', healed)
+    }
+  } catch (err) {
+    log.warn('scheduled payload heal on boot failed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // 5c. RFC-017: reconcile registered skill_sources up-front so the first
   // /api/skills hit (likely the SPA's skills query) sees the current set of
   // child skills. Per-source failures are already swallowed into
@@ -313,6 +347,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   const app = createApp({
     token,
     configPath: Paths.config,
+    daemonInfoPath: Paths.daemonInfo,
     opencodeVersion: probe.version,
     dbVersion,
     db,
@@ -440,6 +475,13 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
   // RFC-108 T17 (AR-10) — periodic post-boot orphan reconciler (reap-to-
   // interrupted is the safe-on default; auto-resume stays behind T18's opt-in).
   const orphanReconcileTicker = startOrphanReconcileLoop({ db, configPath: Paths.config })
+  // RFC-159 — scheduled-task background loop. Fires each due schedule as its owner,
+  // building deps live (buildStartTaskDeps) so scheduled launches match manual ones.
+  const scheduledTaskTicker = startScheduledTaskLoop({
+    db,
+    loadConfig: () => loadConfig(Paths.config),
+    buildLaunch: buildScheduleLaunch(db, Paths.config),
+  })
 
   // RFC-108 T18 (AR-03) — boot auto-resume (DEFAULT OFF, decision D1). Closes
   // the daemon-restart loop: every task `reapOrphanRuns` just flipped to
@@ -509,6 +551,7 @@ export async function startCommand(opts: StartOptions = {}): Promise<void> {
     autoRepairTicker.stop()
     heartbeatKillTicker.stop()
     orphanReconcileTicker.stop()
+    scheduledTaskTicker.stop()
     removeDaemonInfo()
     server.stop(true)
     try {

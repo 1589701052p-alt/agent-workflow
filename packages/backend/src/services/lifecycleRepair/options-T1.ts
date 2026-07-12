@@ -85,6 +85,7 @@ const T1_DEMOTE_TASK: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.T1.demoteTask.desc',
   risk: 'low',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
     const gate = schedulerLivenessGate(rc)
@@ -138,6 +139,7 @@ const T1_RESURRECT_REVIEW_RUN: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.T1.resurrectReviewRun.desc',
   risk: 'medium',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: resurrects a DAG node run — refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     if (rc.task.status !== 'awaiting_review') {
       return {

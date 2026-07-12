@@ -117,9 +117,9 @@ export function mountTaskQuestionRoutes(app: Hono, deps: AppDeps): void {
     if (!targetNodeId) {
       throw new ValidationError('target-node-required', 'targetNodeId is required')
     }
-    // RFC-138: `action` tells the client what actually happened — 'override' (regular
-    // re-target) vs 'collapsed-to-questioner' (cross designer entry re-targeted to its
-    // round's asking node ⇒ scope flipped, entry deleted). Additive, back-compatible.
+    // RFC-162: `action` tells the client what happened — 'added-designer' (a clarify question
+    // gained an upstream/downstream designer handler), 'removed-designer' (back to single card),
+    // or 'moved-manual' (a manual question re-targeted). The asker entry is always kept.
     const action = await reassignTaskQuestion(deps.db, entryId, targetNodeId, {
       userId: actor.user.id,
       role,

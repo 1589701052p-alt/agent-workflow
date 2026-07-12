@@ -7,7 +7,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   agentHasClarifyChannel,
   buildClarifyEdges,
-  buildClarifyPromptBlock,
   CLARIFY_INPUT_PORT_NAME,
   CLARIFY_OUTPUT_PORT_NAME,
   CLARIFY_RESPONSE_TARGET_PORT_NAME,
@@ -15,7 +14,6 @@ import {
   findClarifyNodeForAgent,
   parseClarifyEnvelopeBody,
   renderClarifyDirectiveTrailer,
-  renderClarifyQuestionsBlock,
   summariseClarifyAnswer,
 } from '../src/index'
 
@@ -174,147 +172,12 @@ describe('summariseClarifyAnswer — 5 cases', () => {
   })
 })
 
-describe('renderClarifyQuestionsBlock + buildClarifyPromptBlock', () => {
-  test('rendered question block surfaces per-option recommended + description + reason', () => {
-    const md = renderClarifyQuestionsBlock([
-      {
-        id: 'q1',
-        title: 'Which DB?',
-        kind: 'single',
-        recommended: false,
-        options: [
-          {
-            label: 'Postgres',
-            description: 'Battle-tested relational DB',
-            recommended: true,
-            recommendationReason: 'Default for transactional apps',
-          },
-          { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
-        ],
-      },
-    ])
-    expect(md).toContain('Q1: Which DB?')
-    expect(md).toContain('1. Postgres [recommended]')
-    expect(md).toContain('description: Battle-tested relational DB')
-    expect(md).toContain('reason: Default for transactional apps')
-    expect(md).toContain('2. MySQL')
-    expect(md).toContain('Type: single-choice')
-  })
-
-  test('buildClarifyPromptBlock pairs each Q with one synthesis line only (no Type/Selected/Custom note redundancy)', () => {
-    const md = buildClarifyPromptBlock(
-      [
-        {
-          id: 'q1',
-          title: 'Which DB?',
-          kind: 'single',
-          recommended: false,
-          options: [
-            {
-              label: 'Postgres',
-              description: '',
-              recommended: false,
-              recommendationReason: '',
-            },
-            { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
-          ],
-        },
-      ],
-      [
-        {
-          questionId: 'q1',
-          selectedOptionIndices: [0],
-          selectedOptionLabels: ['Postgres'],
-          customText: '',
-        },
-      ],
-    )
-    // Only the synthesis line survives — Selected / Type / Custom note are
-    // gone (the synthesis already says "User chose: Postgres").
-    expect(md).toContain('Q1: Which DB?')
-    expect(md).toContain('- User chose: "Postgres"')
-    expect(md).not.toContain('Selected:')
-    expect(md).not.toContain('Type:')
-    expect(md).not.toContain('Synthesis:')
-  })
-
-  test('buildClarifyPromptBlock surfaces an unanswered question explicitly', () => {
-    const md = buildClarifyPromptBlock(
-      [
-        {
-          id: 'q1',
-          title: 'Which DB?',
-          kind: 'single',
-          recommended: false,
-          options: [
-            { label: 'A', description: '', recommended: false, recommendationReason: '' },
-            { label: 'B', description: '', recommended: false, recommendationReason: '' },
-          ],
-        },
-      ],
-      [],
-    )
-    expect(md).toContain('Q1: Which DB?')
-    expect(md).toContain('- User did not answer this question.')
-  })
-})
-
 // RFC-023 directive iteration: locks the exact wording the asking agent
 // reads in its next-round prompt for each directive. Changing the phrasing
 // is a contract break with already-running agents mid-task — keep the
 // English sentences load-bearing here so a future refactor can't silently
 // soften the "STOP CLARIFYING" instruction.
-describe('renderClarifyDirectiveTrailer / buildClarifyPromptBlock directive (RFC-023 iter)', () => {
-  const q = {
-    id: 'q1',
-    title: 'Which DB?',
-    kind: 'single' as const,
-    recommended: false,
-    options: [
-      { label: 'Postgres', description: '', recommended: false, recommendationReason: '' },
-      { label: 'MySQL', description: '', recommended: false, recommendationReason: '' },
-    ],
-  }
-  const ans = [
-    {
-      questionId: 'q1',
-      selectedOptionIndices: [0],
-      selectedOptionLabels: ['Postgres'],
-      customText: '',
-    },
-  ]
-
-  test('undefined directive → empty trailer (legacy pre-directive callers untouched)', () => {
-    expect(renderClarifyDirectiveTrailer(undefined)).toBe('')
-    const md = buildClarifyPromptBlock([q], ans)
-    expect(md).not.toContain('User directive')
-  })
-
-  test('continue directive → RFC-100 mandates another clarify round (no output escape)', () => {
-    const trailer = renderClarifyDirectiveTrailer('continue')
-    expect(trailer).toContain('User directive: KEEP CLARIFYING')
-    expect(trailer).toContain('clicked "Keep clarifying"')
-    expect(trailer).toContain('MUST be another `<workflow-clarify>` envelope')
-    expect(trailer).toContain('the framework will reject it')
-    // RFC-100: the old "you may emit <workflow-output> if zero unresolved" escape is gone.
-    expect(trailer).not.toContain('you may emit <workflow-output>')
-    const md = buildClarifyPromptBlock([q], ans, 'continue')
-    expect(md).toContain('User directive: KEEP CLARIFYING')
-    expect(md).toContain('MUST be another `<workflow-clarify>` envelope')
-    // Answers section still rendered first; trailer is at the end.
-    expect(md.indexOf('User chose: "Postgres"')).toBeLessThan(md.indexOf('User directive'))
-  })
-
-  test('stop directive → releases from ask-back and demands <workflow-output> now', () => {
-    const trailer = renderClarifyDirectiveTrailer('stop')
-    expect(trailer).toContain('User directive: STOP CLARIFYING')
-    expect(trailer).toContain('RELEASED from ask-back mode')
-    expect(trailer).toContain('do NOT emit another <workflow-clarify>')
-    expect(trailer).toContain('final <workflow-output> reply now')
-    const md = buildClarifyPromptBlock([q], ans, 'stop')
-    expect(md).toContain('User directive: STOP CLARIFYING')
-  })
-
+describe('renderClarifyDirectiveTrailer directive (RFC-023 iter)', () => {
   // RFC-100 lock: the stop trailer releases the agent from ask-back mode, then
   // demands output. Locking its exact wording protects against accidental edits
   // bleeding into the hard-stop directive.

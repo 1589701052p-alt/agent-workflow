@@ -8,6 +8,9 @@
 // spawn, so this module receives the already-serialized inline config.
 //
 // Leaf module: imports nothing from runner.ts → no module-init cycle.
+// (RFC-154: the shared config-dir profile is a cross-package leaf import.)
+
+import { DEFAULT_CONFIG_DIR_PROFILE } from '@agent-workflow/shared'
 
 import { normalizePathKey } from '@/util/platform'
 
@@ -62,8 +65,15 @@ export function buildCommand(opts: OpencodeCommandOptions, prompt: string): stri
 export interface OpencodeEnvContext {
   /** opencode subprocess cwd = task worktree. */
   worktreePath: string
-  /** Per-run OPENCODE_CONFIG_DIR (framework-managed skills live under it). */
+  /** Per-run config dir (framework-managed skills live under it). */
   runDir: string
+  /**
+   * RFC-154: the env var NAME `runDir` is exported through. Omitted → the
+   * protocol default (`OPENCODE_CONFIG_DIR`, shared DEFAULT_CONFIG_DIR_PROFILE)
+   * — byte-identical for every pre-RFC-154 caller. A custom fork that renamed
+   * the variable gets its name from the runtime row's frozen configDir.env.
+   */
+  configDirEnv?: string
   /** JSON.stringify of the built+mutated inline agent/mcp/plugin config. */
   inlineConfigSerialized: string
   /** RFC-029 inventory snapshot output path; omitted → env var not set. */
@@ -75,10 +85,11 @@ export interface OpencodeEnvContext {
 
 /**
  * Build the opencode subprocess env. Byte-identical to the pre-RFC-111
- * inline block in runNode (PWD fix, OPENCODE_CONFIG_DIR/CONTENT, conditional
- * OPENCODE_AW_INVENTORY_OUT, RFC-067 git identity).
+ * inline block in runNode (PWD fix, config-dir env + OPENCODE_CONFIG_CONTENT,
+ * conditional OPENCODE_AW_INVENTORY_OUT, RFC-067 git identity).
  */
 export function buildOpencodeEnv(ctx: OpencodeEnvContext): Record<string, string> {
+  const configDirEnv = ctx.configDirEnv ?? DEFAULT_CONFIG_DIR_PROFILE.opencode.env
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     // opencode 1.14.51+ resolves its root via `process.env.PWD ?? process.cwd()`;
@@ -86,7 +97,8 @@ export function buildOpencodeEnv(ctx: OpencodeEnvContext): Record<string, string
     // so without forcing PWD = worktree opencode loads two Instances and the
     // `--format json` events stop reaching our stdout pump. See runner.ts.
     PWD: ctx.worktreePath,
-    OPENCODE_CONFIG_DIR: ctx.runDir,
+    // RFC-154: key is configurable (custom forks); default = OPENCODE_CONFIG_DIR.
+    [configDirEnv]: ctx.runDir,
     OPENCODE_CONFIG_CONTENT: ctx.inlineConfigSerialized,
   }
   // Windows GUI-launch fix: the spread above copies the registry `Path` (mixed
@@ -94,6 +106,13 @@ export function buildOpencodeEnv(ctx: OpencodeEnvContext): Record<string, string
   // that Bun.spawn can resolve -> `uv_spawn 'opencode'` ENOENT. Promote it.
   // No-op on POSIX / bash-launched Windows (PATH already uppercase).
   normalizePathKey(env)
+  // RFC-154 (Codex impl-gate P2): with a CUSTOM key, scrub the protocol default
+  // inherited from the daemon's own environment — otherwise the child carries
+  // BOTH keys and a fork that still consults the default one lands in a stale
+  // dir. Default-key spawns are untouched (we just wrote it ourselves).
+  if (configDirEnv !== DEFAULT_CONFIG_DIR_PROFILE.opencode.env) {
+    delete env[DEFAULT_CONFIG_DIR_PROFILE.opencode.env]
+  }
   // RFC-029: tell the dump plugin where to write the snapshot file. Set only
   // when the plugin was actually injected — otherwise leaving it unset keeps
   // any externally-set value (mock-opencode) from being hijacked.

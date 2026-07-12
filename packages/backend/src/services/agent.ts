@@ -3,13 +3,22 @@
 // strings in the DB and (un)marshaled at this boundary. Routes upstream see
 // pure JS objects.
 
-import type { Agent, CreateAgent, RenameAgent, UpdateAgent } from '@agent-workflow/shared'
-import { eq, inArray } from 'drizzle-orm'
+import type {
+  Agent,
+  AgentInputPort,
+  CreateAgent,
+  RenameAgent,
+  UpdateAgent,
+} from '@agent-workflow/shared'
+import { AgentInputPortSchema, AgentInputPortsSchema } from '@agent-workflow/shared'
+import { and, eq, inArray, like, notInArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import type { DbClient } from '@/db/client'
-import { agents, mcps, plugins, workflows } from '@/db/schema'
+import { agents, mcps, plugins, scheduledTasks, tasks, workflows } from '@/db/schema'
+import { dbTxSync } from '@/db/txSync'
+import { TERMINAL_TASK_STATUSES } from '@agent-workflow/shared'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
-import { findAgentsDependingOn, validateDependsOn } from './agentDeps'
+import { agentsDependingOnIn, validateDependsOn } from './agentDeps'
 import { getRuntime } from './runtimeRegistry'
 
 type AgentRow = typeof agents.$inferSelect
@@ -79,6 +88,11 @@ export async function createAgent(
     name: input.name,
     description: input.description,
     outputs: JSON.stringify(input.outputs),
+    // RFC-166: declarative input ports (own column, symmetrical to outputs).
+    // Normalize through the schema on write so the column is canonical (kind
+    // default applied, unknown keys stripped) even if a service-layer caller
+    // bypassed CreateAgentSchema's zod parse.
+    inputs: serializeInputs(input.inputs),
     syncOutputsOnIterate: input.syncOutputsOnIterate,
     runtime: input.runtime ?? null, // RFC-111
     permission: JSON.stringify(input.permission),
@@ -138,6 +152,7 @@ export async function updateAgent(db: DbClient, name: string, patch: UpdateAgent
   const set: Partial<typeof agents.$inferInsert> = { updatedAt: Date.now() }
   if (patch.description !== undefined) set.description = patch.description
   if (patch.outputs !== undefined) set.outputs = JSON.stringify(patch.outputs)
+  if (patch.inputs !== undefined) set.inputs = serializeInputs(patch.inputs) // RFC-166
   if (patch.syncOutputsOnIterate !== undefined)
     set.syncOutputsOnIterate = patch.syncOutputsOnIterate
   if (patch.permission !== undefined) set.permission = JSON.stringify(patch.permission)
@@ -222,25 +237,74 @@ export async function deleteAgent(db: DbClient, name: string): Promise<void> {
   if (existing === null) {
     throw new NotFoundError('agent-not-found', `agent '${name}' not found`)
   }
-  const refs = await findWorkflowsUsingAgent(db, name)
-  if (refs.length > 0) {
-    throw new ConflictError('agent-in-use', `agent '${name}' is referenced by workflows`, {
-      workflows: refs,
-    })
-  }
-  // RFC-022 reverse-dep guard: refuse to delete an agent any other agent's
-  // dependsOn closure mentions. Forces the caller to deref upstream first so
-  // runtime never spawns with a dangling reference (which would surface as
-  // a node failure with `agent-dependency-not-found`).
-  const dependents = await findAgentsDependingOn(db, name)
-  if (dependents.length > 0) {
-    throw new ConflictError(
-      'agent-dependency-still-referenced',
-      `agent '${name}' is referenced by other agents' dependsOn`,
-      { referencedBy: dependents },
-    )
-  }
-  await db.delete(agents).where(eq(agents.name, name))
+  // RFC-165 (F17-r3): guards + the delete run in ONE dbTxSync — the old
+  // check-then-await-then-write shape let a reference land between the check
+  // and the delete. All reads below use the synchronous tx surface.
+  dbTxSync(db, (tx) => {
+    const wfRows = tx
+      .select({ id: workflows.id, name: workflows.name, definition: workflows.definition })
+      .from(workflows)
+      .all()
+    const refs = workflowsUsingAgentIn(wfRows, name)
+    if (refs.length > 0) {
+      throw new ConflictError('agent-in-use', `agent '${name}' is referenced by workflows`, {
+        workflows: refs,
+      })
+    }
+    // RFC-022 reverse-dep guard: refuse to delete an agent any other agent's
+    // dependsOn closure mentions. Forces the caller to deref upstream first so
+    // runtime never spawns with a dangling reference (which would surface as
+    // a node failure with `agent-dependency-not-found`).
+    const depRows = tx
+      .select({ name: agents.name, dependsOn: agents.dependsOn })
+      .from(agents)
+      .where(like(agents.dependsOn, `%"${name}"%`))
+      .all()
+    const dependents = agentsDependingOnIn(depRows, name)
+    if (dependents.length > 0) {
+      throw new ConflictError(
+        'agent-dependency-still-referenced',
+        `agent '${name}' is referenced by other agents' dependsOn`,
+        { referencedBy: dependents },
+      )
+    }
+    // RFC-165 §4: a NON-terminal single-agent task still runs (or will run)
+    // against this agent by name — deleting now would strand it mid-flight.
+    // 409 until those tasks finish/cancel. Terminal tasks are the accepted
+    // limitation: their retry/resume later fails with agent-not-found (same
+    // soft-reference philosophy as RFC-164 workgroup members).
+    const live = tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(eq(tasks.sourceAgentName, name), notInArray(tasks.status, [...TERMINAL_TASK_STATUSES])),
+      )
+      .all()
+    if (live.length > 0) {
+      throw new ConflictError(
+        'agent-tasks-active',
+        `agent '${name}' has ${live.length} non-terminal single-agent task(s); cancel or wait before deleting`,
+        { taskIds: live.map((t) => t.id) },
+      )
+    }
+    const schedRows = tx
+      .select({
+        id: scheduledTasks.id,
+        launchKind: scheduledTasks.launchKind,
+        launchPayload: scheduledTasks.launchPayload,
+      })
+      .from(scheduledTasks)
+      .all()
+    const schedRefs = scheduledRowsReferencingAgent(schedRows, name)
+    if (schedRefs.length > 0) {
+      throw new ConflictError(
+        'agent-scheduled-referenced',
+        `agent '${name}' is the target of ${schedRefs.length} scheduled task(s); delete or repoint them first`,
+        { scheduledTaskIds: schedRefs },
+      )
+    }
+    tx.delete(agents).where(eq(agents.name, name)).run()
+  })
 }
 
 export async function renameAgent(
@@ -254,35 +318,89 @@ export async function renameAgent(
   }
   if (input.newName === oldName) return existing
 
-  const refs = await findWorkflowsUsingAgent(db, oldName)
-  if (refs.length > 0) {
-    throw new ConflictError(
-      'agent-in-use',
-      `agent '${oldName}' is referenced by workflows; cannot rename`,
-      { workflows: refs },
-    )
-  }
+  // RFC-165 (F17-r3): guards + the rename run in ONE dbTxSync (mirror of
+  // deleteAgent; the old await gaps let references land mid-flight).
+  dbTxSync(db, (tx) => {
+    const wfRows = tx
+      .select({ id: workflows.id, name: workflows.name, definition: workflows.definition })
+      .from(workflows)
+      .all()
+    const refs = workflowsUsingAgentIn(wfRows, oldName)
+    if (refs.length > 0) {
+      throw new ConflictError(
+        'agent-in-use',
+        `agent '${oldName}' is referenced by workflows; cannot rename`,
+        { workflows: refs },
+      )
+    }
 
-  // RFC-022 reverse-dep guard (mirror of deleteAgent). Don't silently rename
-  // out from under other agents' dependsOn — the caller must deref first.
-  const dependents = await findAgentsDependingOn(db, oldName)
-  if (dependents.length > 0) {
-    throw new ConflictError(
-      'agent-dependency-still-referenced',
-      `agent '${oldName}' is referenced by other agents' dependsOn; cannot rename`,
-      { referencedBy: dependents },
-    )
-  }
+    // RFC-022 reverse-dep guard (mirror of deleteAgent). Don't silently rename
+    // out from under other agents' dependsOn — the caller must deref first.
+    const depRows = tx
+      .select({ name: agents.name, dependsOn: agents.dependsOn })
+      .from(agents)
+      .where(like(agents.dependsOn, `%"${oldName}"%`))
+      .all()
+    const dependents = agentsDependingOnIn(depRows, oldName)
+    if (dependents.length > 0) {
+      throw new ConflictError(
+        'agent-dependency-still-referenced',
+        `agent '${oldName}' is referenced by other agents' dependsOn; cannot rename`,
+        { referencedBy: dependents },
+      )
+    }
 
-  const collision = await getAgent(db, input.newName)
-  if (collision !== null) {
-    throw new ConflictError('agent-name-in-use', `agent '${input.newName}' already exists`)
-  }
+    // RFC-165 §4: renaming under a live single-agent task would strand its
+    // by-name reference exactly like a delete → same 409.
+    const live = tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.sourceAgentName, oldName),
+          notInArray(tasks.status, [...TERMINAL_TASK_STATUSES]),
+        ),
+      )
+      .all()
+    if (live.length > 0) {
+      throw new ConflictError(
+        'agent-tasks-active',
+        `agent '${oldName}' has ${live.length} non-terminal single-agent task(s); cancel or wait before renaming`,
+        { taskIds: live.map((t) => t.id) },
+      )
+    }
 
-  await db
-    .update(agents)
-    .set({ name: input.newName, updatedAt: Date.now() })
-    .where(eq(agents.name, oldName))
+    const schedRows = tx
+      .select({
+        id: scheduledTasks.id,
+        launchKind: scheduledTasks.launchKind,
+        launchPayload: scheduledTasks.launchPayload,
+      })
+      .from(scheduledTasks)
+      .all()
+    const schedRefs = scheduledRowsReferencingAgent(schedRows, oldName)
+    if (schedRefs.length > 0) {
+      throw new ConflictError(
+        'agent-scheduled-referenced',
+        `agent '${oldName}' is the target of ${schedRefs.length} scheduled task(s); repoint them before renaming`,
+        { scheduledTaskIds: schedRefs },
+      )
+    }
+
+    const collision = tx
+      .select({ name: agents.name })
+      .from(agents)
+      .where(eq(agents.name, input.newName))
+      .get()
+    if (collision !== undefined) {
+      throw new ConflictError('agent-name-in-use', `agent '${input.newName}' already exists`)
+    }
+
+    tx.update(agents)
+      .set({ name: input.newName, updatedAt: Date.now() })
+      .where(eq(agents.name, oldName))
+      .run()
+  })
 
   const renamed = await getAgent(db, input.newName)
   if (renamed === null) throw new Error('agent disappeared after rename')
@@ -293,14 +411,36 @@ export async function renameAgent(
  * Find every workflow whose definition.nodes[].agentName matches.
  * Stable identity for the "referenced by" check in delete/rename.
  */
-async function findWorkflowsUsingAgent(
-  db: DbClient,
+/**
+ * RFC-165 §9b（实现门 P1 修复）：agent 定时任务把目标冻结为可变的 NAME。
+ * rename/delete 时若还有引用行，先失败会静默累计（阈值禁用），而公共名被
+ * 复用后旧定时行会悄悄打到「另一个同名 agent」。与 workflows 引用守卫同
+ * 哲学：存在引用即 409，逼调用方先处理定时行。事务同步面运行。
+ */
+function scheduledRowsReferencingAgent(
+  rows: ReadonlyArray<{ id: string; launchKind: string; launchPayload: string }>,
   agentName: string,
-): Promise<Array<{ id: string; name: string }>> {
-  const rows = await db
-    .select({ id: workflows.id, name: workflows.name, definition: workflows.definition })
-    .from(workflows)
+): string[] {
+  const out: string[] = []
+  for (const row of rows) {
+    if (row.launchKind !== 'agent') continue
+    try {
+      const p = JSON.parse(row.launchPayload) as { agentName?: unknown }
+      if (p.agentName === agentName) out.push(row.id)
+    } catch {
+      /* degraded rows are repaired/deleted via their own flow */
+    }
+  }
+  return out
+}
 
+/** Pure core of the workflow-reference check — RFC-165 (F17-r3): the
+ *  rename/delete guards run it on rows read INSIDE their dbTxSync
+ *  transaction (the old async shell around it died with them). */
+function workflowsUsingAgentIn(
+  rows: ReadonlyArray<{ id: string; name: string; definition: string }>,
+  agentName: string,
+): Array<{ id: string; name: string }> {
   const out: Array<{ id: string; name: string }> = []
   for (const row of rows) {
     try {
@@ -448,6 +588,27 @@ function parseStringArrayColumn(value: string | null | undefined): string[] {
   }
 }
 
+/** RFC-166 — parse the agents.inputs JSON column, dropping malformed rows. */
+function parseInputsColumn(value: string | null | undefined): AgentInputPort[] {
+  if (value === null || value === undefined || value === '') return []
+  try {
+    const parsed = AgentInputPortSchema.array().safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : []
+  } catch {
+    return []
+  }
+}
+
+/** RFC-166 — canonicalize declared input ports for the agents.inputs column:
+ *  apply the `kind` default, strip unknown keys, and REJECT duplicate port
+ *  names (persistence guard mirroring the DTO — port name is an identity key),
+ *  so the stored JSON is identical whether or not the caller pre-parsed through
+ *  CreateAgentSchema. Throws a ZodError on a dupe from a service-layer caller
+ *  that bypassed the route's CreateAgentSchema validation. */
+function serializeInputs(inputs: AgentInputPort[] | undefined): string {
+  return JSON.stringify(AgentInputPortsSchema.parse(inputs ?? []))
+}
+
 function rowToAgent(row: AgentRow): Agent {
   const fmExtra = JSON.parse(row.frontmatterExtra) as Record<string, unknown>
   // RFC-005: lift outputKinds back out of frontmatter_extra into a top-level
@@ -510,6 +671,7 @@ function rowToAgent(row: AgentRow): Agent {
     name: row.name,
     description: row.description,
     outputs: JSON.parse(row.outputs) as string[],
+    inputs: parseInputsColumn(row.inputs), // RFC-166
     syncOutputsOnIterate: row.syncOutputsOnIterate,
     permission: JSON.parse(row.permission) as Record<string, unknown>,
     skills: JSON.parse(row.skills) as string[],

@@ -25,6 +25,7 @@ import { execFileSync, execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -126,12 +127,6 @@ async function setupViaApi(d: DaemonHandle, repoPath: string): Promise<Fixtures>
   })
   expectOk(w, 'create workflow')
   const workflow = (await w.json()) as { id: string }
-  const r = await fetch(`${d.baseUrl}/api/repos/recent`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ path: repoPath }),
-  })
-  expectOk(r, 'register repo')
   return { workflowId: workflow.id, workflowName, agentName, repoPath }
 }
 
@@ -146,8 +141,8 @@ async function launchTaskAndWaitForDone(d: DaemonHandle, f: Fixtures): Promise<s
     body: JSON.stringify({
       name: 'lifecycle-e2e-task',
       workflowId: f.workflowId,
-      repoPath: f.repoPath,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(f.repoPath).href,
+      ref: 'main',
       inputs: { topic: 'state machines' },
     }),
   })

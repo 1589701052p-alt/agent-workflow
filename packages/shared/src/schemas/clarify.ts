@@ -128,26 +128,10 @@ export type ClarifyAnswer = z.infer<typeof ClarifyAnswerSchema>
 export const ClarifyDirectiveSchema = z.enum(['continue', 'stop'])
 export type ClarifyDirective = z.infer<typeof ClarifyDirectiveSchema>
 
-/** RFC-059: per-question scope flag (cross-clarify only).
- *
- *   - 'designer'   → answer is forwarded to BOTH the designer (External
- *                    Feedback) and the questioner (cascade rerun Q&A).
- *                    Default — preserves RFC-056 behaviour byte-for-byte.
- *   - 'questioner' → answer is forwarded ONLY to the questioner; the designer
- *                    is not notified and does not rerun on this question's
- *                    behalf. The questioner ALWAYS sees the full Q&A
- *                    regardless of scope (scope is a one-way "also send to
- *                    designer" toggle, not two-way routing).
- *
- *   Self-clarify rows ignore this field — the asking agent is itself the
- *   consumer, so there is no designer/questioner split. */
-export const ClarifyQuestionScopeSchema = z.enum(['designer', 'questioner'])
-export type ClarifyQuestionScope = z.infer<typeof ClarifyQuestionScopeSchema>
-
-/** RFC-059: fallback for any question id missing from the scope map, AND for
- *  rows persisted before RFC-059 shipped (questionScopes column = NULL).
- *  Preserves RFC-056/058 behaviour. */
-export const CLARIFY_QUESTION_SCOPE_DEFAULT = 'designer' as const
+// RFC-162: the per-question `scope` (designer ↔ questioner) is DELETED. cross-clarify
+// unified with self-clarify — a clarify answer always reruns the ASKER (questioner/self);
+// "let the upstream revise" is expressed by reassign adding a designer handler, not a scope
+// flag. `ClarifyQuestionScope` / `CLARIFY_QUESTION_SCOPE_DEFAULT` / `questionScopes` removed.
 
 export const SubmitClarifyAnswersSchema = z.object({
   answers: z.array(ClarifyAnswerSchema),
@@ -159,14 +143,6 @@ export const SubmitClarifyAnswersSchema = z.object({
    *  'stop' (no more clarifying this rerun). Omitted bodies still parse so
    *  pre-directive clients keep working. */
   directive: ClarifyDirectiveSchema.default('continue'),
-  /** RFC-059: per-question scope mapping for cross-clarify nodes.
-   *  Optional — when omitted (old clients / self-clarify route) the backend
-   *  treats every question as 'designer' (default), preserving RFC-056/058
-   *  behaviour. Keys MUST be questionIds present in the session's questions
-   *  array; unknown keys → HTTP 400 `cross-clarify-question-scopes-malformed`.
-   *  Self-clarify route accepts but ignores this field — it is not written
-   *  to clarify_rounds and does not influence rerun routing. */
-  questionScopes: z.record(z.string(), ClarifyQuestionScopeSchema).optional(),
   /** RFC-128 P2 (T6) — defer intent / channel selector. Omitted / falsy = QUICK channel:
    *  the current whole-round behaviour (seal + mint the source/handler rerun + resume the
    *  task). `true` = CONTROL channel: seal the answered SUBSET via `sealRoundQuestions`
@@ -328,12 +304,7 @@ export const CrossClarifySessionSchema = z.object({
   createdAt: z.number().int(),
   answeredAt: z.number().int().nullable(),
   abandonedAt: z.number().int().nullable(),
-  /** RFC-059: per-question scope persisted at submit time. NULL when row
-   *  predates RFC-059 OR when client did not send `questionScopes` — runtime
-   *  treats every question as 'designer' in those cases (RFC-056 behaviour).
-   *  Dual-write target: mirrors `ClarifyRound.questionScopes` (RFC-058
-   *  dual-write retains both legacy + unified DTOs). */
-  questionScopes: z.record(z.string(), ClarifyQuestionScopeSchema).nullable().default(null),
+  // RFC-162: `questionScopes` removed (scope deleted).
 })
 export type CrossClarifySession = z.infer<typeof CrossClarifySessionSchema>
 
@@ -366,6 +337,33 @@ export const ClarifyRoundStatusSchema = z.enum([
   'abandoned',
 ])
 export type ClarifyRoundStatus = z.infer<typeof ClarifyRoundStatusSchema>
+
+/**
+ * RFC-161: the task-detail canvas click target kind for a clarify / cross-clarify
+ * node_run. `getTaskNodeRuns` stamps `NodeRunSchema.clarifyNavKind` from the run's
+ * latest clarify_round status via this pure mapping (read-time derived, no migration).
+ */
+export type ClarifyNodeNavKind = 'awaiting' | 'answered'
+
+/**
+ * RFC-161: project a clarify_round status onto the canvas click semantics.
+ *   - awaiting_human → 'awaiting' (open the interactive answer page)
+ *   - answered       → 'answered' (open the read-only echo of the submitted answers)
+ *   - canceled / abandoned / undefined (no round) → null (not clickable; a
+ *     canceled/abandoned round is a non-conclusion, and a run with no round would
+ *     404 — either way the canvas leaves the node un-clickable).
+ * The single source of truth for clarify nav classification; the backend gates the
+ * 'awaiting' result further on the task not being dead (canceled/failed) — see
+ * getTaskNodeRuns — because cancelTaskRow/failTask leave orphaned awaiting_human
+ * rounds behind.
+ */
+export function clarifyNavKindForRoundStatus(
+  status: ClarifyRoundStatus | undefined | null,
+): ClarifyNodeNavKind | null {
+  if (status === 'awaiting_human') return 'awaiting'
+  if (status === 'answered') return 'answered'
+  return null
+}
 
 /** RFC-058: a single clarify round (Q&A turn). Replaces both
  *  {@link ClarifySession} and {@link CrossClarifySession}. The `kind`
@@ -423,13 +421,7 @@ export const ClarifyRoundSchema = z.object({
   designerRunTriggeredAt: z.number().int().nullable().default(null),
   abandonedAt: z.number().int().nullable().default(null),
 
-  /** RFC-059: per-question scope persisted at submit time. Only meaningful for
-   *  kind='cross'; kind='self' rows always carry null. NULL within kind='cross'
-   *  means the client did not supply a `questionScopes` map (RFC-056/058
-   *  backward compatibility) — runtime treats every question as 'designer'.
-   *  Use {@link resolveQuestionScope} / {@link extractDesignerScopedSubset}
-   *  (in `packages/shared/src/clarify.ts`) to read this safely. */
-  questionScopes: z.record(z.string(), ClarifyQuestionScopeSchema).nullable().default(null),
+  // RFC-162: `questionScopes` removed (scope deleted — cross unified with self).
 
   createdAt: z.number().int(),
   answeredAt: z.number().int().nullable().default(null),

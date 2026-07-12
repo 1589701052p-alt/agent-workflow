@@ -10,6 +10,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { createApp } from '../src/server'
 import { createAgent } from '../src/services/agent'
@@ -153,8 +154,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: h.workflowId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'orders', refs: '' },
       },
       [
@@ -194,8 +195,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
           JSON.stringify({
             workflowId: h.workflowId,
             name: 'fixture-task',
-            repoPath: h.repoPath,
-            baseBranch: 'main',
+            repoUrl: pathToFileURL(h.repoPath).href,
+            ref: 'main',
             inputs: { topic: 'orders', refs: '' },
           }),
         ],
@@ -228,8 +229,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: h.workflowId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'x', refs: '' },
       },
       [],
@@ -247,8 +248,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: h.workflowId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'x', refs: '' },
       },
       [['nosuch', 'x.txt', 'x']],
@@ -265,8 +266,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: 'no-such-id',
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'x', refs: '' },
       },
       [['refs', 'a.txt', 'x']],
@@ -281,8 +282,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: h.workflowId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'x', refs: '' },
       },
       [
@@ -304,8 +305,8 @@ describe('POST /api/tasks multipart (RFC-020)', () => {
       {
         workflowId: h.workflowId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(h.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'x', refs: '' },
       },
       [],

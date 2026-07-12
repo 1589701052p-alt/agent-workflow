@@ -29,7 +29,7 @@ import {
   submitReviewDecision,
 } from '../src/services/review'
 import { runTask } from '../src/services/scheduler'
-import { startTask } from '../src/services/task'
+import { startTaskWithLocalRepo } from '../src/services/task'
 import { reenterScheduler } from './reenter-scheduler'
 import { isWindows, stubCmd } from './helpers/stub-runtime'
 
@@ -196,7 +196,7 @@ async function buildHarness(): Promise<Harness> {
   // Override Paths.root via env so the doc_version files land under our temp.
   process.env.AGENT_WORKFLOW_HOME = appHome
 
-  const task = await startTask(
+  const task = await startTaskWithLocalRepo(
     {
       workflowId: wf.id,
       name: 'fixture-task',

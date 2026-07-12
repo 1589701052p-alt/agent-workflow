@@ -55,7 +55,7 @@ import { deriveFrontier } from '../src/services/scheduler'
 import { runLifecycleInvariants } from '../src/services/lifecycleInvariants'
 import { runStuckTaskDetector } from '../src/services/stuckTaskDetector'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
-import { renderUserPrompt } from '@agent-workflow/shared'
+import {} from '@agent-workflow/shared'
 import type {
   ClarifyQuestion,
   NodeKind,
@@ -276,6 +276,30 @@ function ans(qid: string) {
   return { questionId: qid, selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' }
 }
 
+/** RFC-162: reconcile no longer derives a designer entry from a cross round's scope
+ *  (designer-by-default deleted). A designer handler is now ADDED by a human reassign of the
+ *  round's questioner entry to a node OTHER than the asking/questioner node (→ 'added-designer',
+ *  `defaultTargetNodeId` = that node, `overrideTargetNodeId` = null). This helper reproduces the
+ *  old designer-by-default shape AFTER a seal: it reassigns every questioner entry (optionally
+ *  scoped to one origin round) to `designerNodeId`, minting a `roleKind='designer'` row whose
+ *  `defaultTargetNodeId` == `designerNodeId` — the exact shape the §18 dispatch mechanics below
+ *  used to get for free. Call once per (origin → graph designer) for multi-source fixtures. */
+async function seedDesignerEntries(
+  db: DbClient,
+  taskId: string,
+  designerNodeId: string,
+  actor: { userId: string; role: string },
+  opts: { originNodeRunId?: string } = {},
+): Promise<void> {
+  const questioners = (
+    await db
+      .select()
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'questioner')))
+  ).filter((e) => opts.originNodeRunId === undefined || e.originNodeRunId === opts.originNodeRunId)
+  for (const q of questioners) await reassignTaskQuestion(db, q.id, designerNodeId, actor)
+}
+
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
 
@@ -291,9 +315,11 @@ describe('RFC-120 T9 — answer outcomes (control-channel park vs quick-channel 
       originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
-      // no scopes → all-designer (CLARIFY_QUESTION_SCOPE_DEFAULT)
     })
     expect(sealed.roundFullySealed).toBe(true)
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign
+    // (targets the graph designer node, reproducing the old designer-by-default shape).
+    await seedDesignerEntries(db, taskId, DESIGNER, { userId: 'u1', role: 'owner' })
     // the answer IS recorded (round answered) but NO designer rerun minted
     const designerRuns = await db
       .select()
@@ -320,7 +346,6 @@ describe('RFC-120 T9 — answer outcomes (control-channel park vs quick-channel 
       originNodeRunId: crossClarifyNodeRunId,
       answers: [ans('q1')],
       directive: 'continue',
-      scopes: { q1: 'questioner' },
       actor: { userId: 'u1', role: 'owner' },
     })
     // the questioner rerun is minted through the unified dispatch (not an immediate mint).
@@ -419,6 +444,9 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: add the undispatched designer entry that parks the task (reconcile no longer
+    // derives it from scope) — this is what T2 must treat as a valid park.
+    await seedDesignerEntries(db, taskId, DESIGNER, { userId: 'u1', role: 'owner' })
     // park the task (the scheduler would do this at quiescence)
     await db.update(tasks).set({ status: 'awaiting_human' }).where(eq(tasks.id, taskId))
     const result = await runLifecycleInvariants({ db, scope: { taskId } })
@@ -451,6 +479,9 @@ describe('RFC-120 T9 — T2 / S2 treat the park as valid (deferred) and corrupt 
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: add the undispatched designer entry that parks the task (reconcile no longer
+    // derives it from scope) — S2 must exempt this valid deferred park.
+    await seedDesignerEntries(db, taskId, DESIGNER, { userId: 'u1', role: 'owner' })
     // park + age past the freshness gate (startedAt long ago, no events)
     await db
       .update(tasks)
@@ -479,6 +510,9 @@ describe('RFC-120 T9 — dispatchTaskQuestions', () => {
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign
+    // (targets the graph designer node, reproducing the old designer-by-default shape).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (
       await db
         .select()
@@ -562,6 +596,9 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (reconcile no longer derives
+    // them from scope) — both q1 + q2 target the graph designer DESIGNER (same handler).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     expect(entries.length).toBe(2) // q1 + q2 both → DESIGNER (same handler)
 
@@ -594,6 +631,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     // dispatch ONLY q1 (both → same handler DESIGNER, so the per-origin guard allows it).
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
@@ -631,6 +670,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor) // dispatch q1 only
 
@@ -669,6 +710,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     // q1 + q2 to the same node in ONE dispatch → byTarget groups them → exactly ONE rerun.
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id, entries[1]!.id], actor)
@@ -699,6 +742,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     const q1 = entries.find((e) => e.questionId === 'q1')!
     const q2 = entries.find((e) => e.questionId === 'q2')!
@@ -741,6 +786,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     const q1 = entries.find((e) => e.questionId === 'q1')!
     const q2 = entries.find((e) => e.questionId === 'q2')!
@@ -775,6 +822,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: add a designer handler per question via reassign (both q1 + q2 → DESIGNER).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     const q1 = entries.find((e) => e.questionId === 'q1')!
     const q2 = entries.find((e) => e.questionId === 'q2')!
@@ -838,10 +887,13 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign
+    // (targets the graph designer node, reproducing the old designer-by-default shape).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     expect(entry.defaultTargetNodeId).toBe(DESIGNER)
 
-    // A db Proxy that fires a ONE-SHOT reassign (override → OTHER) on the FIRST nodeRuns read,
+    // A db Proxy that fires a ONE-SHOT reassign (default → OTHER) on the FIRST nodeRuns read,
     // which happens AFTER dispatch snapshots `requested` (target DESIGNER) and BEFORE its tx.
     // The reassign uses the REAL db so it doesn't re-trigger the proxy.
     let fired = false
@@ -881,10 +933,11 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
     }
     expect(fired).toBe(true) // the concurrent reassign actually ran mid-dispatch
     expect((threw as { code?: string }).code).toBe('task-question-target-changed')
-    // Nothing stamped; the reassign DID commit (override = OTHER); NO rerun minted anywhere.
+    // Nothing stamped; the reassign DID commit (RFC-162: re-targets the designer row's
+    // defaultTargetNodeId → OTHER, override stays null); NO rerun minted anywhere.
     const after = (await designerEntries(db, taskId))[0]!
     expect(after.dispatchedAt).toBeNull()
-    expect(after.overrideTargetNodeId).toBe(OTHER)
+    expect(after.defaultTargetNodeId).toBe(OTHER)
     const pending = await db
       .select()
       .from(nodeRuns)
@@ -913,6 +966,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
     expect(result.reruns.length).toBe(1)
@@ -950,6 +1005,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it to OTHER.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
 
@@ -993,6 +1050,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it to OTHER.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     // reassign to a NEVER-RUN node — canReassign accepts it, but dispatch is run-gated.
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
@@ -1034,6 +1093,8 @@ describe('RFC-120 T9 — dispatch correctness (Codex impl-gate H1/H2/H3)', () =>
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it to OTHER.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entries = await designerEntries(db, taskId)
     await reassignTaskQuestion(db, entries[0]!.id, OTHER, actor)
     const result = await dispatchTaskQuestions(db, taskId, [entries[0]!.id], actor)
@@ -1098,13 +1159,24 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [ans('q1'), ans('q2')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives designers. Build the split directly — q1's designer on
+    // OTHER, q2's on DESIGNER (different handler nodes, SAME origin round → a multi-target round).
+    const questioners = await db
+      .select()
+      .from(taskQuestions)
+      .where(and(eq(taskQuestions.taskId, taskId), eq(taskQuestions.roleKind, 'questioner')))
+    await reassignTaskQuestion(db, questioners.find((e) => e.questionId === 'q1')!.id, OTHER, actor)
+    await reassignTaskQuestion(
+      db,
+      questioners.find((e) => e.questionId === 'q2')!.id,
+      DESIGNER,
+      actor,
+    )
     const entries = await designerEntries(db, taskId)
     const q1Entry = entries.find((e) => e.questionId === 'q1')!
-    // override ONLY q1 → the round now spans {OTHER, DESIGNER}
-    await reassignTaskQuestion(db, q1Entry.id, OTHER, actor)
 
-    // dispatching q1 must be rejected: the per-origin guard sees q2 (still →
-    // DESIGNER) in the SAME round, even though q2 is outside the requested group.
+    // dispatching q1 must be rejected: the per-origin guard sees q2 (→ DESIGNER) in the SAME
+    // round targeting a different handler node, even though q2 is outside the requested group.
     let threw: unknown = null
     try {
       await dispatchTaskQuestions(db, taskId, [q1Entry.id], actor)
@@ -1140,6 +1212,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it to OTHER.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     await reassignTaskQuestion(db, entry.id, OTHER, actor)
     // RFC-131 T4 去借壳: the rerun is minted ON the target OTHER. (RFC-141 removed the run-scoped
@@ -1174,6 +1248,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       directive: 'continue',
     })
     expect(sealed.roundFullySealed).toBe(true)
+    // RFC-162: add the undispatched designer entry that parks the task (reconcile no longer
+    // derives it from scope) — the HTTP dispatch below then stamps + mints + releases it.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     await db.update(tasks).set({ status: 'awaiting_human' }).where(eq(tasks.id, taskId))
     expect((await loadUndispatchedDesignerTargets(db, taskId)).size).toBe(1) // parked
 
@@ -1226,7 +1303,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
   test('PR-B: the unified quick channel dispatches the designer on any task — exactly one rerun, no double-mint', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, crossClarifyNodeRunId } = await seedTask(db, { deferred: false })
-    // The unified quick channel seals + AUTO-dispatches the designer (single-source readiness met).
+    // The unified quick channel seals + auto-dispatches the QUESTIONER (autoDispatch never
+    // auto-dispatches designers — they ride the board's 批量下发, RFC-162 reconcile derives none).
     await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
@@ -1234,10 +1312,13 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       directive: 'continue',
       actor,
     })
-    await listTaskQuestions(db, taskId)
+    // RFC-162: the designer handler is ADDED by a reassign, then dispatched through the SAME
+    // unified dispatchTaskQuestions the board uses — exactly one rerun, no double-mint.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
+    await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     // the designer entry is dispatched (stamped) → the designer rerun minted EXACTLY once.
-    expect(entry.dispatchedAt).not.toBeNull()
+    expect((await designerEntries(db, taskId))[0]?.dispatchedAt).not.toBeNull()
     const designerReruns = await db
       .select()
       .from(nodeRuns)
@@ -1266,6 +1347,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const phaseOf = async () =>
       (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!.phase
 
@@ -1308,11 +1391,14 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
 
-    // pre-dispatch (trigger_run_id NULL) → reassign allowed.
+    // pre-dispatch (dispatched_at NULL) → reassign allowed; RFC-162 re-targets the designer
+    // row's defaultTargetNodeId (override stays null).
     await reassignTaskQuestion(db, entry.id, OTHER, actor)
-    expect((await designerEntries(db, taskId))[0]?.overrideTargetNodeId).toBe(OTHER)
+    expect((await designerEntries(db, taskId))[0]?.defaultTargetNodeId).toBe(OTHER)
 
     // dispatch stamps trigger_run_id.
     await dispatchTaskQuestions(db, taskId, [entry.id], actor)
@@ -1336,6 +1422,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     const anchorRunId = result.reruns[0]!.nodeRunId
@@ -1382,6 +1470,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     const attempt1 = result.reruns[0]!.nodeRunId
@@ -1509,13 +1599,17 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [ans('c1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives designers — add one per source (cc_a → D, cc_c → E).
+    await seedDesignerEntries(db, taskId, D, actor, { originNodeRunId: ccA })
+    await seedDesignerEntries(db, taskId, E, actor, { originNodeRunId: ccC })
     const all = await designerEntries(db, taskId)
     const entryA = all.find((e) => e.defaultTargetNodeId === D)! // default-to-D
     const entryC = all.find((e) => e.defaultTargetNodeId === E)! // default-to-E
-    await reassignTaskQuestion(db, entryC.id, D, actor) // OVERRIDE entryC to D → mixed group for D
+    await reassignTaskQuestion(db, entryC.id, D, actor) // re-target entryC → D (its designer row moves to D)
 
-    // The batch's group for D = {entryA (default D), entryC (override D)}. The override's
-    // presence must NOT skip readiness — D's graph subset {entryA} still gates on cc_b.
+    // The batch's group for D = {entryA (cc_a), entryC (re-targeted from E)}. Both are now
+    // default-to-D designer rows — the readiness gate must NOT be skipped: D's graph subset
+    // {entryA, entryC} still gates on cc_b (D's unresolved sibling cross-clarify round).
     let threw: unknown = null
     try {
       await dispatchTaskQuestions(db, taskId, [entryA.id, entryC.id], actor)
@@ -1640,6 +1734,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [ans('b1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives designers — add one per source (cc_a → A, cc_b1 → B).
+    await seedDesignerEntries(db, taskId, A, actor, { originNodeRunId: ccA })
+    await seedDesignerEntries(db, taskId, B, actor, { originNodeRunId: ccB1 })
     const all = await designerEntries(db, taskId)
     const entryA = all.find((e) => e.defaultTargetNodeId === A)!
     const entryB = all.find((e) => e.defaultTargetNodeId === B)!
@@ -1695,6 +1792,8 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [ans('q1')],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     // Simulate a dispatch winning the race (stamping dispatched_at) AFTER reassign
     // would have read a NULL — the reassign CAS (WHERE dispatched_at IS NULL) then
@@ -1710,7 +1809,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       threw = e
     }
     expect((threw as { code?: string }).code).toBe('task-question-already-dispatched')
-    // override unchanged (the CAS did not write).
+    // target unchanged (the CAS did not write): the designer row still points at DESIGNER,
+    // override still null (RFC-162 reassign re-targets defaultTargetNodeId, which never moved).
+    expect((await designerEntries(db, taskId))[0]?.defaultTargetNodeId).toBe(DESIGNER)
     expect((await designerEntries(db, taskId))[0]?.overrideTargetNodeId).toBeNull()
   })
 
@@ -1726,6 +1827,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       directive: 'continue',
     })
     expect(subA.roundFullySealed).toBe(true)
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one for source A
+    // (→ DESIGNER, the shared graph designer of both cc_a and cc_b).
+    await seedDesignerEntries(db, taskId, DESIGNER, actor, { originNodeRunId: ccA })
     const entryA = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccA)!
 
     // Dispatch A's designer entry → rejected: sibling B unresolved → partial rerun risk.
@@ -1848,6 +1952,9 @@ describe('RFC-120 T9 — run-scoped layer Codex folds (H1/M1/H2)', () => {
       answers: [{ ...ans('b1'), selectedOptionLabels: ['BBB'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives designers — add one per source (cc_a → D1, cc_b → D2).
+    await seedDesignerEntries(db, taskId, D1, actor, { originNodeRunId: ccA })
+    await seedDesignerEntries(db, taskId, D2, actor, { originNodeRunId: ccB })
     const entryA = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccA)!
     const entryB = (await designerEntries(db, taskId)).find((e) => e.originNodeRunId === ccB)!
 
@@ -2041,6 +2148,10 @@ describe('RFC-120 §18 — frontier mint + per-node queue + consumption', () => 
       answers: [{ ...ans('b1'), selectedOptionLabels: ['BBB'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives designers — add one per source (cc_a → DESIGNER,
+    // cc_b → DOWN), reproducing the seed's default-designer wiring (frontier A upstream of B).
+    await seedDesignerEntries(db, seed.taskId, DESIGNER, actor, { originNodeRunId: seed.ccA })
+    await seedDesignerEntries(db, seed.taskId, DOWN, actor, { originNodeRunId: seed.ccB })
     const entryA = (await designerEntries(db, seed.taskId)).find(
       (e) => e.originNodeRunId === seed.ccA,
     )!
@@ -2245,6 +2356,8 @@ describe('RFC-120 §18 → RFC-141 — prior output on override handoffs (deferr
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: add the designer handler (default DESIGNER) via reassign, then re-target it to OTHER.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     await reassignTaskQuestion(db, entry.id, OTHER, actor) // default DESIGNER, reassigned to OTHER (run moves)
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
@@ -2279,6 +2392,8 @@ describe('RFC-120 §18 → RFC-141 — prior output on override handoffs (deferr
       answers: [{ ...ans('q1'), selectedOptionLabels: ['A'] }],
       directive: 'continue',
     })
+    // RFC-162: reconcile no longer derives a designer entry from scope — add one via reassign.
+    await seedDesignerEntries(db, taskId, DESIGNER, actor)
     const entry = (await designerEntries(db, taskId))[0]!
     const result = await dispatchTaskQuestions(db, taskId, [entry.id], actor)
     // Production dispatches a SEALED designer entry (stage gate). A genuine graph designer used to
@@ -2300,43 +2415,17 @@ describe('RFC-120 §18 → RFC-141 — prior output on override handoffs (deferr
     expect(Object.keys(ctx!)).not.toContain('suppressPriorOutput')
   })
 
-  test('render: graphOwned=false context (no priorOutputBlock attached) → External Feedback but NO Prior Output / Update Directive', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'process the reassigned question',
-      inputs: {},
-      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
-      agentOutputs: ['design'],
-      // The scheduler's ownership gate did NOT attach priorOutputBlock (graphOwned=false).
-      crossClarifyContext: {
-        block: "### From 'q'\nQ: reassigned?\nA: do X",
-        iteration: '1',
-        sourcesCsv: 'q',
-      },
-    })
-    expect(out).toContain('## External Feedback')
-    expect(out).toContain('do X')
-    expect(out).not.toContain('## Prior Output')
-    expect(out).not.toContain('## Update Directive')
-  })
-
-  test('render: graphOwned=true context (priorOutputBlock attached) STILL renders Prior Output + Update Directive (graph update mode)', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'update your design',
-      inputs: {},
-      meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
-      agentOutputs: ['design'],
-      // The scheduler's ownership gate DID attach priorOutputBlock (graphOwned=true).
-      crossClarifyContext: {
-        block: "### From 'q'\nQ&A",
-        iteration: '1',
-        sourcesCsv: 'q',
-        priorOutputBlock: '### design\n<prior artifact>',
-      },
-    })
-    expect(out).toContain('## Prior Output')
-    expect(out).toContain('<prior artifact>')
-    expect(out).toContain('## Update Directive')
-    expect(out).toContain('## External Feedback')
+  // RFC-148 (RFC-132 收尾): the crossClarifyContext render path is DELETED —
+  // designer Q&A rides the flat clarify block; prior output rides
+  // priorOutputUpdate. The two render cases that exercised the dead path are
+  // replaced by a negative lock: the dead surface must not come back.
+  test('render: the External Feedback dead path stays dead (RFC-148)', () => {
+    const promptSrc = readFileSync(
+      join(import.meta.dir, '..', '..', 'shared', 'src', 'prompt.ts'),
+      'utf8',
+    )
+    expect(promptSrc).not.toContain('crossClarifyContext')
+    expect(promptSrc).not.toContain('## External Feedback')
   })
 
   test('source lock: the scheduler no longer gates prior-output on ANY ownership signal (RFC-141)', () => {

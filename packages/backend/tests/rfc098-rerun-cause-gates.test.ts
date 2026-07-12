@@ -71,6 +71,12 @@ const GATE2_EXPECTED: Record<RerunCause, boolean> = {
   'merge-resolve': false, // RFC-130 internal merge-agent session — not a clarify rerun
   'io-virtual': false,
   'cross-clarify-guard': false,
+  'wg-leader-round': false, // RFC-164 workgroup turns are full-context re-injections, not clarify reruns
+  'wg-assignment': false,
+  'wg-message-turn': false,
+  'wg-gate': false,
+  'dw-generate': false, // RFC-167 orchestrator retries re-inject errors in a fresh prompt, not a clarify rerun
+  'dw-gate': false,
 }
 
 describe('RFC-098 WP-10 — gate-2 (isClarifyRerun) × cause truth table', () => {
@@ -155,7 +161,9 @@ describe('RFC-098 WP-10 — producers mint the cause the gates consume', () => {
     expect(src).toContain(
       "if (e.roleKind === 'questioner') return 'cross-clarify-questioner-rerun'",
     )
-    expect(src).toContain("return 'cross-clarify-answer' // designer (incl. manual)")
+    expect(src).toContain(
+      "return 'cross-clarify-answer' // designer (incl. manual, incl. reassign-added upstream reviser)",
+    )
   })
 
   test('dispatchTaskQuestions mints via causeClassForEntry (no hardcoded per-path cause forks)', () => {

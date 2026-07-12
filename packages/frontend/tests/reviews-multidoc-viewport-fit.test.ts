@@ -93,9 +93,11 @@ describe('RFC-082 — multi-doc reuses <ReviewDocPane> (no bespoke comment UI)',
   test('MultiDocReviewView renders <ReviewDocPane> for the active document', () => {
     expect(VIEW).toContain("from '@/components/review/ReviewDocPane'")
     expect(VIEW).toMatch(/<ReviewDocPane\b/)
-    // Wired to the active doc + awaiting state.
+    // Wired to the active doc + the RFC-149 three-state mode (the old
+    // `readonly={!awaiting}` collapse of decided-into-readonly is retired).
     expect(VIEW).toMatch(/docVersionId=\{activeDocId\}/)
-    expect(VIEW).toMatch(/readonly=\{!awaiting\}/)
+    expect(VIEW).toMatch(/mode=\{mode\}/)
+    expect(VIEW).not.toMatch(/readonly=\{!awaiting\}/)
     expect(VIEW).toMatch(/onInvalidate=\{invalidate\}/)
   })
 

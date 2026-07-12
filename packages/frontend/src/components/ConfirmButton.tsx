@@ -1,5 +1,9 @@
 // Two-click delete button. First click swaps to "Confirm" for 4 seconds;
 // any other click outside resets. Keeps M1 dialog-free.
+//
+// RFC-150 PR-1 (D4): the `danger` boolean became `variant?: 'danger' |
+// 'default'` to line up with the `.btn--*` enum vocabulary. No
+// primary/ghost variants until a callsite actually needs them (YAGNI).
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -8,7 +12,7 @@ interface ConfirmButtonProps {
   label: string
   confirmLabel?: string
   onConfirm: () => unknown | Promise<unknown>
-  danger?: boolean
+  variant?: 'danger' | 'default'
   disabled?: boolean
   size?: 'sm'
 }
@@ -17,7 +21,7 @@ export function ConfirmButton({
   label,
   confirmLabel,
   onConfirm,
-  danger,
+  variant,
   disabled,
   size,
 }: ConfirmButtonProps) {
@@ -47,7 +51,7 @@ export function ConfirmButton({
   return (
     <button
       type="button"
-      className={`btn ${size === 'sm' ? 'btn--sm' : ''} ${danger === true ? 'btn--danger' : ''} ${armed ? 'btn--armed' : ''}`}
+      className={`btn ${size === 'sm' ? 'btn--sm' : ''} ${variant === 'danger' ? 'btn--danger' : ''} ${armed ? 'btn--armed' : ''}`}
       disabled={disabled}
       onClick={handle}
     >

@@ -107,7 +107,7 @@ describe('buildProtocolBlock', () => {
         meta: META,
         agentOutputs: ['design'],
         agentOutputKinds: { design: 'markdown_file' },
-        hasClarifyChannel: true,
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       })
       // mandatory ask-back preamble + clarify format are present...
       expect(out).toContain('MANDATORY ASK-BACK')

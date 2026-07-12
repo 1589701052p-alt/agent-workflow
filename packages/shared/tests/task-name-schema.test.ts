@@ -53,7 +53,7 @@ describe('TaskNameSchema', () => {
 })
 
 describe('StartTaskSchema name field', () => {
-  const base = { workflowId: 'wf-1', repoPath: '/tmp/repo', baseBranch: 'main' }
+  const base = { workflowId: 'wf-1', repoUrl: 'https://github.com/o/repo.git', ref: 'main' }
 
   test('rejects missing name', () => {
     const r = StartTaskSchema.safeParse(base as unknown)

@@ -62,9 +62,22 @@ export function ensurePermission(c: Parameters<MiddlewareHandler>[0], perm: Perm
  */
 export function resourcePermissionGate(
   resource: 'agents' | 'skills' | 'mcps' | 'plugins' | 'workflows' | 'repos',
+  opts?: {
+    /**
+     * RFC-165 (F15): carve-outs for sub-paths whose semantics are NOT a
+     * resource read/write — e.g. POST /api/agents/:name/tasks is a task
+     * LAUNCH gated by tasks:launch (registered separately), not agents:write.
+     * Return true to skip this gate for the request.
+     */
+    skip?: (method: string, path: string) => boolean
+  },
 ): MiddlewareHandler {
   return async (c, next) => {
     const method = c.req.method
+    if (opts?.skip !== undefined && opts.skip(method, c.req.path)) {
+      await next()
+      return
+    }
     const perm =
       method === 'GET' || method === 'HEAD'
         ? (`${resource}:read` as Permission)

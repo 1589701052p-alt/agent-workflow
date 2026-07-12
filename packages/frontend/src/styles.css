@@ -154,6 +154,13 @@ code {
 .app-shell {
   display: grid;
   grid-template-columns: 220px 1fr;
+  /* Pin the single row to the shell height. Without an explicit row the
+   * implicit `auto` row grows to the ITEMS' min-content — on short viewports
+   * the sidebar nav (~830px min-content) blew the row past 100vh and the
+   * `overflow: hidden` below CLIPPED the bottom of `.content`, so its own
+   * scrollbar bottomed out before the last fields on EVERY page (RFC-168
+   * user report; latent shell bug, not page-specific). */
+  grid-template-rows: minmax(0, 1fr);
   /* Lock the shell to the viewport so that any vertical scrolling happens
    * inside `.content` (or, on the workflow editor, inside the palette /
    * inspector / canvas panels). Without this the editor's tall agent
@@ -175,6 +182,11 @@ code {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Pair of the shell's minmax(0, 1fr) row: on viewports shorter than the
+   * nav's natural height the sidebar scrolls itself instead of blowing up
+   * the shared grid row. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sidebar__brand {
@@ -1609,6 +1621,11 @@ code {
   background: #c2410c;
 }
 
+/* RFC-164 PR-6: workgroup to-dos summary row. */
+.inbox-drawer__kind--wg {
+  background: #7c3aed;
+}
+
 .inbox-drawer__title {
   grid-row: 1;
   grid-column: 2;
@@ -2281,7 +2298,7 @@ code {
 }
 .workflow-sync__count,
 .workflow-sync__kind {
-  color: var(--text-muted, #888);
+  color: var(--muted, #888);
   font-weight: 400;
   font-size: 12px;
 }
@@ -2854,7 +2871,7 @@ code {
 .task-detail__id {
   margin-top: var(--space-1);
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 /* Workflow jump link under the task ID — same muted subtitle treatment as
@@ -2863,7 +2880,7 @@ code {
 .task-detail__workflow {
   margin-top: var(--space-1);
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .task-detail__id-label {
@@ -2906,7 +2923,7 @@ code {
 .task-name-cell__id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--muted);
   white-space: nowrap;
   /* Parent is `display: flex; flex-direction: column` — without this the code
      box stretches to the full cell width, which looks like a wide empty chip.
@@ -3179,6 +3196,50 @@ code {
   color: var(--muted);
 }
 
+/* ---- Form section (RFC-155) ---- */
+
+.form-section {
+  margin-top: 24px;
+}
+
+.form-section:first-child {
+  margin-top: 0;
+}
+
+.form-section__title {
+  font-size: 16px;
+  margin: 0;
+}
+
+section.form-section > .form-section__title {
+  margin-bottom: 12px;
+}
+
+.form-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+details.form-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+}
+
+details.form-section > summary {
+  cursor: pointer;
+}
+
+details.form-section > summary .form-section__title {
+  display: inline;
+  vertical-align: middle;
+}
+
+details.form-section[open] > summary {
+  margin-bottom: 12px;
+}
+
 /* ---- Chips input ---- */
 
 .chips-input__row {
@@ -3212,13 +3273,18 @@ code {
 
 /* ---- Outputs editor (per-port name + kind select) ---- */
 
-.outputs-editor {
+/* RFC-166: InputsEditor shares OutputsEditor's row chrome (list of port rows).
+   Selectors are grouped so both stay visually identical with zero duplication;
+   InputsEditor adds only a `required` toggle cell (.inputs-editor__required). */
+.outputs-editor,
+.inputs-editor {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.outputs-editor__list {
+.outputs-editor__list,
+.inputs-editor__list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3227,7 +3293,8 @@ code {
   gap: 4px;
 }
 
-.outputs-editor__row {
+.outputs-editor__row,
+.inputs-editor__row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3236,7 +3303,8 @@ code {
   min-width: 0;
 }
 
-.outputs-editor__name {
+.outputs-editor__name,
+.inputs-editor__name {
   flex: 1 1 0;
   min-width: 0;
   font-family: var(--font-mono, monospace);
@@ -3251,7 +3319,8 @@ code {
   white-space: nowrap;
 }
 
-.outputs-editor__kind {
+.outputs-editor__kind,
+.inputs-editor__kind {
   /* Override .form-input { width: 100% } — inside the flex row that 100%
      would force flex-basis to a full row width and shove the rest of the
      row past the viewport edge. */
@@ -3261,8 +3330,123 @@ code {
   max-width: 40%;
 }
 
-.outputs-editor__remove {
+.outputs-editor__remove,
+.inputs-editor__remove {
   flex: 0 0 auto;
+}
+
+/* RFC-166: the per-port `required` toggle — a compact inline switch label. */
+.inputs-editor__required {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #666);
+  white-space: nowrap;
+}
+
+.inputs-editor__required input {
+  margin: 0;
+}
+
+/* ---- RFC-166 §4.2 capability card preview (shared UI primitive) ---- */
+.capability-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.capability-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.capability-card__name {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+}
+
+.capability-card__role {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--muted, #666);
+}
+
+.capability-card__desc {
+  margin: 0;
+}
+
+.capability-card__ports {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capability-card__ports-label {
+  flex: 0 0 auto;
+  min-width: 48px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #666);
+}
+
+.capability-card__ports-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.capability-card__port {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.capability-card__port-kind {
+  color: var(--muted, #666);
+  font-size: 11px;
+}
+
+.capability-card__port-req {
+  color: var(--danger, #c0392b);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.capability-card__ports-none {
+  color: var(--muted, #999);
+  font-style: italic;
+}
+
+.capability-card__prompt {
+  margin: 0;
+  color: var(--muted, #666);
+  font-size: 12px;
+}
+
+.capability-card__prompt-label {
+  font-weight: 600;
+}
+
+/* RFC-166: capability preview slotted under the add-agent picker. */
+.workgroup-agent-preview {
+  margin-top: 4px;
 }
 
 /* ---- RFC-080 kind selector (shared by OutputsEditor + canvas fanout) ---- */
@@ -3714,7 +3898,7 @@ code {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--text-muted, #9aa);
+  color: var(--muted, #9aa);
   cursor: pointer;
 }
 
@@ -4250,7 +4434,7 @@ code {
   border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   border: 1px solid var(--border);
-  color: var(--text-muted, var(--text));
+  color: var(--muted, var(--text));
   font-size: 11px;
   line-height: 1.4;
   pointer-events: none;
@@ -4542,6 +4726,27 @@ code {
 .canvas-node--review .canvas-node__kind {
   color: #b45309;
   font-weight: 600;
+}
+/* RFC-158 — a review node the task-detail canvas marked clickable (opens the
+ * review page). The `data-review-nav` attribute is only present on clickable
+ * reviews; the pointer cursor + hint line advertise the click. */
+.canvas-node--review[data-review-nav] {
+  cursor: pointer;
+}
+.canvas-node__review-nav {
+  margin-top: 4px;
+  font-size: 11px;
+}
+/* RFC-161 — a clarify / cross-clarify node the task-detail canvas marked clickable
+ * (opens the clarify page). The `data-clarify-nav` attribute is only present on
+ * clickable clarify nodes; the pointer cursor + hint line advertise the click. */
+.canvas-node--clarify[data-clarify-nav],
+.canvas-node--clarify-cross-agent[data-clarify-nav] {
+  cursor: pointer;
+}
+.canvas-node__clarify-nav {
+  margin-top: 4px;
+  font-size: 11px;
 }
 
 /* Clarify (反问) node — mirrors the review palette so the two human-in-the-loop
@@ -6511,7 +6716,7 @@ mark.comment-anchor[data-active='true'] {
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 12px;
-  color: var(--text-muted, inherit);
+  color: var(--muted, inherit);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   max-width: 320px;
   pointer-events: none;
@@ -8858,7 +9063,7 @@ mark.comment-anchor[data-active='true'] {
   flex-shrink: 0;
 }
 .agent-dep-autodetect__desc {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: var(--font-sm);
   flex: 1 1 auto;
   min-width: 0;
@@ -9942,8 +10147,8 @@ mark.comment-anchor[data-active='true'] {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
 }
 
 .injected-memories-card__body {
@@ -10022,7 +10227,7 @@ mark.comment-anchor[data-active='true'] {
 
 .injected-memory-row__scope-id {
   margin-left: 4px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-weight: 400;
 }
 
@@ -10033,7 +10238,7 @@ mark.comment-anchor[data-active='true'] {
 
 .injected-memory-row__version {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .injected-memory-row__tags {
@@ -10045,8 +10250,8 @@ mark.comment-anchor[data-active='true'] {
   font-size: 10px;
   padding: 0 5px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
 }
 
 .injected-memory-row__preview {
@@ -11612,6 +11817,31 @@ mark.comment-anchor[data-active='true'] {
 .task-questions__col .card:not(.card--highlighted) {
   background: var(--panel);
 }
+/* RFC-163 — 下发前分组卡的处理节点行（提问节点 + 增派修订 handler）。贴 meta 的
+   muted/ellipsis 语汇，行间只留最小气口，不自造 chrome。 */
+.task-questions__handlers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-sm);
+}
+.task-questions__handler-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.task-questions__handler-role {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.task-questions__handler-node {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-questions__meta {
   display: flex;
   flex-wrap: wrap;
@@ -11734,4 +11964,925 @@ mark.comment-anchor[data-active='true'] {
 .task-questions .card__title {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* RFC-159 — scheduled tasks */
+.data-table__row {
+  cursor: pointer;
+}
+.data-table__row:hover {
+  background: var(--panel);
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+.detail-grid dt {
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+.detail-grid dd {
+  margin: 0;
+}
+.schedule-dialog__row {
+  display: flex;
+  gap: 1rem;
+}
+.schedule-dialog__row > * {
+  flex: 1;
+}
+.schedule-dialog__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.schedule-dialog__preview {
+  margin-top: 0.75rem;
+  font-size: var(--font-sm);
+}
+.schedule-dialog__preview-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+.schedule-dialog__preview ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+/* ============================================================
+   RFC-164 → RFC-168 — workgroup detail STUDIO (.workgroup-
+   namespace): member card gallery (main zone) + sticky context
+   panel. Everything else on the /workgroups pages reuses the
+   shared page / data-table / form-section / card / dialog
+   primitives.
+   ============================================================ */
+
+/* Launch-readiness banner: stack the reason lines (the base .info-box is a
+   single space-between flex row). */
+.workgroup-readiness {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* Studio page frame — the page becomes a viewport-high flex column so the
+   two-column studio below the header can give the gallery and the panel
+   INDEPENDENT scrollbars (user 2026-07-11). */
+.page--studio {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Two-column studio: gallery (fluid) + context panel (fixed). Both columns
+   stretch to the remaining page height and scroll independently. Collapses
+   to a single column under 960px — panel stacks after the gallery and the
+   page falls back to normal document flow. */
+.workgroup-studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.workgroup-studio__main {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workgroup-studio__main-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-studio__main-title {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.workgroup-studio__count {
+  font-size: var(--font-sm);
+  color: var(--muted);
+}
+
+.workgroup-studio__main-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* Context panel — a card-grade container filling its studio column and
+   scrolling internally. The column height comes from the studio row
+   (minmax(0,1fr) of the page flex), NOT a 100vh clamp — the first cut
+   clamped against the viewport and got clipped at its natural offset
+   whenever the page had no scroll range (user report 2026-07-11). */
+.workgroup-panel {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.workgroup-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-panel__title {
+  margin: 0;
+  font-size: var(--font-lg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workgroup-panel__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The panel hosts the same FormSections as the old full-width page — trim
+   their h2 scale down to panel density. */
+.workgroup-panel .form-section__title {
+  font-size: var(--font-md);
+}
+
+.workgroup-panel__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.workgroup-panel__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.workgroup-panel__capability {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.workgroup-panel__agent-link {
+  font-size: var(--font-sm);
+}
+
+/* Member cards zone — responsive grid of shared <Card>s. */
+.workgroup-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+/* The whole card is clickable through the title button's stretched hit-area
+   (::after covers the card) — RFC-168 F10: never wrap the Card in a native
+   <button> (content-model violation, runaway accessible name). */
+.workgroup-card {
+  position: relative;
+}
+
+/* Member-type tinting mirrors the workflow canvas palette so the two
+   surfaces read as one system: agent cards carry the `.canvas-node--agent`
+   accent border, human cards the review/clarify amber family (humans ARE
+   the human-in-the-loop kind). The shared `.card--highlighted` selection
+   look stays authoritative while a card is selected. */
+.workgroup-card--agent:not(.card--highlighted) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.workgroup-card--human:not(.card--highlighted) {
+  background: color-mix(in srgb, #d97706 10%, var(--panel));
+  border-color: color-mix(in srgb, #d97706 45%, var(--border));
+}
+
+/* Selected human card keeps its amber TYPE background — only the border
+   flips to the accent selection color (same grammar as a selected review
+   node on the canvas: blue ring over amber body). Without this override the
+   shared .card--highlighted washed the freshly-added, auto-selected human
+   member in the accent tint and the type reading was lost (user report). */
+.workgroup-card--human.card--highlighted {
+  background: color-mix(in srgb, #d97706 10%, var(--panel));
+}
+
+.workgroup-card__open {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.workgroup-card__open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-lg);
+}
+
+.workgroup-card__open:focus-visible {
+  outline: none;
+}
+
+.workgroup-card__open:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.workgroup-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.workgroup-card__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workgroup-card__ref {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workgroup-card__role {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Port summary line on agent cards — reuses the capability-card port chip. */
+.workgroup-card__ports {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.workgroup-card__ports-label {
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+
+.workgroup-card__ports-more {
+  font-size: var(--font-xs);
+  color: var(--muted);
+}
+
+.workgroup-cards__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+@media (max-width: 960px) {
+  /* Single column: back to normal document flow (one page scrollbar). */
+  .page--studio {
+    display: block;
+    height: auto;
+  }
+
+  .workgroup-studio {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .workgroup-studio__main,
+  .workgroup-panel {
+    overflow-y: visible;
+    min-height: auto;
+  }
+}
+
+/* ============================================================
+   RFC-164 PR-4 — workgroup task chat room (.workgroup-room
+   namespace). Chrome-level pieces (cards / chips / buttons /
+   inputs / inspector drawer) all reuse the shared primitives;
+   only the room's grid, bubbles and roster get their own rules.
+   ============================================================ */
+
+.workgroup-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Third track materializes only while a run drawer is open — same gate
+   rationale as .task-canvas-layout--with-drawer. */
+.workgroup-room--with-drawer {
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 280px) minmax(320px, 440px);
+}
+
+.task-detail__pane > .workgroup-room {
+  height: 100%;
+  min-height: 0;
+}
+
+.workgroup-room__main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workgroup-room__log {
+  flex: 1;
+  min-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.workgroup-room__round {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workgroup-room__round::before,
+.workgroup-room__round::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.workgroup-room__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workgroup-room__msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.workgroup-room__author {
+  font-weight: 600;
+}
+
+.workgroup-room__time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workgroup-room__body {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* System rows are de-emphasized (round markers, cancellations, warnings). */
+.workgroup-room__msg--system .workgroup-room__msg-head,
+.workgroup-room__msg--system .workgroup-room__body {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workgroup-room__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.workgroup-room__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.workgroup-room__card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workgroup-room__card-title {
+  font-size: 13px;
+}
+
+.workgroup-room__card-assignee {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workgroup-room__card-result > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workgroup-room__card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.workgroup-room__composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.workgroup-room__input {
+  flex: 1;
+  resize: vertical;
+}
+
+.workgroup-room__mentions {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 4px;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.workgroup-room__mentions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.workgroup-room__mentions button:hover {
+  background: var(--bg);
+}
+
+.workgroup-room__side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workgroup-room__side-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workgroup-room__members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__members li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.workgroup-room__member-name {
+  font-weight: 600;
+}
+
+.workgroup-room__gate-state {
+  margin: 0;
+  font-size: 13px;
+}
+
+.workgroup-room__info {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+
+.workgroup-room__info dt {
+  color: var(--muted);
+}
+
+.workgroup-room__info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Long goals stay scannable — clip after a few lines, full text via title. */
+.workgroup-room__goal {
+  max-height: 6.5em;
+  overflow: hidden;
+}
+
+/* ---- RFC-164 PR-5/6 — room additions (same .workgroup-room namespace) ---- */
+
+/* Human to-do card: accent-highlighted until delivered. */
+.workgroup-room__card--todo {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.workgroup-room__card-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__card-quick .form-input {
+  resize: vertical;
+}
+
+.workgroup-room__card-quick .btn {
+  align-self: flex-end;
+}
+
+/* Leader convergence summary (kind='decision') stands out from plain chat. */
+.workgroup-room__msg--decision {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 6px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+/* Mid-run config dialog: member staging rows. */
+.workgroup-room__config-members-title {
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workgroup-room__config-members {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workgroup-room__config-members li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.workgroup-room__config-member--removing .workgroup-room__member-name {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+/* free_collab task-list panel groups. */
+.workgroup-room__fc-group {
+  margin-top: 8px;
+}
+
+.workgroup-room__fc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.workgroup-room__fc-rows {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workgroup-room__fc-rows li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.workgroup-room__fc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* =============================================================================
+   RFC-165 (T11) — Stepper primitive (.stepper namespace)
+   ============================================================================= */
+
+.stepper__header {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  flex-wrap: wrap;
+}
+
+.stepper__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem 0.3rem 0.4rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.stepper__step:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.stepper__item--current .stepper__step {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.stepper__item--done .stepper__step {
+  color: var(--text);
+}
+
+.stepper__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+
+.stepper__item--current .stepper__index {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.stepper__item--done .stepper__index {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.stepper__body {
+  min-height: 12rem;
+}
+
+.stepper__actions {
+  margin-top: 1.25rem;
+}
+
+/* RFC-165 (T12) — /tasks/new confirm-step summary list */
+.wizard-summary {
+  margin: 0;
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.wizard-summary__row {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-summary__row:last-child {
+  border-bottom: none;
+}
+
+.wizard-summary__row dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-top: 0.1rem;
+}
+
+.wizard-summary__row dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  word-break: break-word;
+}
+
+.wizard-summary__inputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+/* =============================================================================
+   RFC-165 UI 精修 — ChoiceCards (.choice-cards namespace)
+   ============================================================================= */
+
+.choice-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.choice-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    background 0.12s ease;
+}
+
+.choice-card:hover:not(:disabled):not(.choice-card--active) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+}
+
+.choice-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.choice-card--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.choice-card:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.choice-card__icon {
+  display: inline-flex;
+  color: var(--muted);
+  margin-top: 0.1rem;
+  flex-shrink: 0;
+}
+
+.choice-card--active .choice-card__icon {
+  color: var(--accent);
+}
+
+.choice-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.choice-card__label {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.choice-card--active .choice-card__label {
+  color: var(--accent);
+}
+
+.choice-card__desc {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+/* RFC-165 UI 精修 — Select searchable mode */
+.select__search {
+  padding: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: inherit;
+}
+
+.select__search-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.select__search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.select__empty {
+  padding: 0.6rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* RFC-165 UI 精修 — wizard page: centered narrow container (fixes the
+   full-bleed stretched controls the user flagged as "prototype-ish") */
+.task-wizard {
+  max-width: 47.5rem;
+  margin-inline: auto;
+}
+
+.task-wizard .stepper__body {
+  min-height: 14rem;
 }

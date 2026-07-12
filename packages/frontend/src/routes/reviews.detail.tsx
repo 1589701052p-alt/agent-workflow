@@ -13,10 +13,12 @@ import { useTranslation } from 'react-i18next'
 import type {
   DocVersionWithBodyAndComments,
   ReviewComment,
+  ReviewDecisionKind,
   ReviewDetail,
 } from '@agent-workflow/shared'
 import type { DocVersion } from '@agent-workflow/shared'
 import { api, type ApiError } from '@/api/client'
+import { LoadingState } from '@/components/LoadingState'
 import { ReviewDecisionInfo } from '@/components/review/ReviewDecisionInfo'
 import { useUserLookup } from '@/hooks/useUserLookup'
 import { DiffView, type DiffGranularity } from '@/components/review/DiffView'
@@ -25,7 +27,7 @@ import { MultiDocReviewView } from '@/components/review/MultiDocReviewView'
 import { ReviewDocPane } from '@/components/review/ReviewDocPane'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { listDrafts } from '@/lib/review/draftStore'
-import { resolveReviewView } from '@/lib/review/readonly'
+import { pickViewedVersion, resolveReviewView, type ReviewPaneMode } from '@/lib/review/readonly'
 import { goToTaskDetail } from '@/lib/nav/taskNav'
 import { Route as RootRoute } from './__root'
 
@@ -137,7 +139,21 @@ function ReviewDetailPage() {
       api.get(`/api/reviews/${nodeRunId}/versions/${historicalVid ?? ''}`, undefined, signal),
     enabled: historicalVid !== null,
   })
-  const readonly = view.mode === 'historical'
+  // RFC-149: three-state pane mode replaces the `readonly` + `isAwaiting`
+  // boolean pair — 'historical' (read-only view of an old version, write
+  // affordances hidden), 'awaiting' (current version pending a decision,
+  // fully writable), 'decided' (current version already decided: buttons
+  // stay visible but disabled).
+  const mode: ReviewPaneMode =
+    view.mode === 'historical'
+      ? 'historical'
+      : detail.data?.summary.awaitingReview === true
+        ? 'awaiting'
+        : 'decided'
+  // RFC-149: one picker replaces the seven per-field ternaries that each
+  // switched between the historical payload and the current version — every
+  // viewed-version field now changes source together.
+  const viewed = pickViewedVersion(view, historicalDetail.data, detail.data?.currentVersion)
 
   // RFC-013: doc body + comments the page should *render* — in current
   // mode these come from the detail endpoint, in historical mode from the
@@ -185,7 +201,7 @@ function ReviewDetailPage() {
 
   const submitDecision = useMutation({
     mutationFn: async (input: {
-      decision: 'approved' | 'rejected' | 'iterated'
+      decision: ReviewDecisionKind
       rejectReason?: string
       reviewIteration: number
     }) => {
@@ -305,7 +321,7 @@ function ReviewDetailPage() {
   // A/R/I never fire mid-comment.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (readonly) return
+      if (mode === 'historical') return
       if (paneCapturing) return
       // Don't hijack typing inside form fields.
       if (
@@ -341,17 +357,13 @@ function ReviewDetailPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [paneCapturing, onApprove, onReject, onIterate, diffMode, readonly])
+  }, [paneCapturing, onApprove, onReject, onIterate, diffMode, mode])
 
   // RFC-099 (D7) — resolve the decider id for the attribution chip. Hook must
   // sit above the early returns; tolerant of undefined while loading.
-  const deciderLookup = useUserLookup([
-    view.mode === 'historical'
-      ? historicalDetail.data?.decidedBy
-      : detail.data?.currentVersion.decidedBy,
-  ])
+  const deciderLookup = useUserLookup([viewed.decidedBy])
 
-  if (detail.isLoading) return <div className="muted">{t('common.loading')}</div>
+  if (detail.isLoading) return <LoadingState />
   if (detail.error !== null && detail.error !== undefined) {
     const err = detail.error as ApiError
     return <div className="error-box">{err.message}</div>
@@ -359,36 +371,13 @@ function ReviewDetailPage() {
   if (detail.data === undefined) return null
 
   const data = detail.data
-  // RFC-013: in readonly historical view, decision buttons are not in the
-  // DOM, comment write affordances are hidden, and the diff toggle is
-  // hidden. `isAwaiting` continues to drive the current-mode button enable
-  // state. The "viewing version vN" label in the header switches between
-  // current and historical too.
-  const isAwaiting = !readonly && data.summary.awaitingReview
+  // RFC-013: in the historical mode, decision buttons are not in the DOM,
+  // comment write affordances are hidden, and the diff toggle is hidden.
+  // 'awaiting' vs 'decided' drives the current-mode button enable state.
+  // The "viewing version vN" label in the header (and the whole decision
+  // info block) reads `viewed` — the RFC-149 one-shot picker that switches
+  // every field between the historical payload and the current version.
   const hasTitle = data.summary.title !== '' && data.summary.title !== data.summary.reviewNodeId
-  const headerVersionIndex =
-    view.mode === 'historical'
-      ? (view.versionIndex ?? historicalDetail.data?.versionIndex)
-      : data.currentVersion.versionIndex
-  const headerDecision =
-    view.mode === 'historical'
-      ? (view.decision ?? historicalDetail.data?.decision)
-      : data.currentVersion.decision
-  // RFC-099 (D7): show who decided the viewed version (audit display only).
-  const deciderId =
-    view.mode === 'historical' ? historicalDetail.data?.decidedBy : data.currentVersion.decidedBy
-  const deciderRole =
-    view.mode === 'historical'
-      ? historicalDetail.data?.decidedByRole
-      : data.currentVersion.decidedByRole
-  // RFC-142: full decision info for the viewed version — decision chip +
-  // decider + decidedAt + reason (reject reason / superseded system note).
-  const decisionReason =
-    view.mode === 'historical'
-      ? historicalDetail.data?.decisionReason
-      : data.currentVersion.decisionReason
-  const decidedAt =
-    view.mode === 'historical' ? historicalDetail.data?.decidedAt : data.currentVersion.decidedAt
 
   // Download the markdown body the user is currently viewing (current or
   // historical version) as a `.md` file. Filename combines a sanitized title
@@ -404,7 +393,7 @@ function ReviewDetailPage() {
       .replace(/\s+/g, '_')
       .trim()
     const safeBase = base.length > 0 ? base : 'document'
-    return `${safeBase}-v${headerVersionIndex ?? data.currentVersion.versionIndex}.md`
+    return `${safeBase}-v${viewed.versionIndex ?? data.currentVersion.versionIndex}.md`
   })()
   const handleDownloadMarkdown = (): void => {
     if (activeBody === undefined || activeBody.length === 0) return
@@ -441,7 +430,7 @@ function ReviewDetailPage() {
             {hasTitle ? data.summary.title : <code>{data.summary.reviewNodeId}</code>}
             <span className="muted">
               {' '}
-              · v{headerVersionIndex ?? data.currentVersion.versionIndex}
+              · v{viewed.versionIndex ?? data.currentVersion.versionIndex}
             </span>
           </h1>
           <div className="muted review-detail__breadcrumbs">
@@ -460,19 +449,19 @@ function ReviewDetailPage() {
               说明（替换 RFC-099 只有决策人 chip 的旧行；superseded 的系统行
               不再整体隐藏）。 */}
           <ReviewDecisionInfo
-            decision={headerDecision}
-            decisionReason={decisionReason}
-            decidedAt={decidedAt}
-            decidedBy={deciderId}
-            decidedByRole={deciderRole ?? null}
+            decision={viewed.decision}
+            decisionReason={viewed.decisionReason}
+            decidedAt={viewed.decidedAt}
+            decidedBy={viewed.decidedBy}
+            decidedByRole={viewed.decidedByRole ?? null}
             user={
-              deciderId !== null && deciderId !== undefined
-                ? deciderLookup.get(deciderId)
+              viewed.decidedBy !== null && viewed.decidedBy !== undefined
+                ? deciderLookup.get(viewed.decidedBy)
                 : undefined
             }
             data-testid="review-decider"
           />
-          {!readonly && (
+          {mode !== 'historical' && (
             <p className="page__hint">
               {t('reviews.detailHint', {
                 iteration: data.summary.reviewIteration,
@@ -494,7 +483,7 @@ function ReviewDetailPage() {
             </span>
             {t('reviews.downloadMarkdown')}
           </button>
-          {!readonly && (
+          {mode !== 'historical' && (
             <div
               className="review-detail__decision-actions"
               role="group"
@@ -503,7 +492,7 @@ function ReviewDetailPage() {
               <button
                 type="button"
                 className="btn btn--sm btn--primary"
-                disabled={!isAwaiting || submitDecision.isPending}
+                disabled={mode !== 'awaiting' || submitDecision.isPending}
                 onClick={() => void onApprove()}
               >
                 {t('reviews.approveButton')}
@@ -511,7 +500,7 @@ function ReviewDetailPage() {
               <button
                 type="button"
                 className="btn btn--sm"
-                disabled={!isAwaiting || submitDecision.isPending}
+                disabled={mode !== 'awaiting' || submitDecision.isPending}
                 onClick={() => onIterate()}
               >
                 {t('reviews.iterateButton')}
@@ -519,7 +508,7 @@ function ReviewDetailPage() {
               <button
                 type="button"
                 className="btn btn--sm btn--danger"
-                disabled={!isAwaiting || submitDecision.isPending}
+                disabled={mode !== 'awaiting' || submitDecision.isPending}
                 onClick={() => onReject()}
               >
                 {t('reviews.rejectButton')}
@@ -529,12 +518,12 @@ function ReviewDetailPage() {
         </div>
       </header>
 
-      {readonly && (
+      {mode === 'historical' && (
         <div className="readonly-banner" role="status">
           <span>
             {t('reviews.historicalBanner', {
-              version: headerVersionIndex ?? '?',
-              decision: headerDecision ?? t('reviews.decision.pending'),
+              version: viewed.versionIndex ?? '?',
+              decision: viewed.decision ?? t('reviews.decision.pending'),
             })}
           </span>
           <Link
@@ -548,7 +537,7 @@ function ReviewDetailPage() {
         </div>
       )}
 
-      {!readonly && data.currentVersion.versionIndex > 1 && (
+      {mode !== 'historical' && data.currentVersion.versionIndex > 1 && (
         <div className="review-detail__diff-toolbar">
           {/* RFC-010 follow-up：把"勾选框 + 三按钮"合并成一个 4 段 pill
               segmented control。选 "原文" 等价于关闭 diff 模式；其它三段
@@ -590,20 +579,15 @@ function ReviewDetailPage() {
       <ReviewDocPane
         nodeRunId={nodeRunId}
         taskId={data.summary.taskId}
-        docVersionId={
-          view.mode === 'historical'
-            ? (historicalVid ?? data.currentVersion.id)
-            : data.currentVersion.id
-        }
+        docVersionId={historicalVid ?? data.currentVersion.id}
         body={activeBody ?? ''}
         comments={activeComments}
-        readonly={readonly}
-        awaiting={isAwaiting}
+        mode={mode}
         onInvalidate={invalidateDetail}
         onShortcutCaptureChange={setPaneCapturing}
         diffMode={diffMode}
         bodySlot={
-          !readonly && diffMode && priorBody.data !== undefined ? (
+          mode !== 'historical' && diffMode && priorBody.data !== undefined ? (
             <DiffView
               left={priorBody.data.body}
               right={data.currentBody}
@@ -616,19 +600,21 @@ function ReviewDetailPage() {
                 version: data.currentVersion.versionIndex,
               })}
             />
-          ) : readonly && historicalDetail.isLoading ? (
+          ) : mode === 'historical' && historicalDetail.isLoading ? (
             <span className="muted">{t('common.loading')}</span>
           ) : undefined
         }
       />
 
-      {!readonly && submitDecision.error !== null && submitDecision.error !== undefined && (
-        <div className="review-detail__error error-box">
-          {(submitDecision.error as Error).message}
-        </div>
-      )}
+      {mode !== 'historical' &&
+        submitDecision.error !== null &&
+        submitDecision.error !== undefined && (
+          <div className="review-detail__error error-box">
+            {(submitDecision.error as Error).message}
+          </div>
+        )}
 
-      {!readonly && decisionDialog !== null && (
+      {mode !== 'historical' && decisionDialog !== null && (
         <DecisionDialog
           state={decisionDialog}
           onChange={setDecisionDialog}

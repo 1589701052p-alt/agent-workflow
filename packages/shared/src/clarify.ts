@@ -29,17 +29,16 @@ import {
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
 } from './schemas/workflow'
+import { isSystemChannelEdge } from './systemChannelPorts'
 import {
   ClarifyEnvelopeBodySchema,
   ClarifyQuestionSchema,
   CLARIFY_MAX_QUESTIONS,
   CLARIFY_MAX_OPTIONS_PER_QUESTION,
-  CLARIFY_QUESTION_SCOPE_DEFAULT,
   type ClarifyAnswer,
   type ClarifyDirective,
   type ClarifyEnvelopeBody,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
   type ClarifyTruncationWarning,
 } from './schemas/clarify'
 
@@ -196,70 +195,9 @@ export function parseClarifyEnvelopeBody(
 // prompt rendering (markdown)
 // -----------------------------------------------------------------------------
 
-/** Render the agent-facing markdown block listing the questions the agent
- *  asked last round. Used for `{{__clarify_questions__}}`. Option-level
- *  Recommended + description + recommendationReason are surfaced inline so
- *  the agent has the same context the user saw. */
-export function renderClarifyQuestionsBlock(questions: ClarifyQuestion[]): string {
-  const lines: string[] = []
-  questions.forEach((q, idx) => {
-    const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
-    lines.push(`### Q${idx + 1}: ${q.title}`)
-    lines.push(`- Type: ${kindLabel}`)
-    lines.push(`- Candidate options:`)
-    q.options.forEach((opt, i) => {
-      const recMark = opt.recommended ? ' [recommended]' : ''
-      lines.push(`  ${i + 1}. ${opt.label}${recMark}`)
-      if (opt.description.length > 0) {
-        lines.push(`     description: ${opt.description}`)
-      }
-      if (opt.recommended && opt.recommendationReason.length > 0) {
-        lines.push(`     reason: ${opt.recommendationReason}`)
-      }
-    })
-    lines.push('')
-  })
-  return lines.join('\n').trimEnd()
-}
-
-/** Render the user-answered Q&A block. One line per question summarising
- *  what the user picked. Used for `{{__clarify_answers__}}`.
- *
- *  Previous versions emitted four fields per question (Type / Selected /
- *  Custom note / Synthesis); the structured fields were redundant with the
- *  natural-language synthesis (and Type just repeated what the questions
- *  block above already showed). The synthesis sentence covers every case —
- *  empty answer, multi with custom, custom-only, etc — see
- *  {@link summariseClarifyAnswer}. Keeping only the synthesis halves the
- *  token cost of this block and removes a "why are these the same thing"
- *  trap for both the agent and any human reviewing the prompt. */
-export function buildClarifyPromptBlock(
-  questions: ClarifyQuestion[],
-  answers: ClarifyAnswer[],
-  directive?: ClarifyDirective,
-): string {
-  const byId = new Map(answers.map((a) => [a.questionId, a]))
-  const lines: string[] = []
-  questions.forEach((q, idx) => {
-    const a = byId.get(q.id)
-    lines.push(`### Q${idx + 1}: ${q.title}`)
-    if (!a) {
-      lines.push(`- User did not answer this question.`)
-    } else {
-      lines.push(`- ${summariseClarifyAnswer(q, a)}`)
-    }
-    lines.push('')
-  })
-  const trailer = renderClarifyDirectiveTrailer(directive)
-  if (trailer.length > 0) {
-    lines.push(trailer)
-  }
-  return lines.join('\n').trimEnd()
-}
-
 /** Render the trailing English instruction that converts the user's
  *  continue-or-stop directive into a sentence the asking agent can read in
- *  its next-round prompt. Emitted at the end of `buildClarifyPromptBlock`
+ *  its next-round prompt. Emitted at the tail of clarify prompt content
  *  so the directive sits right where the agent finishes consuming the
  *  user's answers.
  *
@@ -454,78 +392,13 @@ export function parseCrossClarifyEnvelopeBody(jsonText: string): ParseClarifyEnv
   return parseClarifyEnvelopeBody(jsonText, { maxQuestions: Number.POSITIVE_INFINITY })
 }
 
-/** One source's contribution to the designer's External Feedback batch. */
-export interface CrossClarifySourceContext {
-  sourceQuestionerNodeId: string
-  crossClarifyNodeId: string
-  iteration: number
-  questions: ClarifyQuestion[]
-  answers: ClarifyAnswer[]
-}
-
-/**
- * Render the designer-facing `## External Feedback` body. Sources sort by
- * questioner nodeId (dictionary order); each source becomes a
- * `### From '{nodeId}' (round {iteration})` sub-section with the full question
- * detail (via {@link renderClarifyQuestionsBlock}) shifted from `### Q` to
- * `#### Q` so the markdown outline stays coherent.
- */
-export function buildExternalFeedbackBlock(sources: CrossClarifySourceContext[]): string {
-  if (sources.length === 0) return ''
-  const sorted = [...sources].sort((a, b) =>
-    a.sourceQuestionerNodeId.localeCompare(b.sourceQuestionerNodeId),
-  )
-  const lines: string[] = []
-  for (const src of sorted) {
-    lines.push(`### From '${src.sourceQuestionerNodeId}' (round ${src.iteration})`)
-    lines.push('')
-    const questionsBlock = renderClarifyQuestionsBlock(src.questions)
-    lines.push(questionsBlock.replace(/^### Q/gm, '#### Q'))
-    lines.push('')
-    const byId = new Map(src.answers.map((a) => [a.questionId, a]))
-    lines.push('Answers:')
-    src.questions.forEach((q, idx) => {
-      const a = byId.get(q.id)
-      lines.push(
-        `- Q${idx + 1} (${q.title}): ${a === undefined ? 'User did not answer this question.' : summariseClarifyAnswer(q, a)}`,
-      )
-    })
-    lines.push('')
-  }
-  return lines.join('\n').trimEnd()
-}
-
-/** Render a single source's contribution. */
-export function renderCrossClarifySource(src: CrossClarifySourceContext): string {
-  return buildExternalFeedbackBlock([src])
-}
-
-/**
- * RFC-120 §15 — render ONE manual question's contribution to the `## External Feedback`
- * body. A manual question carries a human-authored instruction (no questioner Q&A), so it
- * renders as a `### Manual instruction: {title}` sub-section (same `###` level as a cross-
- * clarify source's `### From '...'`) followed by the body verbatim. This is the manual side
- * of the §15.4 "注入面归一": the per-node queue resolves each entry's content — cross from
- * the session Q&A (buildExternalFeedbackBlock), manual from manual_body (here) — and the two
- * concatenate into one block. Returns '' when both title and body are empty (skip the entry).
- */
-export function renderManualFeedbackSection(title: string | null, body: string | null): string {
-  const t = (title ?? '').trim()
-  const b = (body ?? '').trim()
-  if (t.length === 0 && b.length === 0) return ''
-  const lines: string[] = []
-  lines.push(`### Manual instruction: ${t.length > 0 ? t : '(untitled)'}`)
-  lines.push('')
-  if (b.length > 0) lines.push(b)
-  return lines.join('\n').trimEnd()
-}
-
 // =============================================================================
 // RFC-132 — unified FLAT clarify queue render (PR-1 / T1).
 //
 // The single, flat `## Clarify Q&A` block that supersedes BOTH the round-grouped
-// `buildClarifyPromptBlock` loop (self / questioner) AND the designer-only
-// `buildExternalFeedbackBlock`. Every answered question renders as an EQUAL peer:
+// round-grouped loop (self / questioner) AND the designer-only External
+// Feedback renderer — both deleted by RFC-148 (RFC-132 收尾). Every answered
+// question renders as an EQUAL peer:
 //   - NO `### Round N` grouping, NO history-vs-current-round split,
 //   - NO sibling scope block, NO per-question directive trailer,
 //   - ZERO attribution (RFC-099 — never render who asked / who answered).
@@ -534,8 +407,9 @@ export function renderManualFeedbackSection(title: string | null, body: string |
 // so a caller structurally cannot group or attribute). Only a manual instruction
 // (§15, no Q&A) differs in shape, rendered as a peer bullet of its body.
 //
-// PR-1 lands this UNWIRED next to the legacy renderers; PR-2 / PR-4 route the
-// injectors through it and delete the round-grouped / External-Feedback blocks.
+// RFC-132 PR-1 landed this UNWIRED next to the legacy renderers; the injector
+// routing shipped with PR-C, and RFC-148 finished the ledger by deleting the
+// round-grouped / External-Feedback renderers — this is the only surface.
 // =============================================================================
 
 /** The stable heading of the flat clarify queue block. Exported so the golden
@@ -612,70 +486,11 @@ export function renderFlatClarifyQueue(entries: FlatClarifyEntry[]): string | un
   return [FLAT_CLARIFY_QUEUE_BLOCK_TITLE, '', ...items].join('\n')
 }
 
-// -----------------------------------------------------------------------------
-// RFC-059 per-question scope helpers
-//
-// scope is a one-way "also send to designer" flag, decided per-question at
-// submit time on cross-clarify nodes:
-//   - 'designer'   → answer enters BOTH the designer's External Feedback
-//                    (filtered subset, via extractDesignerScopedSubset) AND
-//                    the questioner's cascade rerun Q&A (full, no filter).
-//   - 'questioner' → answer enters ONLY the questioner's cascade rerun Q&A
-//                    (full, no filter); the designer is not notified.
-//
-// IMPORTANT: the questioner side is NEVER filtered. The questioner always
-// receives the entire session's Q&A in its cascade rerun, regardless of
-// scope distribution. See design.md §4.4 + acceptance criterion A3b for the
-// reasoning (the questioner needs full context to decide its next move).
-// -----------------------------------------------------------------------------
-
-/** Resolve the scope of a single question id against a stored map.
- *
- *   - `scopes === null` (row predates RFC-059 / kind='self' / client did not
- *     send questionScopes) → returns the default 'designer'.
- *   - `scopes` missing the key → also returns the default 'designer'.
- *   - `scopes[questionId]` set → returns that value verbatim.
- *
- *   Pure: no allocation, no validation (callers validate at submit time via
- *   validateQuestionScopes() in the backend service). */
-export function resolveQuestionScope(
-  scopes: Record<string, ClarifyQuestionScope> | null,
-  questionId: string,
-): ClarifyQuestionScope {
-  if (scopes === null) return CLARIFY_QUESTION_SCOPE_DEFAULT
-  return scopes[questionId] ?? CLARIFY_QUESTION_SCOPE_DEFAULT
-}
-
-/** Extract the (questions, answers) subset that should be forwarded to the
- *  designer's External Feedback block. Questions whose scope resolves to
- *  'designer' (the default) are kept; 'questioner'-scoped questions are
- *  filtered out. Questions without a matching answer (e.g. the user closed
- *  the form without answering a particular row) are skipped — the backend
- *  treats "no answer" as "do not forward".
- *
- *  IMPORTANT: This is the DESIGNER side only. Do NOT use it to filter the
- *  questioner's cascade-rerun Q&A injection — the questioner always sees
- *  the full Q&A regardless of scope.
- *
- *  Returns a fresh tuple (no aliasing into the input arrays). */
-export function extractDesignerScopedSubset(
-  questions: ClarifyQuestion[],
-  answers: ClarifyAnswer[],
-  scopes: Record<string, ClarifyQuestionScope> | null,
-): { questions: ClarifyQuestion[]; answers: ClarifyAnswer[] } {
-  const designerQuestions: ClarifyQuestion[] = []
-  const designerAnswers: ClarifyAnswer[] = []
-  const byId = new Map(answers.map((a) => [a.questionId, a]))
-  for (const q of questions) {
-    const a = byId.get(q.id)
-    if (a === undefined) continue
-    if (resolveQuestionScope(scopes, q.id) === 'designer') {
-      designerQuestions.push(q)
-      designerAnswers.push(a)
-    }
-  }
-  return { questions: designerQuestions, answers: designerAnswers }
-}
+// RFC-162: the per-question scope helpers (`resolveQuestionScope`,
+// `extractDesignerScopedSubset`, `countDesignerScopedAcrossSources`) are DELETED with
+// scope. A clarify answer no longer routes to a designer by a scope flag — cross unified
+// with self (the ASKER always reruns + gets the full Q&A), and "let the upstream revise"
+// is a reassign that adds a designer handler, not a per-question scope.
 
 /** RFC-128 §7 — merge a freshly-sealed answer subset into a round's existing answers
  *  (per-question merge-write; the round's `answers_json` stays the answer-content SoT).
@@ -715,30 +530,6 @@ export function mergeSealedAnswers(
     }
   }
   return merged
-}
-
-/** Sum the designer-scoped question count across multiple already-resolved
- *  cross-clarify sources. Used by `submitCrossClarifyAnswers` to decide
- *  whether the aggregated External Feedback batch is empty — when it is,
- *  the designer is not rerun (outcome
- *  `designer-skipped-all-questioner-scope`).
- *
- *  Sources whose own answers do not include a particular question are not
- *  double-counted — `extractDesignerScopedSubset` skips them, so this helper
- *  agrees with what eventually lands in the External Feedback block. */
-export function countDesignerScopedAcrossSources(
-  sources: ReadonlyArray<{
-    questions: ClarifyQuestion[]
-    answers: ClarifyAnswer[]
-    scopes: Record<string, ClarifyQuestionScope> | null
-  }>,
-): number {
-  let n = 0
-  for (const s of sources) {
-    const subset = extractDesignerScopedSubset(s.questions, s.answers, s.scopes)
-    n += subset.questions.length
-  }
-  return n
 }
 
 /**
@@ -788,13 +579,12 @@ export function resolveCrossClarifySessionMode(
  * that connects the self-clarify cycle or the cross-clarify cycle.
  */
 export function isClarifyChannelEdge(e: WorkflowEdge): boolean {
-  return (
-    e.source.portName === CLARIFY_SOURCE_PORT_NAME ||
-    e.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME ||
-    e.target.portName === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT ||
-    e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT ||
-    e.source.portName === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT
-  )
+  // RFC-147: thin alias over the system-channel-port registry
+  // (systemChannelPorts.ts) — the historical 5-port or-chain lived here;
+  // the registry is now the single source and this name stays for its
+  // established import surface (canvas cascade delete, validator
+  // dangling-edge exemption, scheduler topologicalOrder cycle-break).
+  return isSystemChannelEdge(e)
 }
 
 /**

@@ -40,7 +40,11 @@ import type {
   WorkflowDefinition,
   WorkflowNode,
 } from '@agent-workflow/shared'
-import { isMultiMarkdownUpstream, SIBLING_OUTPUTS_INSTRUCTION } from '@agent-workflow/shared'
+import {
+  isMultiMarkdownUpstream,
+  selectCurrentReviewRound,
+  SIBLING_OUTPUTS_INSTRUCTION,
+} from '@agent-workflow/shared'
 import {
   acceptedSubsetPaths,
   allDocumentsDecided,
@@ -53,6 +57,11 @@ import {
   splitListItems,
   splitMarkdownDocs,
   joinMarkdownDocs,
+  LOCAL_DECIDER,
+  REVIEW_APPROVAL_META_PORT,
+  REVIEW_APPROVED_PORT_MULTI,
+  REVIEW_APPROVED_PORT_SINGLE,
+  SYSTEM_DECIDER,
 } from '@agent-workflow/shared'
 import type {
   PriorRoundMember,
@@ -538,7 +547,7 @@ export async function dispatchReviewNode(args: DispatchReviewArgs): Promise<Disp
           .set({
             decision: 'superseded',
             decisionReason: 'upstream-refreshed',
-            decidedBy: 'system',
+            decidedBy: SYSTEM_DECIDER,
             decidedAt: Date.now(),
           })
           .where(
@@ -959,6 +968,37 @@ export function readDocVersionBody(appHome: string, docVersion: DocVersion): str
 }
 
 // ---------------------------------------------------------------------------
+// RFC-149: review round mode — decision-side single source of truth.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a review round's mode from its doc_versions rows (RFC-149 §2).
+ * DECISION-side oracle only: dispatch (dispatchReviewNode) derives the mode
+ * from the upstream port KIND — it is the producer of these rows and stays
+ * kind-driven — while every reader that used to re-derive the mode from the
+ * archived data shape (item_index / item_path NULL sentinels) goes through
+ * here instead of hand-rolling the sentinels.
+ *
+ *   - 'single'       — no member carries item_index (single-document round)
+ *   - 'multi-inline' — multi-document, items are INLINE markdown bodies
+ *                      (list<markdown>: item_path NULL on every member)
+ *   - 'multi-path'   — multi-document, items are worktree paths
+ *                      (list<path<md>>: item_path set)
+ *
+ * Empty array ⇒ 'single' (`some` over [] is false — callers reject empty
+ * rounds before the mode matters; the grid is locked in
+ * rfc149-decision-policy.test.ts).
+ */
+export function resolveReviewRoundMode(
+  dvs: ReadonlyArray<{ itemIndex?: number | null; itemPath?: string | null }>,
+): 'single' | 'multi-inline' | 'multi-path' {
+  const isMultiDoc = dvs.some((d) => d.itemIndex !== null && d.itemIndex !== undefined)
+  if (!isMultiDoc) return 'single'
+  const itemsInline = dvs.length > 0 && dvs.every((d) => (d.itemPath ?? null) === null)
+  return itemsInline ? 'multi-inline' : 'multi-path'
+}
+
+// ---------------------------------------------------------------------------
 // REST helpers — list / detail / counters.
 // ---------------------------------------------------------------------------
 
@@ -967,6 +1007,70 @@ export interface ListReviewSummariesFilter {
   taskId?: string
   workflowId?: string
   limit?: number
+}
+
+/**
+ * RFC-158: parse one task's `workflowSnapshot` for its review nodes'
+ * editor-set title/description. Corrupt JSON → empty map (callers fall back to
+ * nodeId / empty). Extracted so listReviewSummaries and getReviewDetail share
+ * one parse.
+ */
+function parseReviewNodeMeta(
+  workflowSnapshot: string,
+): Map<string, { title: string; description: string }> {
+  const meta = new Map<string, { title: string; description: string }>()
+  try {
+    const def = JSON.parse(workflowSnapshot) as WorkflowDefinition
+    for (const node of def.nodes ?? []) {
+      if ((node as { kind?: string }).kind !== 'review') continue
+      const n = node as Record<string, unknown>
+      const title = typeof n.title === 'string' ? n.title : ''
+      const description = typeof n.description === 'string' ? n.description : ''
+      meta.set(node.id, { title, description })
+    }
+  } catch {
+    // corrupt snapshot — leave meta empty.
+  }
+  return meta
+}
+
+/**
+ * RFC-158: assemble ONE ReviewSummary from an already-selected latest-per-port
+ * doc_version + its run / task / workflow / node meta. Extracted so
+ * getReviewDetail can build a summary directly by nodeRunId instead of scanning
+ * the global `listReviewSummaries(limit)` (which silently 404'd a review whose
+ * versions fell out of the newest-500 window — the pre-RFC-158 latent bug).
+ */
+function assembleReviewSummary(
+  dv: typeof docVersions.$inferSelect,
+  run: typeof nodeRuns.$inferSelect,
+  task: typeof tasks.$inferSelect,
+  wf: typeof workflows.$inferSelect,
+  nodeMeta: { title: string; description: string } | undefined,
+): ReviewSummary {
+  const awaitingReview = run.status === 'awaiting_review' && dv.decision === 'pending'
+  const titleTrimmed = nodeMeta?.title.trim() ?? ''
+  return {
+    nodeRunId: dv.reviewNodeRunId,
+    taskId: dv.taskId,
+    // RFC-037: required taskName from tasks.name.
+    taskName: task.name,
+    workflowId: task.workflowId,
+    workflowName: wf.name,
+    reviewNodeId: dv.reviewNodeId,
+    title: titleTrimmed !== '' ? nodeMeta!.title : dv.reviewNodeId,
+    description: nodeMeta?.description ?? '',
+    currentVersionIndex: dv.versionIndex,
+    reviewIteration: run.reviewIteration,
+    decision: dv.decision as DocVersionDecision,
+    awaitingReview,
+    shardKey: run.shardKey,
+    // RFC-079: a non-NULL item_index marks this review as a multi-document
+    // round (the inbox tags it + routes into the document-list view).
+    isMultiDoc: resolveReviewRoundMode([dv]) !== 'single',
+    createdAt: dv.createdAt,
+    decidedAt: dv.decidedAt,
+  }
 }
 
 export async function listReviewSummaries(
@@ -1004,20 +1108,7 @@ export async function listReviewSummaries(
     Map<string, { title: string; description: string }>
   >()
   for (const task of taskById.values()) {
-    const meta = new Map<string, { title: string; description: string }>()
-    try {
-      const def = JSON.parse(task.workflowSnapshot) as WorkflowDefinition
-      for (const node of def.nodes ?? []) {
-        if ((node as { kind?: string }).kind !== 'review') continue
-        const n = node as Record<string, unknown>
-        const title = typeof n.title === 'string' ? n.title : ''
-        const description = typeof n.description === 'string' ? n.description : ''
-        meta.set(node.id, { title, description })
-      }
-    } catch {
-      // corrupt snapshot — leave meta empty, callers fall back to nodeId.
-    }
-    reviewNodeMetaByTask.set(task.id, meta)
+    reviewNodeMetaByTask.set(task.id, parseReviewNodeMeta(task.workflowSnapshot))
   }
 
   // Pick only the latest doc_version per (reviewNodeRunId, sourcePortName);
@@ -1048,28 +1139,7 @@ export async function listReviewSummaries(
     if (filter.taskId !== undefined && filter.taskId !== task.id) continue
     if (filter.workflowId !== undefined && filter.workflowId !== task.workflowId) continue
     const nodeMeta = reviewNodeMetaByTask.get(task.id)?.get(dv.reviewNodeId)
-    const titleTrimmed = nodeMeta?.title.trim() ?? ''
-    out.push({
-      nodeRunId: dv.reviewNodeRunId,
-      taskId: dv.taskId,
-      // RFC-037: required taskName from tasks.name.
-      taskName: task.name,
-      workflowId: task.workflowId,
-      workflowName: wf.name,
-      reviewNodeId: dv.reviewNodeId,
-      title: titleTrimmed !== '' ? nodeMeta!.title : dv.reviewNodeId,
-      description: nodeMeta?.description ?? '',
-      currentVersionIndex: dv.versionIndex,
-      reviewIteration: run.reviewIteration,
-      decision: dv.decision as DocVersionDecision,
-      awaitingReview,
-      shardKey: run.shardKey,
-      // RFC-079: a non-NULL item_index marks this review as a multi-document
-      // round (the inbox tags it + routes into the document-list view).
-      isMultiDoc: dv.itemIndex !== null && dv.itemIndex !== undefined,
-      createdAt: dv.createdAt,
-      decidedAt: dv.decidedAt,
-    })
+    out.push(assembleReviewSummary(dv, run, task, wf, nodeMeta))
   }
   return out
 }
@@ -1084,12 +1154,6 @@ export async function getReviewDetail(
   appHome: string,
   nodeRunId: string,
 ): Promise<ReviewDetail> {
-  const summary = (await listReviewSummaries(db, { limit: 500 })).find(
-    (s) => s.nodeRunId === nodeRunId,
-  )
-  if (summary === undefined) {
-    throw new NotFoundError('review-not-found', `review for nodeRun ${nodeRunId} not found`)
-  }
   const allRows = await db
     .select()
     .from(docVersions)
@@ -1097,47 +1161,74 @@ export async function getReviewDetail(
   if (allRows.length === 0) {
     throw new NotFoundError('review-not-found', `no doc_versions for ${nodeRunId}`)
   }
+  // RFC-158: build the summary DIRECTLY by nodeRunId (run → task → workflow →
+  // node meta), not by scanning `listReviewSummaries(limit: 500)` — the global
+  // newest-500 window silently 404'd any review whose doc_versions aged out of
+  // it. Latest-per-port row (max versionIndex) drives the summary, matching the
+  // list's `latestPerRun` selection.
+  const summaryRunRows = await db.select().from(nodeRuns).where(eq(nodeRuns.id, nodeRunId)).limit(1)
+  const summaryRun = summaryRunRows[0]
+  if (summaryRun === undefined) {
+    throw new NotFoundError('review-not-found', `node run ${nodeRunId} not found`)
+  }
+  const summaryTaskRows = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.id, summaryRun.taskId))
+    .limit(1)
+  const summaryTask = summaryTaskRows[0]
+  if (summaryTask === undefined) {
+    throw new NotFoundError('review-not-found', `task ${summaryRun.taskId} not found`)
+  }
+  const summaryWfRows = await db
+    .select()
+    .from(workflows)
+    .where(eq(workflows.id, summaryTask.workflowId))
+    .limit(1)
+  const summaryWf = summaryWfRows[0]
+  if (summaryWf === undefined) {
+    throw new NotFoundError('review-not-found', `workflow ${summaryTask.workflowId} not found`)
+  }
+  const summaryDv = allRows.slice().sort((a, b) => b.versionIndex - a.versionIndex)[0]!
+  const summaryNodeMeta = parseReviewNodeMeta(summaryTask.workflowSnapshot).get(
+    summaryDv.reviewNodeId,
+  )
+  const summary = assembleReviewSummary(
+    summaryDv,
+    summaryRun,
+    summaryTask,
+    summaryWf,
+    summaryNodeMeta,
+  )
   // RFC-079: multi-document mode (any member carries item_index). Build the
   // document list and default the rendered "current" document to the first
   // item; the frontend lazy-loads other items via the versions endpoint.
-  const isMulti = allRows.some((r) => r.itemIndex !== null)
-  let dv: DocVersion
+  // RFC-158: ONE current-round selector, shared with the task-detail canvas nav
+  // oracle (getTaskNodeRuns), so "the node is clickable" and "the bare route
+  // renders this version" can never diverge. `allRows.length > 0` was just
+  // asserted, so the selector is non-null.
+  const isMulti = resolveReviewRoundMode(allRows) !== 'single'
+  const round = selectCurrentReviewRound(allRows)!
+  const dv: DocVersion = rowToDocVersion(round.representative)
+  // RFC-158 (R6): tolerate a missing/pruned body file on BOTH branches (the
+  // multi-doc path already did) — otherwise a single-doc review with a GC'd
+  // body file throws `doc-version-body-missing`, breaking the nav oracle's
+  // "has doc_version ⟹ renders" invariant.
   let body: string
+  try {
+    body = readDocVersionBody(appHome, dv)
+  } catch {
+    body = ''
+  }
   let documents: ReviewDocumentSummary[] | undefined
   if (isMulti) {
-    // Current round = pending members (awaiting); if decided, the members of
-    // the newest round at the highest reviewIteration. RFC-142 (G4): "newest
-    // round" must respect RFC-129 round_generation — an upstream refresh
-    // leaves two generations at the SAME reviewIteration (superseded old gen
-    // + fresh gen), and iteration-only filtering mixed both generations into
-    // the document list (duplicate itemIndex entries). Legacy iterations
-    // whose rows all predate migration 0070 (NULL generation) keep the
-    // whole-iteration behavior unchanged.
-    const itemRows = allRows.filter((r) => r.itemIndex !== null)
-    let members = itemRows.filter((r) => r.decision === 'pending')
-    if (members.length === 0) {
-      const maxIter = Math.max(...itemRows.map((r) => r.reviewIteration))
-      const atIter = itemRows.filter((r) => r.reviewIteration === maxIter)
-      const gens = atIter.map((r) => r.roundGeneration).filter((g): g is number => g !== null)
-      members =
-        gens.length > 0 ? atIter.filter((r) => r.roundGeneration === Math.max(...gens)) : atIter
-    }
-    members.sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0))
+    // RFC-142 (G4): "newest round" respects RFC-129 round_generation (a refresh
+    // leaves two generations at one reviewIteration). selectCurrentReviewRound
+    // encapsulates that pending-first-else-newest-gen selection.
     documents = []
-    for (const m of members) {
+    for (const m of round.members) {
       documents.push((await buildRoundMember(db, appHome, m)).summary)
     }
-    dv = rowToDocVersion(members[0]!)
-    try {
-      body = readDocVersionBody(appHome, dv)
-    } catch {
-      body = ''
-    }
-  } else {
-    // Single-document: latest version (behavior unchanged).
-    const latest = allRows.slice().sort((a, b) => b.versionIndex - a.versionIndex)[0]!
-    dv = rowToDocVersion(latest)
-    body = readDocVersionBody(appHome, dv)
   }
   // RFC-142 (Codex impl-gate P2): decided versions must read the FROZEN
   // comment snapshot — the live rows are deleted at decision time, so the old
@@ -1549,7 +1640,7 @@ export async function addReviewComment(args: AddReviewCommentArgs): Promise<Revi
     contextAfter: canonical.contextAfter,
     occurrenceIndex: canonical.occurrenceIndex,
     commentText: args.commentText,
-    author: args.author ?? 'local',
+    author: args.author ?? LOCAL_DECIDER,
     authorRole: args.authorRole ?? null,
     createdAt: now,
   })
@@ -1559,7 +1650,7 @@ export async function addReviewComment(args: AddReviewCommentArgs): Promise<Revi
     docVersionId: dv.id,
     anchor: canonical,
     commentText: args.commentText,
-    author: args.author ?? 'local',
+    author: args.author ?? LOCAL_DECIDER,
     authorRole: args.authorRole ?? null,
     createdAt: now,
   }
@@ -1665,6 +1756,89 @@ export async function deleteReviewComment(
 // Decision (approve / reject / iterate).
 // ---------------------------------------------------------------------------
 
+// RFC-149: review decision policy table.
+//
+// `submitReviewDecision` used to branch on `args.decision` at ≥13 independent
+// points (iteration bump, decisionReason derivation, rerun/rollback key pairs,
+// supersede column value + marker, mint cause, cascade semantics, lifecycle
+// event). Each policy dimension now lives in ONE row per decision below and
+// the function keeps only the path-shape skeleton (approve early-return +
+// multi-doc approve gate — D2). Adding a decision kind = adding a row: the
+// mapped `satisfies` makes a missing/extra row a compile error.
+
+/**
+ * The rerun/rollback/supersede/cascade half of a decision policy. Only
+ * rejected/iterated carry it — approve early-returns before the rerun block.
+ * All six fields are REQUIRED (design-gate revision): an optional slot would
+ * let a new row compile while silently dropping the reject/iterate asymmetry.
+ */
+export interface ReviewRerunPolicy {
+  /** Review-node config key listing which upstream nodes re-run. */
+  rerunnableKey: 'rerunnableOnReject' | 'rerunnableOnIterate'
+  /** Review-node config key gating the upstream worktree rollback. */
+  rollbackKey: 'rollbackFilesOnReject' | 'rollbackFilesOnIterate'
+  /** Config-absent default — reject rolls files back, iterate keeps them. */
+  rollbackDefault: boolean
+  /** `node_runs.superseded_by_review` column value (the human-breadcrumb
+   *  supersede marker derives from it byte-for-byte). */
+  supersededByReview: 'rejected' | 'iterated'
+  /** `rerun_cause` stamped on the freshly minted upstream retry row. */
+  mintCause: 'review-reject' | 'review-iterate'
+  /** Sibling-review cascade rule: reject always cascades (RFC-005 A2);
+   *  iterate only when the upstream opted into sibling sync (RFC-014). */
+  cascade: 'always' | 'sibling-sync-conditional'
+}
+
+export interface ReviewDecisionPolicyBase {
+  /** Whether the decision bumps review_iteration (approve keeps it). */
+  bumpsIteration: boolean
+  /** transitionNodeRunStatus event kind closing / re-opening the review row. */
+  lifecycleEvent: 'approve-review' | 'reject-review' | 'iterate-review'
+  /** How doc_versions.decision_reason is derived at archive time. */
+  decisionReason: 'reject-reason' | 'render-comments' | 'none'
+}
+
+/** approved FORBIDS the rerun slot; rejected/iterated must carry it in full. */
+export type ReviewDecisionPolicyOf<K extends ReviewDecisionKind> = ReviewDecisionPolicyBase &
+  (K extends 'approved' ? { rerun?: never } : { rerun: ReviewRerunPolicy })
+
+/** Widened view for lookup sites indexing by a runtime ReviewDecisionKind. */
+export type ReviewDecisionPolicy = ReviewDecisionPolicyOf<ReviewDecisionKind>
+
+export const REVIEW_DECISION_POLICY = {
+  approved: {
+    bumpsIteration: false,
+    lifecycleEvent: 'approve-review',
+    decisionReason: 'none',
+  },
+  rejected: {
+    bumpsIteration: true,
+    lifecycleEvent: 'reject-review',
+    decisionReason: 'reject-reason',
+    rerun: {
+      rerunnableKey: 'rerunnableOnReject',
+      rollbackKey: 'rollbackFilesOnReject',
+      rollbackDefault: true,
+      supersededByReview: 'rejected',
+      mintCause: 'review-reject',
+      cascade: 'always',
+    },
+  },
+  iterated: {
+    bumpsIteration: true,
+    lifecycleEvent: 'iterate-review',
+    decisionReason: 'render-comments',
+    rerun: {
+      rerunnableKey: 'rerunnableOnIterate',
+      rollbackKey: 'rollbackFilesOnIterate',
+      rollbackDefault: false,
+      supersededByReview: 'iterated',
+      mintCause: 'review-iterate',
+      cascade: 'sibling-sync-conditional',
+    },
+  },
+} as const satisfies { [K in ReviewDecisionKind]: ReviewDecisionPolicyOf<K> }
+
 export interface SubmitReviewDecisionArgs {
   db: DbClient
   appHome: string
@@ -1716,8 +1890,9 @@ async function approveMultiDocReview(args: {
   // MARKDOWN_DOC_BOUNDARY, emitted as list<markdown>. A list<path<md>> round
   // joins accepted worktree paths by newline, emitted as list<path<md>>. Empty
   // subset → empty content → downstream wrapper-fanout sees an empty list and
-  // completes immediately. Detect inline from the archived rows.
-  const itemsInline = dvs.length > 0 && dvs.every((d) => (d.itemPath ?? null) === null)
+  // completes immediately. Detect inline from the archived rows (RFC-149:
+  // via the round-mode oracle).
+  const itemsInline = resolveReviewRoundMode(dvs) === 'multi-inline'
   let acceptedContent: string
   let acceptedKind: string
   if (itemsInline) {
@@ -1748,14 +1923,19 @@ async function approveMultiDocReview(args: {
   })
   await db
     .insert(nodeRunOutputs)
-    .values({ nodeRunId, portName: 'accepted', content: acceptedContent, kind: acceptedKind })
+    .values({
+      nodeRunId,
+      portName: REVIEW_APPROVED_PORT_MULTI,
+      content: acceptedContent,
+      kind: acceptedKind,
+    })
     .onConflictDoUpdate({
       target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
       set: { content: acceptedContent, kind: acceptedKind },
     })
   await db
     .insert(nodeRunOutputs)
-    .values({ nodeRunId, portName: 'approval_meta', content: meta })
+    .values({ nodeRunId, portName: REVIEW_APPROVAL_META_PORT, content: meta })
     .onConflictDoUpdate({
       target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
       set: { content: meta },
@@ -1824,7 +2004,7 @@ export async function submitReviewDecision(
   // Representative row — taskId / sourceNodeId / reviewNodeId / sourcePortName
   // are identical across every item of a round (one shared upstream port).
   const dv = dvs[0]!
-  const isMultiDoc = dvs.some((d) => d.itemIndex !== null && d.itemIndex !== undefined)
+  const isMultiDoc = resolveReviewRoundMode(dvs) !== 'single'
 
   // RFC-079: a multi-document approve requires every document decided
   // (accepted / not_accepted) — reject an undecided round before any mutation.
@@ -1834,6 +2014,10 @@ export async function submitReviewDecision(
       `review ${args.nodeRunId} has undecided documents; decide every document before approving`,
     )
   }
+
+  // RFC-149: every per-decision policy dimension below reads from THE table
+  // row — the remaining `args.decision === …` branches are path skeleton only.
+  const policy = REVIEW_DECISION_POLICY[args.decision]
 
   // 1. Archive each pending doc_version's comments into its snapshot + drop the
   //    row-side comments. Single-document = exactly one iteration. For iterate,
@@ -1852,15 +2036,15 @@ export async function submitReviewDecision(
       .set({
         decision: args.decision,
         decisionReason:
-          args.decision === 'rejected'
+          policy.decisionReason === 'reject-reason'
             ? (args.rejectReason ?? null)
-            : args.decision === 'iterated'
+            : policy.decisionReason === 'render-comments'
               ? renderCommentsForPrompt(commentsArr, {
                   ...(d.sourceFilePath ? { sourceFilePath: d.sourceFilePath } : {}),
                 })
               : null,
         decidedAt: Date.now(),
-        decidedBy: args.author ?? 'local',
+        decidedBy: args.author ?? LOCAL_DECIDER,
         decidedByRole: args.authorRole ?? null,
         commentsJson: JSON.stringify(commentsArr),
       })
@@ -1873,7 +2057,7 @@ export async function submitReviewDecision(
     dv.taskId,
     args.nodeRunId,
     args.decision,
-    run.reviewIteration + (args.decision === 'approved' ? 0 : 1),
+    run.reviewIteration + (policy.bumpsIteration ? 1 : 0),
     args.decision,
   )
 
@@ -1942,7 +2126,7 @@ export async function submitReviewDecision(
       .insert(nodeRunOutputs)
       .values({
         nodeRunId: args.nodeRunId,
-        portName: 'approved_doc',
+        portName: REVIEW_APPROVED_PORT_SINGLE,
         content: approvedDocContent,
         kind: approvedDocKind,
       })
@@ -1952,7 +2136,7 @@ export async function submitReviewDecision(
       })
     await args.db
       .insert(nodeRunOutputs)
-      .values({ nodeRunId: args.nodeRunId, portName: 'approval_meta', content: meta })
+      .values({ nodeRunId: args.nodeRunId, portName: REVIEW_APPROVAL_META_PORT, content: meta })
       .onConflictDoUpdate({
         target: [nodeRunOutputs.nodeRunId, nodeRunOutputs.portName],
         set: { content: meta },
@@ -1963,7 +2147,7 @@ export async function submitReviewDecision(
     await transitionNodeRunStatus({
       db: args.db,
       nodeRunId: args.nodeRunId,
-      event: { kind: 'approve-review' },
+      event: { kind: policy.lifecycleEvent },
       extra: { finishedAt: decidedAt },
     })
     // RFC-041: feed the approved decision into the memory distill queue.
@@ -2001,17 +2185,21 @@ export async function submitReviewDecision(
       `review node ${dv.reviewNodeId} not in task workflow snapshot`,
     )
   }
-  const rerunCfgRaw = (reviewNode as Record<string, unknown>)[
-    args.decision === 'rejected' ? 'rerunnableOnReject' : 'rerunnableOnIterate'
-  ]
+  // RFC-149: the rerun half of the policy row. approved cannot reach this
+  // block (early return above) — the undefined guard is defensive only.
+  const rerunPolicy = (REVIEW_DECISION_POLICY[args.decision] as ReviewDecisionPolicy).rerun
+  if (rerunPolicy === undefined) {
+    throw new Error(
+      `review decision '${args.decision}' carries no rerun policy — ` +
+        'approve must early-return before the rerun block',
+    )
+  }
+  const rerunCfgRaw = (reviewNode as Record<string, unknown>)[rerunPolicy.rerunnableKey]
   const rerunSet = new Set<string>(
     Array.isArray(rerunCfgRaw) ? rerunCfgRaw.filter((s): s is string => typeof s === 'string') : [],
   )
   rerunSet.add(dv.sourceNodeId) // direct upstream always rerunnable, regardless of config
-  const rollbackFlag =
-    args.decision === 'rejected'
-      ? readBool(reviewNode, 'rollbackFilesOnReject', true)
-      : readBool(reviewNode, 'rollbackFilesOnIterate', false)
+  const rollbackFlag = readBool(reviewNode, rerunPolicy.rollbackKey, rerunPolicy.rollbackDefault)
 
   // RFC-011: mint a fresh node_run row at retry_index+1 for each rerunnable
   // upstream node instead of resetting the latest row in place — this
@@ -2079,7 +2267,7 @@ export async function submitReviewDecision(
     // contract — isDispatchable keeps canceled rows carrying it parked while
     // plain canceled rows are revival-dispatchable; build it from the shared
     // constant so the two sides cannot drift.
-    const supersedeMarker = `${REVIEW_SUPERSEDE_MARKER_PREFIX}${args.decision}${rolledBack ? '-rollback' : ''}`
+    const supersedeMarker = `${REVIEW_SUPERSEDE_MARKER_PREFIX}${rerunPolicy.supersededByReview}${rolledBack ? '-rollback' : ''}`
     // RFC-053: supersede must be able to cancel BOTH live rows (pending /
     // running / awaiting_*) AND a `done` row (typical case — agent already
     // finished before the review decision triggered an iterate). We use
@@ -2100,8 +2288,8 @@ export async function submitReviewDecision(
         // (breadcrumbs; substring test locks stay green), but the MACHINE
         // facts land structured — isReviewSupersededRow / clarifyRerunLedger /
         // the frontend decode read these columns, never the prefix.
-        errorMessage: `${supersedeMarker}: Replaced by retry_index ${nextRetryIndex} due to review ${args.decision} of ${dv.reviewNodeId}`,
-        supersededByReview: args.decision === 'iterated' ? 'iterated' : 'rejected',
+        errorMessage: `${supersedeMarker}: Replaced by retry_index ${nextRetryIndex} due to review ${rerunPolicy.supersededByReview} of ${dv.reviewNodeId}`,
+        supersededByReview: rerunPolicy.supersededByReview,
         rolledBack,
       },
     })
@@ -2109,7 +2297,7 @@ export async function submitReviewDecision(
       taskId: dv.taskId,
       nodeId,
       status: 'pending',
-      cause: args.decision === 'iterated' ? 'review-iterate' : 'review-reject',
+      cause: rerunPolicy.mintCause,
       retryIndex: nextRetryIndex,
       iteration: latest.iteration,
       // No inheritFrom: this mint historically carried ONLY preSnapshot from
@@ -2134,15 +2322,15 @@ export async function submitReviewDecision(
   //    Already-approved siblings get pulled back to awaiting_review with a
   //    bumped reviewIteration — locked by review-iterate-sibling-cascade.test.ts.
   let cascadeReason: 'rejected' | 'iterated' | null = null
-  if (args.decision === 'rejected') {
-    cascadeReason = 'rejected'
-  } else if (args.decision === 'iterated') {
+  if (rerunPolicy.cascade === 'always') {
+    cascadeReason = rerunPolicy.supersededByReview
+  } else if (rerunPolicy.cascade === 'sibling-sync-conditional') {
     const triggered = await iterateSiblingCascadeApplies({
       db: args.db,
       upstreamNodeId: dv.sourceNodeId,
       definition,
     })
-    if (triggered) cascadeReason = 'iterated'
+    if (triggered) cascadeReason = rerunPolicy.supersededByReview
   }
   if (cascadeReason !== null) {
     await cascadeSiblingReviews({
@@ -2162,7 +2350,7 @@ export async function submitReviewDecision(
   await transitionNodeRunStatus({
     db: args.db,
     nodeRunId: args.nodeRunId,
-    event: args.decision === 'iterated' ? { kind: 'iterate-review' } : { kind: 'reject-review' },
+    event: { kind: policy.lifecycleEvent },
     extra: { reviewIteration: nextIter },
   })
 
@@ -2358,7 +2546,7 @@ async function cascadeSiblingReviews(args: CascadeSiblingArgs): Promise<void> {
             decision: 'rejected',
             decisionReason: 'invalidated by sibling reject (RFC-005 A2)',
             decidedAt: Date.now(),
-            decidedBy: 'system',
+            decidedBy: SYSTEM_DECIDER,
           })
           .where(eq(docVersions.id, d.id))
       }
@@ -2431,6 +2619,73 @@ export function renderCommentsForPrompt(
 }
 
 /**
+ * RFC-149: per-decision ReviewPromptContext builders — the sister table to
+ * REVIEW_DECISION_POLICY (design D1: these builders eat the decided
+ * doc_versions row + DB/appHome handles, so they stay out of the pure-data
+ * main table). `null` = the decision contributes no re-run context.
+ */
+type ReviewPromptCtxBuilder = (args: {
+  db: DbClient
+  appHome: string
+  taskId: string
+  upstreamNodeId: string
+  dv: typeof docVersions.$inferSelect
+}) => Promise<ReviewPromptContext | undefined>
+
+const REVIEW_PROMPT_CTX_BUILDERS: Record<DocVersionDecision, ReviewPromptCtxBuilder | null> = {
+  pending: null,
+  approved: null,
+  superseded: null,
+  rejected: async ({ dv }) => ({ rejection: dv.decisionReason ?? '' }),
+  iterated: async ({ db, appHome, taskId, upstreamNodeId, dv }) => {
+    // RFC-079: multi-document iterate. The latest decided row is just ONE item
+    // of the round; aggregate EVERY iterated item's feedback for this upstream
+    // at the same reviewIteration so the re-run prompt sees all per-document
+    // comments — not only the most-recently-touched item. Each item's
+    // decisionReason already carries a `**File**: <path>` header (rendered with
+    // its itemPath), which is the per-document distinction. Single-document rows
+    // (item_index NULL) skip this and keep the legacy single-row path below.
+    if (dv.itemIndex !== null) {
+      const roundRows = await db
+        .select()
+        .from(docVersions)
+        .where(
+          and(
+            eq(docVersions.taskId, taskId),
+            eq(docVersions.sourceNodeId, upstreamNodeId),
+            eq(docVersions.decision, 'iterated'),
+            eq(docVersions.reviewIteration, dv.reviewIteration),
+            ne(docVersions.decidedBy, SYSTEM_DECIDER),
+          ),
+        )
+        .orderBy(asc(docVersions.itemIndex))
+      const sections = roundRows
+        .map((r) => (r.decisionReason ?? '').trim())
+        .filter((s) => s.length > 0)
+      // sibling-outputs (RFC-014 multi-PORT) is orthogonal to multi-DOC (one
+      // list port, many items) and does not apply to a multi-document round.
+      return {
+        comments: sections.join('\n\n'),
+        iterateTargetPort: dv.sourcePortName,
+      }
+    }
+    const ctx: ReviewPromptContext = {
+      comments: dv.decisionReason ?? '',
+      iterateTargetPort: dv.sourcePortName,
+    }
+    const siblingOutputs = await buildSiblingOutputsBlock({
+      db,
+      appHome,
+      taskId,
+      upstreamNodeId,
+      targetPortName: dv.sourcePortName,
+    })
+    if (siblingOutputs !== undefined) ctx.siblingOutputs = siblingOutputs
+    return ctx
+  },
+}
+
+/**
  * Build the ReviewPromptContext for the upstream re-run on reject/iterate.
  * Called by the scheduler when it re-runs the upstream node after a decision.
  *
@@ -2451,9 +2706,9 @@ export async function buildReviewPromptContext(
   // upstreamNodeId. SQLite orders NULL first in DESC, so:
   //   - pending rows must be filtered explicitly (otherwise their NULL
   //     decidedAt would win in DESC)
-  //   - rows produced by cascadeSiblingReviews (decidedBy='system') must be
-  //     filtered too — those mark "this port's pending doc was invalidated by
-  //     a sibling decision", not "the user decided on this port". Without
+  //   - rows produced by cascadeSiblingReviews (decidedBy=SYSTEM_DECIDER) must
+  //     be filtered too — those mark "this port's pending doc was invalidated
+  //     by a sibling decision", not "the user decided on this port". Without
   //     this filter, RFC-014's multi-port iterate would surface the
   //     system-decided cascade row instead of the user's iterate row.
   const dvRows = await db
@@ -2464,65 +2719,19 @@ export async function buildReviewPromptContext(
         eq(docVersions.taskId, taskId),
         eq(docVersions.sourceNodeId, upstreamNodeId),
         ne(docVersions.decision, 'pending'),
-        ne(docVersions.decidedBy, 'system'),
+        ne(docVersions.decidedBy, SYSTEM_DECIDER),
       ),
     )
     .orderBy(desc(docVersions.decidedAt))
     .limit(1)
   const dv = dvRows[0]
   if (dv === undefined) return undefined
-  // RFC-079: multi-document iterate. The latest decided row is just ONE item
-  // of the round; aggregate EVERY iterated item's feedback for this upstream
-  // at the same reviewIteration so the re-run prompt sees all per-document
-  // comments — not only the most-recently-touched item. Each item's
-  // decisionReason already carries a `**File**: <path>` header (rendered with
-  // its itemPath), which is the per-document distinction. Single-document rows
-  // (item_index NULL) skip this and keep the legacy single-row path below.
-  if (dv.itemIndex !== null && dv.decision === 'iterated') {
-    const roundRows = await db
-      .select()
-      .from(docVersions)
-      .where(
-        and(
-          eq(docVersions.taskId, taskId),
-          eq(docVersions.sourceNodeId, upstreamNodeId),
-          eq(docVersions.decision, 'iterated'),
-          eq(docVersions.reviewIteration, dv.reviewIteration),
-          ne(docVersions.decidedBy, 'system'),
-        ),
-      )
-      .orderBy(asc(docVersions.itemIndex))
-    const sections = roundRows
-      .map((r) => (r.decisionReason ?? '').trim())
-      .filter((s) => s.length > 0)
-    // sibling-outputs (RFC-014 multi-PORT) is orthogonal to multi-DOC (one
-    // list port, many items) and does not apply to a multi-document round.
-    return {
-      comments: sections.join('\n\n'),
-      iterateTargetPort: dv.sourcePortName,
-    }
-  }
-  if (dv.decision === 'rejected') {
-    return { rejection: dv.decisionReason ?? '' }
-  }
-  if (dv.decision === 'iterated') {
-    const ctx: ReviewPromptContext = {
-      comments: dv.decisionReason ?? '',
-      iterateTargetPort: dv.sourcePortName,
-    }
-    const siblingOutputs = await buildSiblingOutputsBlock({
-      db,
-      appHome,
-      taskId,
-      upstreamNodeId,
-      targetPortName: dv.sourcePortName,
-    })
-    if (siblingOutputs !== undefined) ctx.siblingOutputs = siblingOutputs
-    return ctx
-  }
-  // pending / approved → no review context
+  // RFC-149: per-decision ctx construction is table-driven (sister table
+  // above); pending / approved / superseded rows contribute no context.
   void iteration
-  return undefined
+  const builder = REVIEW_PROMPT_CTX_BUILDERS[dv.decision as DocVersionDecision] ?? null
+  if (builder === null) return undefined
+  return builder({ db, appHome, taskId, upstreamNodeId, dv })
 }
 
 // ---------------------------------------------------------------------------

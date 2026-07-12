@@ -1,16 +1,8 @@
 // `agent-workflow status` — print daemon state.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { type DaemonInfo, readDaemonInfo } from '@/util/daemonInfo'
 import { isProcessAlive, readPidFromLock } from '@/util/lock'
 import { Paths } from '@/util/paths'
-
-interface DaemonInfo {
-  pid: number
-  host: string
-  port: number
-  url: string
-  startedAt: string
-}
 
 export interface HealthReport {
   ok: boolean
@@ -35,14 +27,8 @@ export async function statusCommand(): Promise<StatusResult> {
   if (pid === null) return { state: 'not-running' }
   if (!isProcessAlive(pid)) return { state: 'stale-lock', pid }
 
-  let info: DaemonInfo | undefined
-  if (existsSync(Paths.daemonInfo)) {
-    try {
-      info = JSON.parse(readFileSync(Paths.daemonInfo, 'utf-8')) as DaemonInfo
-    } catch {
-      // info file missing/garbled; still report 'running' via PID
-    }
-  }
+  // info file missing/garbled → undefined; still report 'running' via PID.
+  const info: DaemonInfo | undefined = readDaemonInfo() ?? undefined
 
   let health: HealthReport | undefined
   let healthError: string | undefined

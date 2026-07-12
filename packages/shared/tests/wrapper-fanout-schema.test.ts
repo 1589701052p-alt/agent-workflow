@@ -17,8 +17,10 @@ import {
   WorkflowEdgeSchema,
   WrapperFanoutNodeSchema,
   WrapperFanoutPortSchema,
-  isProcessNodeKind,
 } from '../src/schemas/workflow'
+// RFC-146: isProcessNodeKind moved to the behavior table (barrel export
+// unchanged; this deep import follows the new home).
+import { isProcessNodeKind } from '../src/node-kind-behavior'
 
 describe('NODE_KIND enum', () => {
   test("includes 'wrapper-fanout'", () => {

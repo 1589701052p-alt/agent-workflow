@@ -73,7 +73,10 @@ describe('RFC-031 /plugins wiring', () => {
     expect(src).toContain('PluginFields')
     expect(src).toContain('nameLocked')
     expect(src).toContain('plugin-save-button')
-    expect(src).toContain('ConfirmButton')
+    // RFC-151 PR-4: the delete ConfirmButton renders inside the shared
+    // <DetailHeaderActions> header shell now.
+    expect(src).toContain('DetailHeaderActions')
+    expect(read('components/DetailHeaderActions.tsx')).toContain('ConfirmButton')
   })
 
   test('detail page renders save/del errors in dedicated .form-actions row, NOT inside header .page__actions', () => {
@@ -82,17 +85,22 @@ describe('RFC-031 /plugins wiring', () => {
     // the page header. That header row is `display:flex; justify-content:space-between`,
     // so a long error like "plugin-install-failed: plugin install failed (exit 1)" got
     // squeezed into the top-right corner of the page, visually disconnected from the
-    // form it pertains to. Sibling detail pages (mcps/skills/agents.detail.tsx) all
-    // keep Save/Delete in `.page__actions` but render error spans in a separate
-    // `.form-actions` row UNDER the header. This test locks that placement.
+    // form it pertains to. RFC-151 PR-4 single-sourced the placement in
+    // <DetailHeaderActions>: the `.form-actions` error row renders as a SIBLING
+    // after the flex header, never inside the `.page__actions` cluster. Lock the
+    // structural property on the shared shell + the page's wiring through it.
+    const shell = read('components/DetailHeaderActions.tsx')
+    expect(shell).toContain('className="form-actions"')
+    expect(shell).toContain('form-actions__error')
+    const headerBlock = shell.match(
+      /<header className="page__header page__header--row">[\s\S]*?<\/header>/,
+    )
+    expect(headerBlock).not.toBeNull()
+    expect(headerBlock![0]).toContain('className="page__actions"')
+    expect(headerBlock![0]).not.toContain('form-actions__error')
+    // plugins.detail routes both mutation channels through the shell's slot.
     const src = read('routes/plugins.detail.tsx')
-    expect(src).toContain('className="form-actions"')
-    // Slice the header actions cluster (opener .. first </div>) — plugins.detail.tsx
-    // keeps it shallow (only <button> + <ConfirmButton ... />, no nested <div>), so a
-    // non-greedy match closes at the cluster's own </div>.
-    const headerActions = src.match(/className="page__actions"[\s\S]*?<\/div>/)
-    expect(headerActions).not.toBeNull()
-    expect(headerActions![0]).not.toContain('form-actions__error')
+    expect(src).toMatch(/errors=\{\[save\.error, del\.error\]\}/)
   })
 
   test('list page still keeps check-update + upgrade row actions', () => {
@@ -106,11 +114,8 @@ describe('RFC-031 /plugins wiring', () => {
     const zh = read('i18n/zh-CN.ts')
     const KEYS = [
       'title',
-      'hint',
       'newButton',
       'newTitle',
-      'newHint',
-      'detailHint',
       'colName',
       'colSpec',
       'colSource',

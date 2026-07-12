@@ -28,6 +28,11 @@ import type {
   WorkflowValidationResult,
 } from '@agent-workflow/shared'
 import {
+  DEPRECATED_PROMPT_TOKENS,
+  CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+  CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
+  CLARIFY_RESPONSE_TARGET_PORT_NAME,
+  CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
   BUILTIN_VARS,
   CLARIFY_SOURCE_PORT_NAME,
   countFanoutAggregators,
@@ -53,6 +58,22 @@ import { NotFoundError } from '@/util/errors'
 // Entry points
 // -----------------------------------------------------------------------------
 
+/**
+ * RFC-165 (F14/R3-3): THE production validation context — agents + skills +
+ * plugins, all live from the DB. Every launch-path / sync-path caller MUST
+ * build its ctx through this helper: hand-rolled `{agents, skills}` objects
+ * silently skipped the plugin checks (ctx.plugins undefined ⇒ no-op), so a
+ * workflow referencing a missing/disabled plugin validated at launch and
+ * died at spawn. A consistency lock test pins every caller to this helper.
+ */
+export async function buildWorkflowValidationContext(db: DbClient): Promise<ValidatorContext> {
+  return {
+    agents: await listAgents(db),
+    skills: await listSkills(db),
+    plugins: await listPlugins(db),
+  }
+}
+
 export async function validateWorkflowById(
   db: DbClient,
   id: string,
@@ -61,11 +82,7 @@ export async function validateWorkflowById(
   if (wf === null) {
     throw new NotFoundError('workflow-not-found', `workflow '${id}' not found`)
   }
-  return validateWorkflowDef(wf.definition, {
-    agents: await listAgents(db),
-    skills: await listSkills(db),
-    plugins: await listPlugins(db),
-  })
+  return validateWorkflowDef(wf.definition, await buildWorkflowValidationContext(db))
 }
 
 export interface ValidatorContext {
@@ -350,6 +367,26 @@ export function validateWorkflowDef(
         message: `edge '${edge.id}': wrapper '${tgt.id}' does not accept inbound edges in v1`,
         pointer: edge.id,
       })
+    } else if (tgt.kind === 'wrapper-fanout' && edge.boundary === undefined) {
+      // RFC-146 impl-gate fix (Codex high): a PLAIN inbound edge into a
+      // wrapper-fanout must land on a declared input port. Before the
+      // declared-ports consolidation the validator had no fanout inputPorts
+      // at all, so a typo'd target (fan.docz vs declared fan.docs) sailed
+      // through — at runtime resolveUpstreamInputs finds nothing under the
+      // shardSource name, rawContent is '', and the wrapper takes the
+      // empty-source shortcut: the task goes green on garbage. Boundary
+      // edges are exempt: 'wrapper-input' re-uses the wrapper as SOURCE
+      // (checked by boundary-input rules) and 'wrapper-output' re-uses the
+      // wrapper as TARGET with an OUTPUT port name (checked by
+      // boundary-output rules).
+      const ins = inputPorts.get(tgt.id) ?? new Set()
+      if (!ins.has(edge.target.portName)) {
+        issues.push({
+          code: 'edge-target-port-missing',
+          message: `edge '${edge.id}': wrapper-fanout '${tgt.id}' has no declared input port '${edge.target.portName}'`,
+          pointer: edge.id,
+        })
+      }
     }
 
     // RFC-094 (audit S-5) — per-shard inner chain inside a wrapper-fanout.
@@ -451,14 +488,15 @@ export function validateWorkflowDef(
       const s = nodeById.get(edge.source.nodeId)
       const t = nodeById.get(edge.target.nodeId)
       if (s === undefined || t === undefined) continue
-      // Exclude clarify / cross-clarify channel edges (mirrors buildScopeUpstreams
-      // — these carry feedback out-of-band, not as same-iteration dataflow).
+      // Exclude clarify / cross-clarify channel edges — these carry feedback
+      // out-of-band, not as same-iteration dataflow. RFC-147: the port-level
+      // half was a hand-decomposed copy of the side-respecting classifier;
+      // now the shared registry projection (consumer #7 of the design-gate
+      // sweep — cycle detection wants the uniform family-A semantics, same
+      // as topologicalOrder).
       if (s.kind === 'clarify' || t.kind === 'clarify') continue
       if (s.kind === 'clarify-cross-agent' || t.kind === 'clarify-cross-agent') continue
-      const sp = edge.source.portName
-      const tp = edge.target.portName
-      if (sp === '__clarify__' || sp === 'to_designer' || sp === 'to_questioner') continue
-      if (tp === '__clarify_response__' || tp === '__external_feedback__') continue
+      if (isClarifyChannelEdge(edge)) continue
       dataEdges.push({ from: edge.source.nodeId, to: edge.target.nodeId })
     }
     if (hasCycle(dataEdges, [...innerIds])) {
@@ -1092,7 +1130,10 @@ export function validateWorkflowDef(
       // any outgoing edge MUST originate from one of the two legal output ports.
       const outboundEdges = edges.filter((e) => e.source.nodeId === node.id)
       for (const e of outboundEdges) {
-        if (e.source.portName !== 'to_designer' && e.source.portName !== 'to_questioner') {
+        if (
+          e.source.portName !== CROSS_CLARIFY_OUT_TO_DESIGNER_PORT &&
+          e.source.portName !== CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT
+        ) {
           issues.push({
             code: 'cross-clarify-has-downstream',
             message: `clarify-cross-agent node '${node.id}' has an outgoing edge from non-system port '${e.source.portName}'; only 'to_designer' and 'to_questioner' are allowed`,
@@ -1102,7 +1143,9 @@ export function validateWorkflowDef(
       }
 
       // `to_designer` wired? (warning if not)
-      const toDesignerOut = outboundEdges.filter((e) => e.source.portName === 'to_designer')
+      const toDesignerOut = outboundEdges.filter(
+        (e) => e.source.portName === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
+      )
       if (toDesignerOut.length === 0) {
         issues.push({
           code: 'cross-clarify-manual-edge-missing',
@@ -1170,9 +1213,13 @@ export function validateWorkflowDef(
       // reverse-drag mints it; user-deletion is allowed (the runtime injects
       // answers via cross_clarify_sessions, not via this edge) but the canvas
       // hides the closed feedback loop and that warrants a warning.
-      const toQuestionerOut = outboundEdges.filter((e) => e.source.portName === 'to_questioner')
+      const toQuestionerOut = outboundEdges.filter(
+        (e) => e.source.portName === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+      )
       const properlyWiredAutoEdge = toQuestionerOut.some(
-        (e) => e.target.nodeId === questionerId && e.target.portName === '__clarify_response__',
+        (e) =>
+          e.target.nodeId === questionerId &&
+          e.target.portName === CLARIFY_RESPONSE_TARGET_PORT_NAME,
       )
       if (!properlyWiredAutoEdge && questionerId !== undefined) {
         issues.push({
@@ -1225,7 +1272,8 @@ export function validateWorkflowDef(
   // source side is valid (Codex P2: target-not-paired-agent).
   const clarifyAskersByNode = new Map<string, Set<string>>()
   for (const edge of edges) {
-    if (edge.source.portName !== '__clarify__' || edge.target.portName !== 'questions') continue
+    if (edge.source.portName !== CLARIFY_SOURCE_PORT_NAME || edge.target.portName !== 'questions')
+      continue
     const tgtKind = nodeById.get(edge.target.nodeId)?.kind
     if (tgtKind !== 'clarify' && tgtKind !== 'clarify-cross-agent') continue
     const set = clarifyAskersByNode.get(edge.target.nodeId) ?? new Set<string>()
@@ -1244,7 +1292,7 @@ export function validateWorkflowDef(
     // hand-edited `cross.to_designer → review.__external_feedback__` would pass
     // and the runtime would try to rerun a non-agent node as the designer.
     if (
-      (tp === '__clarify_response__' || tp === '__external_feedback__') &&
+      (tp === CLARIFY_RESPONSE_TARGET_PORT_NAME || tp === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT) &&
       tgt !== undefined &&
       tgt.kind !== 'agent-single'
     ) {
@@ -1256,10 +1304,10 @@ export function validateWorkflowDef(
     }
     // accept only the channel source AND (for `__clarify_response__`) inject the
     // answer back into the asking agent that owns the channel.
-    if (tp === '__clarify_response__') {
+    if (tp === CLARIFY_RESPONSE_TARGET_PORT_NAME) {
       const okSource =
         (src.kind === 'clarify' && sp === 'answers') ||
-        (src.kind === 'clarify-cross-agent' && sp === 'to_questioner')
+        (src.kind === 'clarify-cross-agent' && sp === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT)
       if (!okSource) {
         issues.push({
           code: 'system-port-illegal-source',
@@ -1282,8 +1330,8 @@ export function validateWorkflowDef(
         }
       }
     }
-    if (tp === '__external_feedback__') {
-      const ok = src.kind === 'clarify-cross-agent' && sp === 'to_designer'
+    if (tp === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT) {
+      const ok = src.kind === 'clarify-cross-agent' && sp === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT
       if (!ok) {
         issues.push({
           code: 'system-port-illegal-source',
@@ -1302,7 +1350,7 @@ export function validateWorkflowDef(
     if (
       tp === 'questions' &&
       (tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') &&
-      sp !== '__clarify__'
+      sp !== CLARIFY_SOURCE_PORT_NAME
     ) {
       issues.push({
         code: 'system-port-illegal-source',
@@ -1315,7 +1363,7 @@ export function validateWorkflowDef(
     // which rejects `__clarify__` as a stray source). Any other target leaves
     // a dangling ask channel the runtime never discovers.
     if (
-      sp === '__clarify__' &&
+      sp === CLARIFY_SOURCE_PORT_NAME &&
       !((tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') && tp === 'questions')
     ) {
       issues.push({
@@ -1328,7 +1376,7 @@ export function validateWorkflowDef(
     // `__clarify_response__` injection port. A normal downstream consumer wired
     // to `answers` would dispatch the moment the clarify node settles (it has no
     // structural upstream), i.e. before the asking agent has actually run.
-    if (src.kind === 'clarify' && sp === 'answers' && tp !== '__clarify_response__') {
+    if (src.kind === 'clarify' && sp === 'answers' && tp !== CLARIFY_RESPONSE_TARGET_PORT_NAME) {
       issues.push({
         code: 'system-port-illegal-target',
         message: `edge '${edge.id}': clarify node '${edge.source.nodeId}' 'answers' port may only feed an agent's '__clarify_response__' port (got target '${edge.target.nodeId}.${tp}')`,
@@ -1344,8 +1392,8 @@ export function validateWorkflowDef(
     // source kind AND right injection target) is required, closing both the
     // wrong-source-node and wrong-target gaps.
     if (
-      sp === 'to_questioner' &&
-      !(src.kind === 'clarify-cross-agent' && tp === '__clarify_response__')
+      sp === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT &&
+      !(src.kind === 'clarify-cross-agent' && tp === CLARIFY_RESPONSE_TARGET_PORT_NAME)
     ) {
       issues.push({
         code: 'system-port-illegal-target',
@@ -1354,8 +1402,8 @@ export function validateWorkflowDef(
       })
     }
     if (
-      sp === 'to_designer' &&
-      !(src.kind === 'clarify-cross-agent' && tp === '__external_feedback__')
+      sp === CROSS_CLARIFY_OUT_TO_DESIGNER_PORT &&
+      !(src.kind === 'clarify-cross-agent' && tp === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT)
     ) {
       issues.push({
         code: 'system-port-illegal-target',
@@ -1463,6 +1511,19 @@ export function validateWorkflowDef(
     // standard inbound-port set captures the reference correctly.
     for (const ref of refs) {
       if (BUILTIN_VARS.has(ref)) continue
+      // RFC-148: retired clarify/cross-clarify tokens render '' (default
+      // substitution branch) — a saved template referencing one keeps
+      // launching, but the author gets a deprecation nudge instead of a
+      // false "missing inbound port" error.
+      if (DEPRECATED_PROMPT_TOKENS.has(ref)) {
+        issues.push({
+          code: 'prompt-template-deprecated-token',
+          message: `node '${node.id}' prompt references retired token {{${ref}}} — it renders an empty string (RFC-148 removed its injection path); remove it from the template`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+        continue
+      }
       if (!inboundPorts.has(ref)) {
         issues.push({
           code: 'prompt-template-unresolved',

@@ -24,6 +24,10 @@ export const agents = sqliteTable('agents', {
   name: text('name').notNull().unique(), // URL identifier (/agents/{name})
   description: text('description').notNull().default(''),
   outputs: text('outputs').notNull().default('[]'), // JSON string[] of port names
+  // RFC-166: declarative input ports (JSON AgentInputPort[]; default []).
+  // Optional/additive — existing agents keep implicit {{token}} input binding;
+  // consumed only by the capability card, not the spawn path.
+  inputs: text('inputs').notNull().default('[]'),
   // RFC-014: agent-level switch. When true (default), an iterate review decision
   // on a node whose upstream agent declares ≥ 2 markdown[_file] outputs will
   // re-generate every markdown[_file] sibling port and cascade their sibling
@@ -118,6 +122,15 @@ export const runtimes = sqliteTable('runtimes', {
   temperature: real('temperature'),
   steps: integer('steps'),
   maxSteps: integer('max_steps'),
+  // RFC-154: config-dir injection overrides for custom forks that renamed the
+  // env var / leaf dir they discover their config dir through. NULL = protocol
+  // default (shared DEFAULT_CONFIG_DIR_PROFILE: OPENCODE_CONFIG_DIR/.opencode,
+  // CLAUDE_CONFIG_DIR/.claude). Business-node spawns only (system agents /
+  // smoke / probe stay on protocol defaults — RFC-154 §2.3). Frozen per node_run
+  // inside runtime_params_json.__configDir so resume/retry never re-reads these
+  // mutable columns.
+  configDirEnv: text('config_dir_env'),
+  configDirName: text('config_dir_name'),
   // RFC-112: cached deep-smoke SmokeResult (JSON) from the last probe; NULL =
   // never probed. Display-only — conformance is advisory (an admin may save an
   // auth-unverified custom runtime).
@@ -390,7 +403,7 @@ export const resourceGrants = sqliteTable(
   'resource_grants',
   {
     resourceType: text('resource_type', {
-      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow'],
+      enum: ['agent', 'skill', 'mcp', 'plugin', 'workflow', 'workgroup'],
     }).notNull(),
     resourceId: text('resource_id').notNull(),
     userId: text('user_id')
@@ -406,13 +419,192 @@ export const resourceGrants = sqliteTable(
 )
 
 // -----------------------------------------------------------------------------
-// recent_repos — cache of recently used repo paths for the launcher dropdown.
+// workgroups — RFC-164. Sixth ACL resource: agents (and humans) grouped into a
+// runtime-collaborating team, launched as a task. `mode` picks the
+// orchestration form (leader dispatches / leaderless free collaboration);
+// the three switch columns control what each agent member gets injected per
+// turn (design §6.2) — free_collab reads them as all-on regardless of storage
+// (resolveWorkgroupSwitches). Launch snapshots the whole config onto the task
+// (tasks.workgroup_config_json, PR-3), so later edits here only affect NEW
+// tasks.
 // -----------------------------------------------------------------------------
-export const recentRepos = sqliteTable('recent_repos', {
-  path: text('path').primaryKey(), // absolute repo path
-  lastUsedAt: integer('last_used_at').notNull(),
-  defaultBranch: text('default_branch'), // detected on last use
+export const workgroups = sqliteTable('workgroups', {
+  id: text('id').primaryKey(), // ULID
+  name: text('name').notNull().unique(),
+  description: text('description').notNull().default(''),
+  /** Group charter — injected for EVERY member each turn (RFC-164 决策 #18). */
+  instructions: text('instructions').notNull().default(''),
+  mode: text('mode', { enum: ['leader_worker', 'free_collab', 'dynamic_workflow'] })
+    .notNull()
+    .default('leader_worker'),
+  /** FK workgroup_members.id (soft — full-replace regenerates member rows).
+   *  Required (app-enforced) when mode='leader_worker'; must be an agent member. */
+  leaderMemberId: text('leader_member_id'),
+  shareOutputs: integer('share_outputs', { mode: 'boolean' }).notNull().default(true),
+  directMessages: integer('direct_messages', { mode: 'boolean' }).notNull().default(false),
+  blackboard: integer('blackboard', { mode: 'boolean' }).notNull().default(false),
+  /** Hard round cap (leader turns in lw / total member runs in fc, design §4.4). */
+  maxRounds: integer('max_rounds').notNull().default(20),
+  /** Completion gate: leader-done parks the task awaiting human confirmation. */
+  completionGate: integer('completion_gate', { mode: 'boolean' }).notNull().default(false),
+  // RFC-099 ACL (see agents table comment).
+  ownerUserId: text('owner_user_id'),
+  visibility: text('visibility', { enum: ['private', 'public'] })
+    .notNull()
+    .default('public'),
+  schemaVersion: integer('schema_version').notNull().default(1),
+  createdAt: integer('created_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+  updatedAt: integer('updated_at')
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
 })
+
+// RFC-167 pivot (2026-07-11): the `dynamic_workflow_spaces` table (0088) was
+// dropped (0089) — dynamic workflow became a workgroup mode, not a separate
+// resource. See design/RFC-167-dynamic-workflow-space/design.md revision header.
+
+// -----------------------------------------------------------------------------
+// workgroup_members — RFC-164. Member roster of a workgroup. `display_name` is
+// the group-unique addressing token (roster / @-mention / dispatch); for human
+// members it is a REQUIRED alias so agent prompts never carry user ids
+// (RFC-099 prompt-isolation invariant, design §11). Same agent appears at most
+// once per group (multi-instance = multiple concurrent assignments, not rows).
+// -----------------------------------------------------------------------------
+export const workgroupMembers = sqliteTable(
+  'workgroup_members',
+  {
+    id: text('id').primaryKey(), // ULID
+    workgroupId: text('workgroup_id')
+      .notNull()
+      .references(() => workgroups.id, { onDelete: 'cascade' }),
+    memberType: text('member_type', { enum: ['agent', 'human'] }).notNull(),
+    /** memberType='agent': agents.name (soft reference, launch-validated). */
+    agentName: text('agent_name'),
+    /** memberType='human': users.id — audit/UI only, never injected into prompts. */
+    userId: text('user_id'),
+    displayName: text('display_name').notNull(),
+    /** Group-internal role description shown in the roster (选人依据). */
+    roleDesc: text('role_desc').notNull().default(''),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    displayNameUq: uniqueIndex('uq_workgroup_members_display').on(t.workgroupId, t.displayName),
+    groupIdx: index('idx_workgroup_members_group').on(t.workgroupId),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// workgroup_assignments — RFC-164 PR-2 (design §1.4). Dispatch cards AND the
+// free_collab shared task list in one table. `id` doubles as the member run's
+// shard_key on the __wg_member__ host node (PR-3). Status machine lives in
+// services/workgroupLifecycle.ts — writes go through casAssignmentStatus, not
+// raw UPDATEs. `created_by_user_id` is audit-only and never reaches prompts
+// (design §11).
+// -----------------------------------------------------------------------------
+export const workgroupAssignments = sqliteTable(
+  'workgroup_assignments',
+  {
+    id: text('id').primaryKey(), // ULID
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    round: integer('round').notNull().default(0),
+    source: text('source', { enum: ['leader', 'human', 'self_claim', 'system'] }).notNull(),
+    createdByRunId: text('created_by_run_id'),
+    createdByUserId: text('created_by_user_id'),
+    /** NULL = free_collab open (unclaimed) task. */
+    assigneeMemberId: text('assignee_member_id'),
+    title: text('title').notNull(),
+    briefMd: text('brief_md').notNull().default(''),
+    status: text('status', {
+      enum: [
+        'open',
+        'dispatched',
+        'running',
+        'awaiting_human',
+        'delivered',
+        'done',
+        'failed',
+        'canceled',
+      ],
+    }).notNull(),
+    nodeRunId: text('node_run_id'),
+    resultMessageId: text('result_message_id'),
+    /** free_collab title-dedup key (normalizeWgTaskTitle), design §7.3. */
+    dedupKey: text('dedup_key'),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    taskIdx: index('idx_wg_assign_task').on(t.taskId, t.status),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// workgroup_messages — RFC-164 PR-2 (design §1.5). The room = the blackboard:
+// dispatch anchors, result summaries, human chat, system markers. Humans (task
+// members) always see everything; what AGENTS see is sliced per the three
+// switches (services/workgroupContext.ts). `author_user_id` is audit/UI only.
+// Ordering key is the ULID id (lexical == chronological).
+// -----------------------------------------------------------------------------
+export const workgroupMessages = sqliteTable(
+  'workgroup_messages',
+  {
+    id: text('id').primaryKey(), // ULID — room ordering key
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    round: integer('round').notNull().default(0),
+    authorKind: text('author_kind', { enum: ['member', 'human', 'system'] }).notNull(),
+    authorMemberId: text('author_member_id'),
+    authorUserId: text('author_user_id'),
+    kind: text('kind', {
+      enum: ['chat', 'dispatch', 'result', 'delivery', 'decision', 'system'],
+    }).notNull(),
+    bodyMd: text('body_md').notNull(),
+    /** JSON string[] of mentioned member ids. */
+    mentionsJson: text('mentions_json').notNull().default('[]'),
+    assignmentId: text('assignment_id'),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    taskIdx: index('idx_wg_msg_task').on(t.taskId, t.id),
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// workgroup_member_cursors — RFC-164 PR-2 (design §1.6, 设计门 Finding-3).
+// Per-(task, member) consumption watermark: the max message id already
+// injected into that member (leader included). Advanced in the SAME
+// transaction that mints the member's run — wake decisions (deriveWakeSet)
+// are therefore idempotent across daemon restarts and message storms.
+// -----------------------------------------------------------------------------
+export const workgroupMemberCursors = sqliteTable(
+  'workgroup_member_cursors',
+  {
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    /** Member id from tasks.workgroup_config_json (config snapshot ids). */
+    memberId: text('member_id').notNull(),
+    lastConsumedMessageId: text('last_consumed_message_id').notNull().default(''),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.memberId] }),
+  }),
+)
 
 // -----------------------------------------------------------------------------
 // RFC-024: cached_repos — persistent mirror of remote Git URLs the user has
@@ -531,6 +723,38 @@ export const tasks = sqliteTable(
      * migration 0034).
      */
     repoCount: integer('repo_count').notNull().default(1),
+    // RFC-159: the scheduled_tasks row that auto-launched this task via the
+    // background scheduler. NULL = manually launched. Durable link — a schedule's
+    // run history + count derive from this column (stamped atomically inside the
+    // task INSERT), so a failed post-launch bookkeeping write can't orphan the task.
+    scheduledTaskId: text('scheduled_task_id'),
+    /** RFC-164: owning workgroup id (durable soft link; NULL = not a workgroup task). */
+    workgroupId: text('workgroup_id'),
+    /** RFC-164: launch snapshot + mid-run-editable copy of the group config
+     *  (WorkgroupRuntimeConfig JSON). The engine reads THIS, never the resource row. */
+    workgroupConfigJson: text('workgroup_config_json'),
+    /**
+     * RFC-165: execution-space kind. 'local' = legacy path-mode rows only
+     * (backfilled by migration 0085, never written for new launches);
+     * 'remote' = URL mode; 'scratch' = temporary space (workspace IS a fresh
+     * git repo); 'internal' = framework-internal launches (fusion, via
+     * `internalSource` — unreachable from the public wire).
+     */
+    spaceKind: text('space_kind', { enum: ['local', 'remote', 'scratch', 'internal'] })
+      .notNull()
+      .default('remote'),
+    /** RFC-165: source agent for single-agent tasks (soft link to agents.name; NULL otherwise). */
+    sourceAgentName: text('source_agent_name'),
+    /**
+     * RFC-165: two-phase workspace-GC tombstone. `workspace_pruning_at` is the
+     * atomic CLAIM stamp (conditional UPDATE wins the right to delete; a stale
+     * claim past the lease window may be re-claimed by GC). `workspace_pruned_at`
+     * is written only AFTER the directory delete succeeded. Every revive path
+     * (resume / retry / sync-workflow / lifecycle repair) CAS-es with
+     * `pruning IS NULL AND pruned IS NULL` — pruned ⇒ 410, pruning ⇒ 409.
+     */
+    workspacePruningAt: integer('workspace_pruning_at'),
+    workspacePrunedAt: integer('workspace_pruned_at'),
     // （RFC-120 的 deferred_question_dispatch 列已由 RFC-132 T8 + migration 0073 物理删除——
     // universal deferred model 下所有任务同路径，无 per-task 开关。）
   },
@@ -538,6 +762,46 @@ export const tasks = sqliteTable(
     statusIdx: index('idx_tasks_status').on(t.status, t.startedAt),
     workflowIdx: index('idx_tasks_workflow').on(t.workflowId, t.startedAt),
     ownerIdx: index('idx_tasks_owner').on(t.ownerUserId),
+    schedTaskIdx: index('idx_tasks_scheduled_task').on(t.scheduledTaskId), // RFC-159
+  }),
+)
+
+// -----------------------------------------------------------------------------
+// scheduled_tasks — RFC-159. A saved task-launcher the daemon re-fires on a
+// schedule (interval or friendly preset). Stores the FULL StartTask launch body
+// (JSON) so fires replay identical parameters. Member-based-private like tasks
+// (owner_user_id + tasks:read:all admin bypass), NOT the RFC-099 five-type ACL.
+// -----------------------------------------------------------------------------
+export const scheduledTasks = sqliteTable(
+  'scheduled_tasks',
+  {
+    id: text('id').primaryKey(), // ULID
+    name: text('name').notNull(), // management display name (≠ launch body.name)
+    ownerUserId: text('owner_user_id').notNull(), // creator; fires launch as this user
+    // RFC-165 §9b (0087): which subject face this schedule fires. Existing
+    // rows are workflow schedules — the column default is the backfill.
+    launchKind: text('launch_kind', { enum: ['workflow', 'agent', 'workgroup'] })
+      .notNull()
+      .default('workflow'),
+    launchPayload: text('launch_payload').notNull(), // JSON: kind-enveloped launch body
+    scheduleSpec: text('schedule_spec').notNull(), // JSON: ScheduleSpec (kind + creator tz)
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    nextRunAt: integer('next_run_at'), // epoch ms of next fire; NULL when disabled (skips poll)
+    lastRunAt: integer('last_run_at'), // slot time of the last recorded outcome (firedAt guard)
+    lastStatus: text('last_status', { enum: ['launched', 'failed'] }),
+    lastError: text('last_error'), // reason a fire produced NO task (ACL/owner/etc.)
+    lastTaskId: text('last_task_id'), // best-effort pointer to the most recent launched task
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    createdAt: integer('created_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    dueIdx: index('idx_scheduled_tasks_due').on(t.enabled, t.nextRunAt), // poll scan surface
+    ownerIdx: index('idx_scheduled_tasks_owner').on(t.ownerUserId),
   }),
 )
 
@@ -1160,11 +1424,8 @@ export const crossClarifySessions = sqliteTable(
       .default(sql`(unixepoch() * 1000)`),
     answeredAt: integer('answered_at'),
     abandonedAt: integer('abandoned_at'),
-    // RFC-059: JSON object `Record<questionId, 'designer'|'questioner'>`.
-    // NULL when (a) row predates RFC-059 / (b) client did not send
-    // questionScopes on submit. Runtime treats NULL as "every question is
-    // 'designer'" via `resolveQuestionScope` (preserves RFC-056/058 behavior).
-    // Dual-write target: mirrors `clarifyRounds.questionScopesJson`.
+    // RFC-059 per-question scope column. RFC-162 DELETED scope — this column is now DORMANT
+    // (never read or written; kept to avoid a 12-step table rebuild for no functional gain).
     questionScopesJson: text('question_scopes_json'),
     // (RFC-132 PR-F: the RFC-070 consumption-stamp columns were dropped — derived aging
     // via isTargetNodeConsumed replaced them; migration 0073.)
@@ -1261,9 +1522,7 @@ export const clarifyRounds = sqliteTable(
     submittedByRole: text('submitted_by_role'),
     answerAttributionsJson: text('answer_attributions_json'),
     draftAnswersJson: text('draft_answers_json'),
-    // RFC-059: same payload as crossClarifySessions.questionScopesJson; written
-    // by the submit handler dual-write. Always NULL for kind='self' rows;
-    // may be NULL for kind='cross' rows when client did not send the map.
+    // RFC-059 per-question scope column. RFC-162 DELETED scope — DORMANT (never read/written).
     questionScopesJson: text('question_scopes_json'),
     // (RFC-132 PR-F: the RFC-070 consumption-stamp columns were dropped — derived aging
     // via isTargetNodeConsumed replaced them; migration 0073.)
@@ -1786,9 +2045,9 @@ export const taskQuestions = sqliteTable(
     questionId: text('question_id').notNull(), // round-local question id (manual: fresh ULID)
     questionTitle: text('question_title').notNull(), // snapshot (title is stable across reopen)
     sourceKind: text('source_kind', { enum: ['self', 'cross', 'manual'] }).notNull(),
-    // RFC-134: + 'echo' — 改派回执（只读知会，目标=提问节点，生来已下发、排队等自然重跑）。
-    // drizzle enum 纯类型层、无 CHECK 约束 → 扩宽零 migration（0060 DDL 佐证）。
-    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer', 'echo'] }).notNull(),
+    // RFC-162: 'echo' 已删（归一后提问节点恒在处理组、恒有自己那份 Q&A，无需回执补投）。
+    // drizzle enum 纯类型层、无 CHECK 约束 → 收窄零 DDL（迁移 0081 只删存量 echo 行）。
+    roleKind: text('role_kind', { enum: ['self', 'questioner', 'designer'] }).notNull(),
     // Round iteration / loop_iter snapshot — used by resolveHandlerRun to frame
     // the exact handler lineage (Codex F1).
     iteration: integer('iteration').notNull().default(0),

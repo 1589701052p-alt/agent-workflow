@@ -33,6 +33,26 @@ export const NodeEventKindSchema = z.enum([
 export type NodeEventKind = z.infer<typeof NodeEventKindSchema>
 
 export const TaskWsMessageSchema = z.discriminatedUnion('type', [
+  // RFC-164 PR-4 — workgroup room events ride the existing per-task channel
+  // (same visibility gate as every other task frame). Payloads are id-only:
+  // clients invalidate the room query instead of patching caches.
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.message.created'),
+    messageId: z.string(),
+    kind: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.assignment.updated'),
+    assignmentId: z.string(),
+    status: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('wg.gate.updated'),
+    awaitingConfirmation: z.boolean(),
+  }),
   z.object({
     id: z.number().int(),
     type: z.literal('task.status'),
@@ -343,6 +363,16 @@ export const MemoryDistillJobWsMessageSchema = z.discriminatedUnion('type', [
 ])
 export type MemoryDistillJobWsMessage = z.infer<typeof MemoryDistillJobWsMessageSchema>
 
+// RFC-159 — scheduled-task list stream. `ownerUserId` rides on every frame so the
+// per-frame gate can filter to owner + tasks:read:all admins without a DB lookup.
+export const ScheduledTaskWsMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('scheduled.created'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.updated'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.deleted'), id: z.string(), ownerUserId: z.string() }),
+  z.object({ type: z.literal('scheduled.fired'), id: z.string(), ownerUserId: z.string() }),
+])
+export type ScheduledTaskWsMessage = z.infer<typeof ScheduledTaskWsMessageSchema>
+
 // -----------------------------------------------------------------------------
 // Server → client control frames common to every channel.
 // -----------------------------------------------------------------------------
@@ -352,3 +382,29 @@ export const WsControlMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
 ])
 export type WsControlMessage = z.infer<typeof WsControlMessageSchema>
+
+// -----------------------------------------------------------------------------
+// RFC-152 — double-ended WS path constants. The single source for every WS
+// endpoint path: frontend hooks / components build their subscription URLs
+// from these (no hand-written `/ws/...` strings), and the backend registry's
+// pathRes are interlock-tested against them
+// (packages/backend/tests/rfc152-ws-paths-interlock.test.ts), so the two
+// sides cannot drift apart silently.
+// -----------------------------------------------------------------------------
+
+export const WS_PATHS = {
+  /** Per-task detail stream (`?since=N` replays node_run_events). */
+  task: (taskId: string): string => `/ws/tasks/${encodeURIComponent(taskId)}`,
+  /** Global task list stream (per-frame RBAC-filtered). */
+  tasksList: '/ws/tasks',
+  /** Workflow list + editor multi-tab sync (per-frame ACL-filtered). */
+  workflows: '/ws/workflows',
+  /** RFC-033 — per-batch repo import progress. */
+  repoImport: (batchId: string): string => `/ws/repo-imports/${encodeURIComponent(batchId)}`,
+  /** RFC-041 — platform memory candidate / promotion stream (per-frame scope-filtered). */
+  memories: '/ws/memories',
+  /** RFC-041 — distill queue monitor (admin-only upgrade gate). */
+  memoryDistillJobs: '/ws/memory-distill-jobs',
+  /** RFC-159 — scheduled-task list stream (per-frame owner/admin filtered). */
+  scheduledTasks: '/ws/scheduled-tasks',
+} as const

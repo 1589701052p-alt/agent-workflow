@@ -1,16 +1,20 @@
-// RFC-050 — MemoryTab carries a distill-output-language <select> that PATCHes
-// `memoryDistillLang` on save. Locks:
+// RFC-050 — the distill-output-language <select> PATCHes `memoryDistillLang` on
+// save. RFC-156 relocated it from the (removed) Memory tab into the memory
+// distiller card of the "System agents" tab (SystemAgentsTab); this test now
+// mounts that tab. Locks:
 //   1. The tab renders the select with the right testid + three options
 //      (Default / English / 简体中文) and reflects config.memoryDistillLang.
 //   2. Picking 'Default' (empty value) sends `memoryDistillLang: undefined`
 //      so the backend serialises it back to JSON omitted == null.
 //   3. Picking 'zh-CN' fires PUT /api/config with the new value.
+// The other SystemAgentsTab slice keys are unset here → JSON.stringify drops
+// them, so the PUT body still carries only memoryDistillLang.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { Config } from '@agent-workflow/shared'
-import { MemoryTab } from '../src/routes/settings'
+import { SystemAgentsTab } from '../src/routes/settings'
 import i18n from '../src/i18n'
 import { setBaseUrl, setToken, clearToken } from '../src/stores/auth'
 
@@ -90,11 +94,13 @@ function pickLang(labelKey: string) {
   })
 }
 
-describe('RFC-050 MemoryTab — distill output language select', () => {
+describe('RFC-050/156 SystemAgentsTab — distill output language select', () => {
   test('renders three options and reflects current config value', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<MemoryTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, { wrapper: wrap(qc) })
+    render(<SystemAgentsTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, {
+      wrapper: wrap(qc),
+    })
     const sel = screen.getByTestId('settings-memory-distill-lang-select')
     // Trigger reflects the current value's label (was <select>.value).
     expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangZhCN'))
@@ -112,7 +118,7 @@ describe('RFC-050 MemoryTab — distill output language select', () => {
   test('unset config (undefined) defaults the select to empty (Default)', () => {
     mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<MemoryTab config={mkConfig()} />, { wrapper: wrap(qc) })
+    render(<SystemAgentsTab config={mkConfig()} />, { wrapper: wrap(qc) })
     const sel = screen.getByTestId('settings-memory-distill-lang-select')
     expect(sel.textContent).toContain(i18n.t('settings.memoryDistillLangDefault'))
   })
@@ -120,7 +126,7 @@ describe('RFC-050 MemoryTab — distill output language select', () => {
   test('picking zh-CN and saving fires PUT /api/config with the new value', async () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<MemoryTab config={mkConfig()} />, { wrapper: wrap(qc) })
+    render(<SystemAgentsTab config={mkConfig()} />, { wrapper: wrap(qc) })
     pickLang('settings.memoryDistillLangZhCN')
     expect(screen.getByTestId('settings-memory-distill-lang-select').textContent).toContain(
       i18n.t('settings.memoryDistillLangZhCN'),
@@ -139,10 +145,12 @@ describe('RFC-050 MemoryTab — distill output language select', () => {
     expect(body.memoryDistillLang).toBe('zh-CN')
   })
 
-  test('picking Default (empty) saves with undefined → backend stores NULL', async () => {
+  test('picking Default sends memoryDistillLang: null (clears a saved language)', async () => {
     const calls = mockPut()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<MemoryTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, { wrapper: wrap(qc) })
+    render(<SystemAgentsTab config={mkConfig({ memoryDistillLang: 'zh-CN' })} />, {
+      wrapper: wrap(qc),
+    })
     pickLang('settings.memoryDistillLangDefault')
     const saveBtn = screen
       .getAllByRole('button')
@@ -153,15 +161,13 @@ describe('RFC-050 MemoryTab — distill output language select', () => {
     await waitFor(() => {
       expect(calls).toHaveLength(1)
     })
+    // RFC-157: the select now sends null (NOT undefined) for Default, so
+    // mergePatch DELETES a saved language → runtime falls back to en-US. Before,
+    // undefined was dropped by JSON.stringify and treated as "no change", so a
+    // saved zh-CN could never revert to Default. Kept identical to
+    // commitPushLang (settings-commit-push-lang.test.tsx).
     const body = calls[0]?.body as Record<string, unknown>
-    // JSON.stringify omits undefined-valued keys → the PUT body either lacks
-    // the key entirely or sends it explicitly as null. Either way the
-    // backend lands the column as NULL (RFC-041 baseline preserved).
-    if ('memoryDistillLang' in body) {
-      expect(body.memoryDistillLang).toBeNull()
-    } else {
-      expect(body.memoryDistillLang).toBeUndefined()
-    }
+    expect(body.memoryDistillLang).toBeNull()
   })
 
   test('i18n keys for memoryDistillLang label / options reachable in both locales', () => {

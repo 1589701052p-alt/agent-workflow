@@ -30,10 +30,11 @@ describe('RFC-048 subagentLiveCapture passthrough', () => {
     const matches = src.match(/subagentLiveCapture: opts\.subagentLiveCapture/g) ?? []
     // RFC-060 PR-D added wrapper-fanout dispatch sites (dispatchFanoutShard +
     // dispatchFanoutAggregator); RFC-060 PR-E removed agent-multi's
-    // runFanOutNode call site. Currently: agent-single +
-    // dispatchFanoutShard + dispatchFanoutAggregator = 3. Future call sites
-    // should keep this lock in step.
-    expect(matches.length).toBe(3)
+    // runFanOutNode call site. RFC-164 added buildWorkgroupHooks.runHostNode.
+    // Currently: agent-single + dispatchFanoutShard + dispatchFanoutAggregator
+    // + workgroup runHostNode = 4. Future call sites should keep this lock in
+    // step.
+    expect(matches.length).toBe(4)
   })
 
   test('StartTaskDeps declares the field and runTask receives it from every kick-off path', () => {
@@ -49,12 +50,18 @@ describe('RFC-048 subagentLiveCapture passthrough', () => {
     expect(forwards.length + forwardsViaOpts.length).toBe(3)
   })
 
-  test('routes/tasks.ts loads config.subagentLiveCapture and passes it to every startTask / resumeTask / retryNode call', () => {
+  test('subagentLiveCapture is assembled into StartTaskDeps and every launch path carries it', () => {
+    // RFC-159 T2: resolveSubagentLiveCapture + buildStartTaskDeps moved to
+    // @/services/startTaskDeps (shared with the scheduled-task scheduler). The wire
+    // is unchanged — buildStartTaskDeps resolves the value and conditionally spreads
+    // it into StartTaskDeps.
+    const deps = read('packages/backend/src/services/startTaskDeps.ts')
+    expect(deps).toContain('function resolveSubagentLiveCapture(')
+    expect(deps).toContain('...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {})')
+    // tasks.ts carries it on every launch path: JSON via buildStartTaskDeps; multipart
+    // (fallback + success) + resume + retry via the imported resolveSubagentLiveCapture.
     const src = read('packages/backend/src/routes/tasks.ts')
-    expect(src).toContain('function resolveSubagentLiveCapture(')
-    // Four call paths read the resolved value: POST /api/tasks JSON, POST
-    // /api/tasks multipart (fallback + success), POST /api/tasks/:id/resume,
-    // POST /api/tasks/:id/nodes/:nodeRunId/retry.
+    expect(src).toContain('buildStartTaskDeps(deps.db, deps.configPath')
     const callCount = (src.match(/resolveSubagentLiveCapture\(deps\.configPath\)/g) ?? []).length
     expect(callCount).toBeGreaterThanOrEqual(3)
   })

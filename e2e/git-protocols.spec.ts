@@ -133,7 +133,7 @@ test.describe('RFC-054 W3-4 — git protocols against real Gitea', () => {
         name: 'gitea-https-task',
         workflowId: wf.id,
         repoUrl: GITEA_REPO_HTTPS_URL,
-        baseBranch: 'main',
+        ref: 'main',
         inputs: { t: 'hello' },
       }),
     })
@@ -161,7 +161,7 @@ test.describe('RFC-054 W3-4 — git protocols against real Gitea', () => {
         name: 'gitea-bogus-task',
         workflowId: 'nonexistent-workflow',
         repoUrl: 'http://does-not-exist.invalid:9999/missing/repo.git',
-        baseBranch: 'main',
+        ref: 'main',
         inputs: { t: 'hello' },
       }),
     })

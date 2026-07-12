@@ -20,6 +20,7 @@ import { api } from '@/api/client'
 import { describeApiError } from '@/i18n'
 import { useActor } from '@/hooks/useActor'
 import { Dialog } from './Dialog'
+import { Segmented } from './Segmented'
 import { UserPicker } from './UserPicker'
 
 interface AclPanelProps {
@@ -154,22 +155,21 @@ export function AclPanel({ resourceBaseUrl, invalidateKey, onSaved, onCancel }: 
       <div className="acl-panel__row">
         <span className="acl-panel__label">{t('acl.visibility')}</span>
         {canManage ? (
-          <div className="segmented" role="group" aria-label={t('acl.visibility')}>
-            {(['public', 'private'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                className={`segmented__option${visibility === v ? ' segmented__option--active' : ''}`}
-                data-testid={`acl-visibility-${v}`}
-                onClick={() => {
-                  setVisibility(v)
-                  setDirty(true)
-                }}
-              >
-                {t(`acl.visibilityValue.${v}`)}
-              </button>
-            ))}
-          </div>
+          // RFC-150: migrating to <Segmented> also fixes the a11y drift this
+          // site had (role="group" without aria-checked → radiogroup/radio).
+          <Segmented<ResourceVisibility>
+            value={visibility}
+            onChange={(v) => {
+              setVisibility(v)
+              setDirty(true)
+            }}
+            options={(['public', 'private'] as const).map((v) => ({
+              value: v,
+              label: t(`acl.visibilityValue.${v}`),
+              testid: `acl-visibility-${v}`,
+            }))}
+            ariaLabel={t('acl.visibility')}
+          />
         ) : (
           <span className="acl-panel__value">{t(`acl.visibilityValue.${acl.visibility}`)}</span>
         )}

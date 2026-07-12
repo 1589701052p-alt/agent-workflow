@@ -39,8 +39,11 @@ function buildHarness(): Harness {
 }
 
 async function seedWorkflow(db: DbClient): Promise<string> {
+  // Slug name on purpose: several tests below EXPORT this workflow and feed
+  // the YAML back through /import, which enforces the 2026-07-10 unified
+  // naming rules (workflow-name-invalid on free-form names).
   const wf = await createWorkflow(db, {
-    name: 'Audit Pipeline',
+    name: 'audit-pipeline',
     description: 'tests',
     definition: {
       $schema_version: 1,
@@ -71,7 +74,7 @@ describe('GET /api/workflows/:id/export', () => {
     const yaml = await res.text()
     const parsed = parseYaml(yaml) as Record<string, unknown>
     expect(parsed.id).toBe(id)
-    expect(parsed.name).toBe('Audit Pipeline')
+    expect(parsed.name).toBe('audit-pipeline')
     const def = parsed.definition as Record<string, unknown>
     // RFC-005 / RFC-023 / RFC-056: createWorkflow normalizes incoming v1 →
     // latest on write, so the YAML export reflects the latest schema even
@@ -95,7 +98,7 @@ describe('POST /api/workflows/import', () => {
   afterEach(() => h.cleanup())
 
   test('creates a new workflow when no id is provided', async () => {
-    const yaml = `name: Imported
+    const yaml = `name: imported-flow
 description: ''
 definition:
   $schema_version: 1
@@ -112,7 +115,7 @@ definition:
     )
     expect(res.status).toBe(201)
     const wf = (await res.json()) as { id: string; name: string }
-    expect(wf.name).toBe('Imported')
+    expect(wf.name).toBe('imported-flow')
     expect(wf.id).toBeTruthy()
   })
 
@@ -141,7 +144,7 @@ definition:
     const exportRes = await h.app.fetch(
       new Request(`http://localhost/api/workflows/${id}/export`, { headers: HEADERS }),
     )
-    const yaml = (await exportRes.text()).replace('Audit Pipeline', 'Renamed')
+    const yaml = (await exportRes.text()).replace('audit-pipeline', 'renamed-flow')
     const res = await h.app.fetch(
       new Request('http://localhost/api/workflows/import?onConflict=overwrite', {
         method: 'POST',
@@ -152,7 +155,7 @@ definition:
     expect(res.status).toBe(201)
     const wf = (await res.json()) as { id: string; name: string; version: number }
     expect(wf.id).toBe(id)
-    expect(wf.name).toBe('Renamed')
+    expect(wf.name).toBe('renamed-flow')
     expect(wf.version).toBe(2)
   })
 
@@ -183,5 +186,27 @@ definition:
       }),
     )
     expect(res.status).toBe(422)
+  })
+
+  // 2026-07-10 naming unification: imports mint a new name → the workgroup
+  // slug rules apply flat (explicit 422, no auto-slugging — user decision).
+  test('free-form name in YAML => 422 workflow-name-invalid', async () => {
+    const yaml = `name: Audit Pipeline
+description: ''
+definition:
+  $schema_version: 1
+  inputs: []
+  nodes: []
+  edges: []
+`
+    const res = await h.app.fetch(
+      new Request('http://localhost/api/workflows/import', {
+        method: 'POST',
+        headers: { ...HEADERS, 'content-type': 'text/yaml' },
+        body: yaml,
+      }),
+    )
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe('workflow-name-invalid')
   })
 })

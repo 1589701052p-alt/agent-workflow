@@ -6,8 +6,8 @@
 //   * start-task-schema-multi-repo.test.ts uses repos[] but never
 //     gitUserName / workingBranch / autoCommitPush,
 //   * start-task-schema-git-identity.test.ts and
-//     start-task-schema-working-branch.test.ts both build on a LEGACY
-//     repoPath base with no repos[].
+//     start-task-schema-working-branch.test.ts both build on a single-URL
+//     base with no repos[] (RFC-165: bases are URL-only).
 // Nothing verifies that a multi-repo-only body still reaches the identity-XOR
 // (lines 388-394) and working-branch (lines 406-415) refinements lower down.
 // The `start-task-source-conflict` early `return` (lines 343-350) only fires
@@ -29,7 +29,7 @@ describe('StartTaskSchema combined multi-repo + identity + working branch', () =
       workflowId: 'wf',
       name: 't',
       repos: [
-        { repoPath: '/a', baseBranch: 'main' },
+        { repoUrl: 'https://h/o/a.git', ref: 'main' },
         { repoUrl: 'git@h:o/r.git', ref: 'dev' },
       ],
       gitUserName: 'Bot',
@@ -56,7 +56,7 @@ describe('StartTaskSchema combined multi-repo + identity + working branch', () =
     const r = StartTaskSchema.safeParse({
       workflowId: 'wf',
       name: 't',
-      repos: [{ repoPath: '/a', baseBranch: 'main' }],
+      repos: [{ repoUrl: 'https://h/o/a.git', ref: 'main' }],
       gitUserName: 'Bot',
       workingBranch: 'feature/..bad',
       inputs: {},

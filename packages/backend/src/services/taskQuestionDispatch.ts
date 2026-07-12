@@ -54,13 +54,9 @@ import {
 import { ConflictError, NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import {
-  echoSiblingKey,
-  planEchoEntries,
-  type EchoPlan,
-  type EchoSiblingSnapshot,
+  isClarifyChannelEdge,
   type RunLineageView,
   type WorkflowDefinition,
-  type WorkflowEdge,
 } from '@agent-workflow/shared'
 
 const log = createLogger('task-questions.dispatch')
@@ -199,20 +195,13 @@ async function assertRequestedEntriesSealed(
   }
 }
 
-/** Cross-clarify / RFC-023 CHANNEL edges (injected via prompt context, not consumed as
- *  dataflow inputs) — mirrors the scheduler's buildScopeUpstreams filter, so the frontier
- *  is computed on the SAME dataflow DAG that drives RFC-074 provenance freshness (the
- *  cascade). Two agent handler nodes are never connected through a cross-clarify node
- *  (both hops are channel edges), so dropping these uniformly is exact for agent ancestry. */
-function isChannelEdge(e: WorkflowEdge): boolean {
-  return (
-    e.source.portName === '__clarify__' ||
-    e.target.portName === '__clarify_response__' ||
-    e.target.portName === '__external_feedback__' ||
-    e.source.portName === 'to_designer' ||
-    e.source.portName === 'to_questioner'
-  )
-}
+// RFC-147: the private fourth variant was byte-equivalent to the shared
+// side-respecting classifier `isClarifyChannelEdge` — replaced. Semantics
+// note kept: dropping channel edges UNIFORMLY (no target-kind nuance) is
+// exact for AGENT ancestry — two agent handler nodes are never connected
+// through a cross-clarify node (both hops are channel edges), so the
+// nuanced keep of questioner→cross that dispatch gating needs never
+// affects agent-to-agent reachability here.
 
 /** Does `node` have ANY node in `affected` as a transitive dataflow ancestor? */
 function hasAffectedAncestor(
@@ -239,7 +228,7 @@ function computeUpstreamFrontier(
 ): Set<string> {
   const upstreams = new Map<string, string[]>()
   for (const e of definition.edges ?? []) {
-    if (isChannelEdge(e)) continue
+    if (isClarifyChannelEdge(e)) continue
     const list = upstreams.get(e.target.nodeId) ?? []
     if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
     upstreams.set(e.target.nodeId, list)
@@ -600,8 +589,6 @@ async function dispatchTaskQuestionsLocked(
   )
   const now = Date.now()
   let committed = false
-  // RFC-134: 本批物化的回执计划（tx 内赋值、commit 后 log 用）。
-  let echoPlans: EchoPlan[] = []
   try {
     // RFC-128 §5.2.14 final-gate (user-authorized): the per-task QUESTION-WRITE lock (B) protects
     // this stamp+mint tx from a clarify/cross-clarify SUBMIT's {precheck→rollback→tx} interleave —
@@ -689,8 +676,7 @@ async function dispatchTaskQuestionsLocked(
               )
         // (a) RFC-128 P5-BC (R2-2, §5.2.12 contract 3): the in-flight recheck spans ANY deferred role
         //     (self/questioner/designer) DISPATCHED entry — the cross-batch serialization half.
-        //     RFC-134 D4：白名单**有意**不含 'echo'——回执不 mint、无 rerun_cause，是 cause 序列化
-        //     的显式豁免项（queued 回执绝不 409 阻塞后续任何下发）。不得「顺手」扩入（源码文本锁）。
+        //     (RFC-162: 'echo' role deleted; the three deferred roles are the whole set now.)
         const txDispatched = tx
           .select()
           .from(taskQuestions)
@@ -769,12 +755,10 @@ async function dispatchTaskQuestionsLocked(
           // rfc098-allow-direct-node-run-insert
           tx.insert(nodeRuns).values(p.values).run()
         }
-        // RFC-134 §3.1 — seal 行戳归一化（Codex R5-F9）：本批 stamp 的 clarify 行若 sealed_at
-        // NULL（能过 assertRequestedEntriesSealed 只因源轮已 answered——契约 #17「已下发 ≠
-        // 可渲染」），同事务补行戳，凡下发必可被 selectAgentQueue 渲染（顺带修 pre-existing
-        // 「懒建行下发给承接方后永不注入」投递洞）。sealed_by 留 NULL =「answered 轮证据落戳」
-        // 的审计语义（非人工 seal）；manual 不补（无 seal 概念）；已 sealed 不改写（黄金锁）；
-        // 历史已下发行不追溯（forward-only）。
+        // RFC-134 §3.1 (retained) — seal 行戳归一化：本批 stamp 的 clarify 行若 sealed_at NULL
+        // （能过 assertRequestedEntriesSealed 只因源轮已 answered——契约「已下发 ≠ 可渲染」），
+        // 同事务补行戳，凡下发必可被 selectAgentQueue 渲染。sealed_by 留 NULL =「answered 轮证据
+        // 落戳」审计语义；manual 不补（无 seal 概念）；已 sealed 不改写（黄金锁）；forward-only。
         tx.update(taskQuestions)
           .set({ sealedAt: now, updatedAt: now })
           .where(
@@ -785,76 +769,9 @@ async function dispatchTaskQuestionsLocked(
             ),
           )
           .run()
-        // RFC-134 §3.2-3.3 — 改派回执（asker echo）：对「有效承接 ≠ 提问节点」的 self/questioner
-        // 条目物化 roleKind='echo' 回执行——目标=提问节点、生来已下发、trigger NULL 排队，等提
-        // 问节点下次自然运行由统一注入器平铺注入（**不 mint**、不入 frontier/守卫——D1/D4 豁免，
-        // 见 design §4）。identity (origin, question, 'echo') 唯一索引 + onConflictDoNothing 保
-        // crash-retry 幂等。兄弟跳过判定（交付感知+可渲染性+stampedIds 单值化）在纯 oracle 内。
-        const batchOrigins = [...new Set(dispatchEntries.map((e) => e.originNodeRunId))]
-        const siblingRows =
-          batchOrigins.length === 0
-            ? []
-            : tx
-                .select({
-                  id: taskQuestions.id,
-                  originNodeRunId: taskQuestions.originNodeRunId,
-                  questionId: taskQuestions.questionId,
-                  defaultTargetNodeId: taskQuestions.defaultTargetNodeId,
-                  overrideTargetNodeId: taskQuestions.overrideTargetNodeId,
-                  dispatchedAt: taskQuestions.dispatchedAt,
-                  sealedAt: taskQuestions.sealedAt,
-                  sourceKind: taskQuestions.sourceKind,
-                })
-                .from(taskQuestions)
-                .where(
-                  and(
-                    eq(taskQuestions.taskId, taskId),
-                    inArray(taskQuestions.originNodeRunId, batchOrigins),
-                  ),
-                )
-                .all()
-        const siblingsByQuestion = new Map<string, EchoSiblingSnapshot[]>()
-        for (const s of siblingRows) {
-          const key = echoSiblingKey(s.originNodeRunId, s.questionId)
-          const list = siblingsByQuestion.get(key)
-          if (list) list.push(s)
-          else siblingsByQuestion.set(key, [s])
-        }
-        echoPlans = planEchoEntries({
-          batch: dispatchEntries,
-          siblingsByQuestion,
-          stampedIds: new Set(dispatchIds),
-          batchTimestamp: now,
-        })
-        for (const p of echoPlans) {
-          tx.insert(taskQuestions)
-            .values({
-              id: ulid(),
-              taskId,
-              originNodeRunId: p.originNodeRunId,
-              questionId: p.questionId,
-              questionTitle: p.questionTitle,
-              sourceKind: p.sourceKind,
-              roleKind: 'echo',
-              iteration: p.iteration,
-              loopIter: p.loopIter,
-              defaultTargetNodeId: p.targetNodeId,
-              overrideTargetNodeId: null,
-              dispatchedAt: now,
-              dispatchedBy: actor.userId,
-              sealedAt: p.sealedAt,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoNothing({
-              target: [
-                taskQuestions.originNodeRunId,
-                taskQuestions.questionId,
-                taskQuestions.roleKind,
-              ],
-            })
-            .run()
-        }
+        // RFC-162: the asker-echo (roleKind='echo') materialization is DELETED. Reassign no
+        // longer MOVES the asker's entry (it keeps it + ADDS a designer handler), so the asker
+        // always reruns and gets the Q&A — there is no strand to compensate with a receipt.
         committed = true
       })
     }
@@ -894,15 +811,6 @@ async function dispatchTaskQuestionsLocked(
     affectedNodeCount: affected.size,
     frontierRerunCount: reruns.length,
   })
-  // RFC-134 §3.6 — 回执审计 log（提问节点零 mint，仅入队）。
-  for (const p of echoPlans) {
-    log.info('reassign echo queued for asking node', {
-      taskId,
-      askerNodeId: p.targetNodeId,
-      originNodeRunId: p.originNodeRunId,
-      questionId: p.questionId,
-    })
-  }
   return { reruns, dispatchedEntryIds: dispatchIds, deferred: deferredEntries }
 }
 
@@ -1008,8 +916,7 @@ async function assertNoInFlightDispatch(
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
-        // RFC-134 D4：白名单**有意**不含 'echo'（序列化豁免——queued 回执绝不阻塞下发）；
-        // 不得「顺手」扩入（源码文本锁）。
+        // RFC-162: 'echo' role deleted; self/questioner/designer are the whole deferred set.
         inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
         isNotNull(taskQuestions.dispatchedAt),
       ),

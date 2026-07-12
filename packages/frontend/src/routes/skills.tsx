@@ -1,11 +1,11 @@
 // Skills list page.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { Skill, SkillSourceWithStats } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import { useResourceList } from '@/hooks/useResourceList'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -21,14 +21,14 @@ export const Route = createRoute({
 
 function SkillsPage() {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Skill[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  // The name cell itself stays bespoke (flex inner wrapper + source pill,
+  // locked by skills-list-cell-wrapping.test.ts), so only the hook applies.
+  const { data, isLoading, error, del, owners } = useResourceList<Skill>({
     queryKey: ['skills'],
-    queryFn: ({ signal }) => api.get('/api/skills', undefined, signal),
+    endpoint: '/api/skills',
+    deleteBy: 'name',
   })
-
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
   const sourceListQuery = useQuery<{ sources: SkillSourceWithStats[] }>({
     queryKey: ['skill-sources'],
     queryFn: ({ signal }) => api.get('/api/skill-sources', undefined, signal),
@@ -37,25 +37,11 @@ function SkillsPage() {
     (sourceListQuery.data?.sources ?? []).map((s) => [s.id, s.label]),
   )
 
-  const del = useMutation({
-    mutationFn: (name: string) => api.delete(`/api/skills/${encodeURIComponent(name)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['skills'] }),
-  })
-
   return (
     <div className="page">
       <header className="page__header page__header--row">
         <div>
           <h1>{t('skills.title')}</h1>
-          <p className="page__hint">
-            {t('skills.hintBefore')}
-            <code>{t('skills.hintManaged')}</code>
-            {t('skills.hintMid')}
-            <code>{t('skills.hintManagedPath')}</code>
-            {t('skills.hintBetween')}
-            <code>{t('skills.hintExternal')}</code>
-            {t('skills.hintAfter')}
-          </p>
         </div>
         <Link to="/skills/new" className="btn btn--primary">
           {t('skills.newButton')}
@@ -145,8 +131,8 @@ function SkillsPage() {
                   </Link>
                   <ConfirmButton
                     label={t('common.delete')}
-                    onConfirm={() => del.mutateAsync(s.name)}
-                    danger
+                    onConfirm={() => del.mutateAsync(s)}
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

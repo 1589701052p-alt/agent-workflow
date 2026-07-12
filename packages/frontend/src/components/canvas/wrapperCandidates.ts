@@ -9,6 +9,7 @@
 // surfacing a port directly).
 
 import { declaredPorts, isWrapperKind } from '@agent-workflow/shared'
+import { nodeDisplayTitle } from './nodeTitle'
 import type { WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 
 export interface LoopMemberCandidate {
@@ -29,25 +30,10 @@ interface AgentSummary {
   outputKinds?: Record<string, string>
 }
 
-/** Look up an inner node's display title using whatever fields the node kind
- * carries. Returns '' so the UI falls back to nodeId rendering when needed. */
-function deriveTitle(node: WorkflowNode, agents: AgentSummary[]): string {
-  const rec = node as Record<string, unknown>
-  if (typeof rec.title === 'string' && rec.title.length > 0) return rec.title
-  if (node.kind === 'agent-single') {
-    const agentName = typeof rec.agentName === 'string' ? rec.agentName : ''
-    if (agentName.length > 0) return agentName
-  }
-  if (node.kind === 'review') {
-    // flag-audit W0（§3-4）：schema 字段是 inputSource（shared/schemas/review.ts），
-    // 旧代码读不存在的 rec.source，此分支曾永不可达。
-    const src = (rec.inputSource as { portName?: unknown } | undefined)?.portName
-    if (typeof src === 'string' && src.length > 0) return `review:${src}`
-  }
-  // unused but kept for future kinds — agents lookup may inform fallback titles.
-  void agents
-  return ''
-}
+// RFC-146 T4: title derivation moved to the shared ./nodeTitle single
+// source (this fork was where the `review:<port>` rule lived; the canvas
+// card now uses it too). '' return keeps the historical "UI falls back to
+// nodeId rendering" contract.
 
 function deriveOutputPorts(
   node: WorkflowNode,
@@ -83,7 +69,7 @@ export function loopMemberCandidates(
     const outputPorts = deriveOutputPorts(n, agents, definition)
     result.push({
       nodeId: n.id,
-      title: deriveTitle(n, agents),
+      title: nodeDisplayTitle(n),
       outputPorts,
     })
   }

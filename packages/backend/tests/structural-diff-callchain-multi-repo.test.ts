@@ -1,5 +1,8 @@
 import { rimrafDir } from './helpers/cleanup'
 // RFC-089 P4 — call-chain expansion for multi-repo tasks. In a multi-repo diff
+// RFC-165: multi-repo/pre-created PATH bodies are the framework-internal face
+// now (the wire is URL-only) — bodies are cast through the internal
+// RepoSourceSpec widening; runtime behavior is byte-identical to pre-165.
 // the graph's refs are `${worktreeDirName}/${filePath}#${qn}` (mergeStructuralDiffs
 // prefixes them). getCallTargets must route such a ref to THAT repo's worktree,
 // expand against the UN-prefixed ref, and re-prefix the returned targets so the
@@ -7,6 +10,7 @@ import { rimrafDir } from './helpers/cleanup'
 // splitRepoRef seam.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import type { StartTask } from '@agent-workflow/shared'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -93,7 +97,7 @@ async function twoRepoTask(h: Harness) {
         { repoPath: h.repos[1]!, baseBranch: 'main' },
       ],
       inputs: {},
-    },
+    } as unknown as StartTask,
     { db: h.db, appHome: h.appHome },
   )
 }

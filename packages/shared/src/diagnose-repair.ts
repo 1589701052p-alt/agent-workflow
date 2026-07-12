@@ -47,6 +47,15 @@ export interface RepairOptionMeta {
    * time (see `selectAutoApplyOption`), so an ambiguous moment never auto-fires.
    */
   autoApplyEligible?: boolean
+  /**
+   * RFC-165 (F13-r4): true ⟹ applying this option restarts task execution
+   * (resumeAfterApply / reviving DAG node runs). Generic resume semantics do
+   * NOT hold for workgroup host tasks (the engine adopts only pending rows;
+   * recovery is RFC-164 engine re-entry territory) — list/apply refuse these
+   * options for workgroup tasks. Omitted ⟹ false (safe: cancel/demote-class
+   * mutations that stop or downgrade a task stay available).
+   */
+  revivesExecution?: boolean
 }
 
 /** RFC-108 T13: the hard safety invariant for an auto-applicable repair option. */

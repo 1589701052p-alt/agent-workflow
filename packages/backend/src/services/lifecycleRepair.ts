@@ -26,6 +26,7 @@ import { and, asc, eq, isNull } from 'drizzle-orm'
 import { ulid } from 'ulid'
 
 import {
+  isTurnEngineWorkgroupTask,
   REPAIR_OPTION_IDS,
   type LifecycleAlertRule,
   type RepairOption,
@@ -145,6 +146,27 @@ export async function listRepairOptionsForAlert(
   }
   const options: RepairOption[] = []
   for (const def of defs) {
+    // RFC-165 (F13-r4): execution-reviving repairs don't apply to TURN-ENGINE
+    // workgroup host tasks — surface them as unavailable WITHOUT running
+    // preflight (preflights may inspect DAG state that doesn't exist for the
+    // host). RFC-167 dynamic_workflow tasks ARE generically repairable
+    // (runScope-backed) and fall through to the normal preflight.
+    if (isTurnEngineWorkgroupTask(task) && def.revivesExecution === true) {
+      options.push({
+        id: def.id,
+        rule: def.rule,
+        labelKey: def.labelKey,
+        descriptionKey: def.descriptionKey,
+        risk: def.risk,
+        destructive: def.destructive,
+        available: false,
+        unavailableReasonKey: 'diagnose.repair.common.workgroupUnsupported',
+        previewSteps: [],
+        ...(def.autoApplyEligible ? { autoApplyEligible: true } : {}),
+        ...(def.revivesExecution ? { revivesExecution: true } : {}),
+      })
+      continue
+    }
     let pre: PreflightResult
     try {
       pre = await def.preflight(rc)
@@ -220,6 +242,16 @@ export async function applyRepairOption(args: ApplyRepairOptionArgs): Promise<Re
     throw new ValidationError(
       'repair-option-not-implemented',
       `optionId '${optionId}' is in the shared taxonomy but not implemented yet`,
+    )
+  }
+
+  // RFC-165 (F13-r4): mirror the list-side refusal — a stale dialog (or a
+  // direct API call) must not revive a TURN-ENGINE workgroup host task via
+  // generic resume/node-revive repairs (RFC-167 dynamic_workflow tasks pass).
+  if (isTurnEngineWorkgroupTask(task) && def.revivesExecution === true) {
+    throw new ValidationError(
+      'workgroup-repair-unsupported',
+      `repair option '${def.id}' revives task execution — not applicable to turn-engine workgroup tasks (RFC-164 engine re-entry pending)`,
     )
   }
 
@@ -400,7 +432,13 @@ async function loadAlertOrThrow(
 
 async function loadTaskOrThrow(db: DbClient, taskId: string): Promise<RepairTaskRow> {
   const rows = await db
-    .select({ id: tasks.id, status: tasks.status, workflowSnapshot: tasks.workflowSnapshot })
+    .select({
+      id: tasks.id,
+      status: tasks.status,
+      workflowSnapshot: tasks.workflowSnapshot,
+      workgroupId: tasks.workgroupId,
+      workgroupConfigJson: tasks.workgroupConfigJson,
+    })
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .limit(1)

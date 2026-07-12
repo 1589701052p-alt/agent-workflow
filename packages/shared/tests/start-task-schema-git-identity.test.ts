@@ -10,8 +10,8 @@ import { StartTaskSchema } from '../src/schemas/task'
 const BASE = {
   workflowId: 'wf-1',
   name: 'fixture-task',
-  repoPath: '/tmp/repo',
-  baseBranch: 'main',
+  repoUrl: 'https://github.com/o/repo.git',
+  ref: 'main',
   inputs: {},
 }
 

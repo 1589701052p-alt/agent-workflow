@@ -58,4 +58,33 @@ describe('nodeTitle()', () => {
     expect(nodeTitle(mk({ id: 'wrap_1', kind: 'wrapper-git' }))).toBe('wrap_1')
     expect(nodeTitle(mk({ id: 'out_1', kind: 'output' }))).toBe('out_1')
   })
+
+  // RFC-146 T4: the title rule is single-sourced (nodeTitle.ts). The
+  // `review:<port>` derivation — previously only in the loop-candidates
+  // fork — now applies to the canvas card too (the RFC's one deliberate
+  // display change).
+  test('review node with wired inputSource derives review:<port>', () => {
+    expect(
+      nodeTitle(mk({ id: 'rev_1', kind: 'review', inputSource: { nodeId: 'a', portName: 'doc' } })),
+    ).toBe('review:doc')
+  })
+
+  test('review node without a wired port still falls back to id', () => {
+    expect(
+      nodeTitle(mk({ id: 'rev_1', kind: 'review', inputSource: { nodeId: '', portName: '' } })),
+    ).toBe('rev_1')
+  })
+
+  test('explicit title still beats review:<port>', () => {
+    expect(
+      nodeTitle(
+        mk({
+          id: 'rev_1',
+          kind: 'review',
+          title: 'Final gate',
+          inputSource: { nodeId: 'a', portName: 'doc' },
+        }),
+      ),
+    ).toBe('Final gate')
+  })
 })

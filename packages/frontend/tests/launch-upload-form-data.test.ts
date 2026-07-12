@@ -1,26 +1,23 @@
-// RFC-020 T6: buildLaunchFormData turns the launch form snapshot into a
-// multipart body matching the backend's handleMultipartTaskStart contract.
-// Pure-function tests so they stay fast and tied to the exact field shape.
+// RFC-020 T6 → RFC-165: buildWorkflowStartFormData turns the wizard's form
+// snapshot into a multipart body matching the backend's
+// handleMultipartTaskStart contract. Pure-function tests so they stay fast
+// and tied to the exact field shape (payload / files[<key>][] envelope).
 
 import { describe, expect, test } from 'vitest'
-import { buildLaunchFormData } from '../src/components/launch/buildLaunchFormData'
+import type { RepoSource } from '../src/lib/launch-repo-source'
+import { buildWorkflowStartFormData, type WizardSpace } from '../src/lib/task-wizard'
+
+const REPO: RepoSource = { kind: 'url', repoUrl: 'git@h:o/r.git', ref: 'main' }
+const SRC: WizardSpace = { kind: 'remote', repos: [REPO] }
+const COMMON = { workflowId: 'wf1', name: 'fixture-task' }
 
 function makeFile(name: string, body = 'x'): File {
   return new File([body], name, { type: 'text/plain' })
 }
 
-describe('buildLaunchFormData (RFC-020)', () => {
+describe('buildWorkflowStartFormData (RFC-020 envelope)', () => {
   test('writes payload JSON into the payload field', async () => {
-    const fd = buildLaunchFormData(
-      {
-        workflowId: 'wf1',
-        name: 'fixture-task',
-        repoPath: '/r',
-        baseBranch: 'main',
-        inputs: { topic: 't' },
-      },
-      {},
-    )
+    const fd = buildWorkflowStartFormData(SRC, { ...COMMON, inputs: { topic: 't' } }, {})
     const blob = fd.get('payload') as Blob
     expect(blob).toBeInstanceOf(Blob)
     expect(blob.type).toContain('application/json')
@@ -28,21 +25,16 @@ describe('buildLaunchFormData (RFC-020)', () => {
     expect(JSON.parse(text)).toEqual({
       workflowId: 'wf1',
       name: 'fixture-task',
-      repoPath: '/r',
-      baseBranch: 'main',
+      repoUrl: 'git@h:o/r.git',
+      ref: 'main',
       inputs: { topic: 't' },
     })
   })
 
   test('appends one files[<key>][] entry per File in order', () => {
-    const fd = buildLaunchFormData(
-      {
-        workflowId: 'wf',
-        name: 'fixture-task',
-        repoPath: '/r',
-        baseBranch: 'main',
-        inputs: { refs: '' },
-      },
+    const fd = buildWorkflowStartFormData(
+      SRC,
+      { ...COMMON, inputs: { refs: '' } },
       { refs: [makeFile('a.txt'), makeFile('b.txt')] },
     )
     const all = fd.getAll('files[refs][]')
@@ -52,14 +44,9 @@ describe('buildLaunchFormData (RFC-020)', () => {
   })
 
   test('back-fills inputs[uploadKey]="" when missing', async () => {
-    const fd = buildLaunchFormData(
-      {
-        workflowId: 'wf',
-        name: 'fixture-task',
-        repoPath: '/r',
-        baseBranch: 'main',
-        inputs: { topic: 't' },
-      },
+    const fd = buildWorkflowStartFormData(
+      SRC,
+      { ...COMMON, inputs: { topic: 't' } },
       { refs: [makeFile('x.txt')] },
     )
     const payload = JSON.parse(await (fd.get('payload') as Blob).text())
@@ -67,8 +54,9 @@ describe('buildLaunchFormData (RFC-020)', () => {
   })
 
   test('uploads with two different keys produce two field names', () => {
-    const fd = buildLaunchFormData(
-      { workflowId: 'w', name: 'fixture-task', repoPath: '/r', baseBranch: 'main', inputs: {} },
+    const fd = buildWorkflowStartFormData(
+      SRC,
+      { ...COMMON, inputs: {} },
       { refs: [makeFile('a.txt')], pics: [makeFile('p.png'), makeFile('q.png')] },
     )
     expect(fd.getAll('files[refs][]')).toHaveLength(1)
@@ -76,10 +64,7 @@ describe('buildLaunchFormData (RFC-020)', () => {
   })
 
   test('empty uploads still emits the payload field', () => {
-    const fd = buildLaunchFormData(
-      { workflowId: 'w', name: 'fixture-task', repoPath: '/r', baseBranch: 'main', inputs: {} },
-      {},
-    )
+    const fd = buildWorkflowStartFormData(SRC, { ...COMMON, inputs: {} }, {})
     expect(fd.get('payload')).not.toBeNull()
     expect(fd.getAll('files[anything][]')).toHaveLength(0)
   })

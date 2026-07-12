@@ -59,10 +59,13 @@ describe('RFC-028 /mcps wiring', () => {
     expect(create).toContain("import { McpFields } from '@/components/McpFields'")
     expect(edit).toContain("import { McpFields } from '@/components/McpFields'")
     // Both use the same primary-button pattern as agents.new / skills.new:
-    // `btn btn--primary` + no Cancel button beside it.
+    // `btn btn--primary` + no Cancel button beside it. RFC-151 PR-4: on the
+    // edit page the primary Save renders via the shared <DetailHeaderActions>
+    // header cluster.
     expect(create).toContain('btn btn--primary')
     expect(create).not.toMatch(/btn btn--sm[^"]*">[^<]*[Cc]ancel/)
-    expect(edit).toContain('btn btn--primary')
+    expect(edit).toContain('DetailHeaderActions')
+    expect(read('components/DetailHeaderActions.tsx')).toContain('btn btn--primary')
   })
 
   test('no route file references the obsolete `cwd` field', () => {
@@ -87,8 +90,6 @@ describe('RFC-028 /mcps wiring', () => {
       'title',
       'newButton',
       'newTitle',
-      'newHint',
-      'detailHint',
       'emptyList',
       'typeLocal',
       'typeRemote',

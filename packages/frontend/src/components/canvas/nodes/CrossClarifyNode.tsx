@@ -18,6 +18,7 @@
 // The kind pill defaults to '⚡ cross-clarify'.
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import {
   CROSS_CLARIFY_INPUT_PORT_NAME,
@@ -42,7 +43,8 @@ interface Props extends NodeProps {
 export function CrossClarifyNode({ data, selected }: Props) {
   const { t } = useTranslation()
   const status: CrossClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? `⚡ ${t('crossClarifyNode.label')}`
+  const labelText =
+    data.kindLabel ?? `${NODE_GLYPHS['clarify-cross-agent']} ${t('crossClarifyNode.label')}`
   const toQuestionerLabel = t('crossClarify.canvas.handleLabel.toQuestioner')
   const toDesignerLabel = t('crossClarify.canvas.handleLabel.toDesigner')
   return (
@@ -53,6 +55,7 @@ export function CrossClarifyNode({ data, selected }: Props) {
         ` canvas-node--clarify-cross-agent-${status}`
       }
       data-status={status}
+      data-clarify-nav={data.clarifyNav}
       data-testid={`canvas-node-cross-clarify-${data.nodeId}`}
     >
       <QuestionBadge data={data} />
@@ -70,6 +73,16 @@ export function CrossClarifyNode({ data, selected }: Props) {
       <div className="canvas-node__id">{data.nodeId}</div>
       {data.description !== undefined && data.description.length > 0 && (
         <div className="canvas-node__description muted">{data.description}</div>
+      )}
+      {/* RFC-161: task-detail canvas marks the click target; clicking routes to the
+          clarify page. Absent on the editor canvas + non-clickable clarify nodes.
+          Reuses the same clarifyNode.* i18n keys (both kinds jump to /clarify). */}
+      {data.clarifyNav !== undefined && (
+        <div className="canvas-node__clarify-nav muted">
+          {data.clarifyNav === 'awaiting'
+            ? t('clarifyNode.navAwaiting')
+            : t('clarifyNode.navAnswered')}
+        </div>
       )}
       {/* Two output handles stacked on the right edge. The `to_questioner`
           handle pairs with the auto-edge built by reverse-drag; the

@@ -5,6 +5,7 @@
 // `applyConnectionForReviewOutput` in components/canvas/connectionSync.ts.
 
 import type { NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { INBOUND_HANDLE_ID, type CanvasNodeData } from './types'
@@ -20,7 +21,9 @@ export function OutputNode({ data, selected }: Props) {
       className={`canvas-node canvas-node--io canvas-node--output ${selected ? 'canvas-node--selected' : ''}`}
     >
       <div className="canvas-node__header">
-        <span className="canvas-node__kind">⤴ {t('ioNode.labelOutput')}</span>
+        <span className="canvas-node__kind">
+          {NODE_GLYPHS.output} {t('ioNode.labelOutput')}
+        </span>
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>

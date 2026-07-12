@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
+import { LoadingState } from '@/components/LoadingState'
 import { Select } from '@/components/Select'
 import { useActor, usePermission } from '@/hooks/useActor'
 import { Route as RootRoute } from './__root'
@@ -94,15 +95,12 @@ export function UsersPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('users.title', { defaultValue: 'Users' })}</h1>
-          <p className="page__hint">
-            {t('users.hint', { defaultValue: 'Manage users — only admins land here.' })}
-          </p>
         </div>
         <button className="btn btn--primary" onClick={() => setShowCreate(true)}>
           {t('users.new', { defaultValue: 'New user' })}
         </button>
       </header>
-      {isLoading && <div>{t('common.loading')}</div>}
+      {isLoading && <LoadingState />}
       {error && <div className="auth-form__error">{(error as Error).message}</div>}
       <table className="data-table">
         <thead>

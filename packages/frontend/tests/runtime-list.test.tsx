@@ -325,4 +325,89 @@ describe('RuntimeList (RFC-112 PR-D)', () => {
       ),
     )
   })
+
+  // RFC-154: config-dir injection overrides — two optional fields whose
+  // placeholders show the SELECTED protocol's defaults (a custom fork may have
+  // renamed the env var / leaf dir it reads its config dir through).
+  test('RFC-154: config-dir fields render with protocol-default placeholders that follow the protocol switch', async () => {
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add runtime/i }))
+    const envInput = screen.getByTestId('runtime-config-dir-env') as HTMLInputElement
+    const nameInput = screen.getByTestId('runtime-config-dir-name') as HTMLInputElement
+    // Default protocol = opencode → opencode defaults as placeholders.
+    expect(envInput.placeholder).toBe('OPENCODE_CONFIG_DIR')
+    expect(nameInput.placeholder).toBe('.opencode')
+    // Switch to Claude Code → placeholders follow.
+    fireEvent.click(screen.getByRole('combobox', { name: /protocol/i }))
+    const list = document.querySelector('ul[role="listbox"]') as HTMLUListElement
+    const claudeOpt = Array.from(list.querySelectorAll('li[role="option"]')).find((li) =>
+      (li.textContent ?? '').includes('Claude Code'),
+    )!
+    fireEvent.mouseDown(claudeOpt)
+    expect(envInput.placeholder).toBe('CLAUDE_CONFIG_DIR')
+    expect(nameInput.placeholder).toBe('.claude')
+  })
+
+  // RFC-154: empty fields submit as null (= unset → protocol default); filled
+  // fields submit trimmed values.
+  test('RFC-154: create submits configDirEnv/configDirName — filled → trimmed, empty → null', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL | Request).toString()
+      if (init?.method === 'POST' && url.endsWith('/api/runtimes')) {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return jsonResponse({ runtime: {} })
+      }
+      if (url.includes('/api/runtimes')) return jsonResponse(RUNTIMES_BODY)
+      return jsonResponse({})
+    })
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add runtime/i }))
+    fireEvent.change(screen.getByTestId('runtime-name'), { target: { value: 'myfork' } })
+    fireEvent.change(screen.getByTestId('runtime-config-dir-env'), {
+      target: { value: '  MYFORK_CONFIG_DIR  ' },
+    })
+    // name left empty → null.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(bodies.length).toBe(1))
+    expect(bodies[0]).toMatchObject({
+      name: 'myfork',
+      configDirEnv: 'MYFORK_CONFIG_DIR',
+      configDirName: null,
+    })
+  })
+
+  // RFC-154 (Codex impl-gate P3): invalid overrides are blocked AT THE FORM —
+  // inline error (shared predicate, same rule the backend throws from) + a
+  // disabled Save. Reserved env names and traversal leaf names never reach the
+  // wire from the dialog.
+  test('RFC-154: invalid config-dir values show inline errors and disable Save', async () => {
+    wrap(<RuntimeList />)
+    await waitFor(() => expect(screen.getByText('my-oc')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add runtime/i }))
+    fireEvent.change(screen.getByTestId('runtime-name'), { target: { value: 'myfork' } })
+    const saveBtn = screen.getByRole('button', { name: /^Save$/ }) as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(false)
+    // Reserved env name → reserved error + Save disabled.
+    fireEvent.change(screen.getByTestId('runtime-config-dir-env'), {
+      target: { value: 'OPENCODE_CONFIG_CONTENT' },
+    })
+    expect(screen.getByRole('alert').textContent).toMatch(/reserved/i)
+    expect(saveBtn.disabled).toBe(true)
+    // Fix the env, break the name with traversal → leaf error + still disabled.
+    fireEvent.change(screen.getByTestId('runtime-config-dir-env'), {
+      target: { value: 'MYFORK_CONFIG_DIR' },
+    })
+    fireEvent.change(screen.getByTestId('runtime-config-dir-name'), {
+      target: { value: '../evil' },
+    })
+    expect(screen.getByRole('alert').textContent).toMatch(/single directory name/i)
+    expect(saveBtn.disabled).toBe(true)
+    // Clear both → enabled again.
+    fireEvent.change(screen.getByTestId('runtime-config-dir-name'), { target: { value: '' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(saveBtn.disabled).toBe(false)
+  })
 })

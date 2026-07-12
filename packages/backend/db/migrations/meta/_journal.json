@@ -547,6 +547,83 @@
       "when": 1785300000000,
       "tag": "0078_rfc153_drop_runtime_builtin",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1785310000000,
+      "tag": "0079_rfc154_runtime_config_dir",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1785410000000,
+      "tag": "0080_rfc159_scheduled_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "6",
+      "when": 1785510000000,
+      "tag": "0081_rfc162_clarify_unify",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "6",
+      "when": 1785510000001,
+      "tag": "0082_rfc164_workgroups",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "6",
+      "when": 1785510000002,
+      "tag": "0083_rfc164_workgroup_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1785510000003,
+      "tag": "0084_rfc164_workgroup_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1785510000004,
+      "tag": "0085_rfc165_task_space",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "6",
+      "when": 1785510000005,
+      "tag": "0086_rfc166_agent_inputs",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
+      "when": 1785510000006,
+      "tag": "0087_rfc165_scheduled_launch_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "6",
+      "when": 1785510000007,
+      "tag": "0088_rfc167_dynamic_workflow_spaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1785510000008,
+      "tag": "0089_rfc167_drop_dynamic_workflow_spaces",
+      "breakpoints": true
     }
   ]
 }

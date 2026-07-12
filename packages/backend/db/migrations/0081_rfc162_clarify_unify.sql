@@ -1,0 +1,36 @@
+-- RFC-162 — 反问机制完全归一：retire echo + designer-by-default rows.
+--
+-- RFC-162 unifies self / cross clarify onto a SINGLE-CARD model: one clarify
+-- question maps to exactly ONE asker handler entry (roleKind='self' | 'questioner').
+-- The `roleKind='echo'` receipt (RFC-134) and the scope-derived designer-by-default
+-- entry (RFC-059/128) are DELETED — "let the upstream revise" is now expressed by a
+-- human reassign that ADDS a `designer` handler row (keeping the asker), not a scope
+-- flag or a moved entry.
+--
+-- Retroactive convergence (user-approved): existing rows must match the new model.
+--   1. Every `role_kind='echo'` row is DELETED — the echo role no longer exists (the
+--      column is a bare drizzle enum, no CHECK constraint, so no table rebuild needed;
+--      just the type narrows in schema.ts). The asker keeps its own entry now, so the
+--      Q&A it used to receive via the receipt is delivered by its own rerun instead.
+--   2. Every UNDISPATCHED *CLARIFY* `role_kind='designer'` row (dispatched_at IS NULL
+--      AND source_kind <> 'manual') is DELETED — these were scope-derived
+--      designer-by-default entries (source_kind self/cross). Reconcile no longer
+--      creates them; they collapse back to the single asker card. DISPATCHED designer
+--      rows are KEPT (committed execution / a genuine in-flight upstream revision) —
+--      they remain valid handler rows under the new model.
+--      CRITICAL — `source_kind='manual'` designer rows are EXCLUDED: a manual question
+--      is stored as role_kind='designer' with its content (manual_title / manual_body)
+--      ON THE ROW, and is created STAGED (dispatched_at IS NULL) awaiting human
+--      dispatch. Deleting it would silently lose the user-authored question. Only the
+--      clarify (self/cross) designer-by-default entries are scope-derived receipts safe
+--      to drop; manual rows are irreplaceable content and must survive regardless of
+--      dispatch state. (Manual reassign is a MOVE via override_target_node_id — the row
+--      stays role_kind='designer'.)
+--
+-- `question_scopes_json` (clarify_rounds / cross_clarify_sessions) is left in place —
+-- it is simply no longer read or written (scope deleted). Dropping it would need a
+-- 12-step table rebuild for no functional gain; a dormant column is harmless.
+--
+-- See design/RFC-162-clarify-unification/{proposal,design,plan}.md.
+DELETE FROM `task_questions` WHERE `role_kind` = 'echo';--> statement-breakpoint
+DELETE FROM `task_questions` WHERE `role_kind` = 'designer' AND `dispatched_at` IS NULL AND `source_kind` <> 'manual';

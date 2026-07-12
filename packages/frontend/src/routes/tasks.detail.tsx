@@ -16,8 +16,10 @@ import type {
   TaskNodeRuns,
   WorkflowDefinition,
 } from '@agent-workflow/shared'
-import { COMMIT_PUSH_NODE_PREFIX, redactGitUrl } from '@agent-workflow/shared'
+import { COMMIT_PUSH_NODE_PREFIX, redactGitUrl, taskExecutionKind } from '@agent-workflow/shared'
 import { api, ApiError } from '@/api/client'
+import { EmptyState } from '@/components/EmptyState'
+import { LoadingState } from '@/components/LoadingState'
 import { WorkflowCanvas, type WorkflowCanvasHandle } from '@/components/canvas/WorkflowCanvas'
 import type { CanvasNodeData } from '@/components/canvas/nodes/types'
 import { ConfirmButton } from '@/components/ConfirmButton'
@@ -28,10 +30,15 @@ import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { TaskQuestionList, type TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
 import { TaskTimeline } from '@/components/tasks/TaskTimeline'
 import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
+import { WorkgroupRoom } from '@/components/workgroup/WorkgroupRoom'
+import { DynamicWorkflowPanel } from '@/components/workgroup/DynamicWorkflowPanel'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
 import { SessionTab } from '@/components/node-session/SessionTab'
 import { collectPorts, TaskOutputPanel } from '@/components/TaskOutputPanel'
+import { Segmented } from '@/components/Segmented'
+import { StatusChip } from '@/components/StatusChip'
+import { TabBar } from '@/components/TabBar'
 import { TaskStatusChip } from '@/components/TaskStatusChip'
 import { WorktreeDiffPanel } from '@/components/WorktreeDiffPanel'
 import { StructuralDiffView } from '@/components/structure/StructuralDiffView'
@@ -43,13 +50,17 @@ import {
   nodeRunStatusToKind,
 } from '@/lib/noderun-status'
 import { agentNodeOptionsFromSnapshot, resolveNodeNameFromSnapshot } from '@/lib/node-names'
+import { deriveReviewNodeNav, type ReviewNodeNavKind } from '@/lib/review-node-nav'
+import { deriveClarifyNodeNav, type ClarifyNodeNavKind } from '@/lib/clarify-node-nav'
 import { reviewRunDisplay } from '@/lib/reviewRunDisplay'
 import {
   availableTabs,
+  defaultDynamicTab,
   isTerminal,
   nextTabForFailedJump,
   type TaskDetailTab,
 } from '@/lib/task-detail-tabs'
+import { workgroupRoomKey, type WorkgroupRoomResponse } from '@/lib/workgroup-room'
 import { useTaskSync } from '@/hooks/useTaskSync'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Route as RootRoute } from './__root'
@@ -222,7 +233,23 @@ function TaskDetailPage() {
   // this must sit above the `if (task.isLoading) return ...` guards.
   const hasOutputs =
     task.data === undefined ? false : collectPorts(task.data.workflowSnapshot).length > 0
-  const tabs = availableTabs({ hasOutputs })
+  // RFC-164 PR-4: workgroup tasks swap the tab set (chat room first, canvas +
+  // outputs hidden — the builtin host graph is not an observation surface).
+  const isWorkgroup = task.data?.workgroupId != null
+  // RFC-167 PR-3: dynamic_workflow groups are the exception — no chatroom;
+  // the orchestration panel + (post-confirm) the REAL DAG canvas. The mode
+  // lives in the room aggregate (same cache entry the panels use); until it
+  // arrives the task renders as a turn-engine group and self-corrects one
+  // query later.
+  const room = useQuery<WorkgroupRoomResponse>({
+    queryKey: workgroupRoomKey(id),
+    queryFn: ({ signal }) =>
+      api.get(`/api/workgroup-tasks/${encodeURIComponent(id)}/room`, undefined, signal),
+    enabled: isWorkgroup,
+  })
+  const isDynamicWorkgroup = isWorkgroup && room.data?.config.mode === 'dynamic_workflow'
+  const dwPhase = room.data?.dw?.phase ?? null
+  const tabs = availableTabs({ hasOutputs, isWorkgroup, isDynamicWorkgroup })
   // RFC-120: agent nodes of the frozen snapshot — reassign candidates for the
   // task question board (only agent nodes are valid handlers). Labels resolve to
   // the node's display name (title → agentName → id fallback, same oracle as the
@@ -233,11 +260,29 @@ function TaskDetailPage() {
   )
   // If the user was on the outputs tab and hasOutputs flips false (mostly
   // defensive — the snapshot is frozen at task start), fall back to the
-  // canvas. Always-mount strategy keeps panes in the DOM, but the tab
-  // bar must reflect what's actually selectable.
+  // set's FIRST tab. Always-mount strategy keeps panes in the DOM, but the
+  // tab bar must reflect what's actually selectable. RFC-164 PR-4: this is
+  // also how a workgroup task lands on its default tab — the initial
+  // 'workflow-status' state is not in WORKGROUP_TAB_ORDER, so once the task
+  // row loads the effect switches to tabs[0] === 'chatroom'.
   useEffect(() => {
-    if (!tabs.includes(tab)) setTab('workflow-status')
+    if (!tabs.includes(tab)) setTab(tabs[0] ?? 'workflow-status')
   }, [tabs, tab])
+  // RFC-167 PR-3 (Codex impl-gate P2): apply the phase-driven default tab
+  // ONCE per task when the room config first identifies a dynamic group
+  // (executing → the DAG canvas; anything earlier → the orchestration panel).
+  // Declared AFTER the invalid-tab fallback above on purpose: both effects
+  // fire in the same commit when the tab set flips to the dynamic order (the
+  // fallback reads this render's stale `tab` and schedules tabs[0]) — the
+  // later setTab wins, so the phase default reliably lands. Keyed by task id
+  // so navigating between tasks re-applies; manual tab choices afterwards are
+  // never overridden.
+  const dwDefaultAppliedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isDynamicWorkgroup || dwDefaultAppliedFor.current === id) return
+    dwDefaultAppliedFor.current = id
+    setTab(defaultDynamicTab(dwPhase))
+  }, [isDynamicWorkgroup, dwPhase, id])
 
   if (task.isLoading) return <div className="page muted">{t('tasks.loadingTask')}</div>
   if (task.error !== null && task.error !== undefined)
@@ -283,6 +328,25 @@ function TaskDetailPage() {
         </div>
         <div className="page__actions">
           <TaskMembersDialogButton taskId={id} />
+          {/* RFC-165: subject-aware relaunch — terminal tasks deep-link into
+              the /tasks/new wizard with the execution subject pre-picked
+              (v1 pre-fills the subject only). */}
+          {isTerminal(tk.status) && (
+            <Link
+              to="/tasks/new"
+              search={
+                taskExecutionKind(tk) === 'agent'
+                  ? { kind: 'agent', agent: tk.sourceAgentName ?? '' }
+                  : taskExecutionKind(tk) === 'workgroup'
+                    ? { kind: 'workgroup' }
+                    : { kind: 'workflow', workflow: tk.workflowId }
+              }
+              className="btn"
+              data-testid="task-detail-relaunch"
+            >
+              {t('tasks.relaunchButton')}
+            </Link>
+          )}
           {resumability === 'ready' && (
             <button
               type="button"
@@ -297,7 +361,7 @@ function TaskDetailPage() {
             <ConfirmButton
               label={t('tasks.cancelButton')}
               onConfirm={() => cancel.mutateAsync()}
-              danger
+              variant="danger"
               disabled={cancel.isPending}
             />
           )}
@@ -314,7 +378,17 @@ function TaskDetailPage() {
       {resumability === 'worktree-missing' && (
         <div className="info-box info-box--muted">
           <span>{t('tasks.resumeUnavailableNoWorktree')}</span>{' '}
-          <Link to="/workflows/$id/launch" params={{ id: tk.workflowId }} className="btn btn--sm">
+          <Link
+            to="/tasks/new"
+            search={
+              taskExecutionKind(tk) === 'agent'
+                ? { kind: 'agent', agent: tk.sourceAgentName ?? '' }
+                : taskExecutionKind(tk) === 'workgroup'
+                  ? { kind: 'workgroup' }
+                  : { kind: 'workflow', workflow: tk.workflowId }
+            }
+            className="btn btn--sm"
+          >
             {t('tasks.resumeLaunchLink')}
           </Link>
         </div>
@@ -362,63 +436,89 @@ function TaskDetailPage() {
           live-polled while the task is active (same idiom as the task/node-runs queries). */}
       <RecoverySection taskId={id} status={tk.status} />
 
-      <nav role="tablist" className="task-detail__tab-bar tabs">
-        {tabs.map((k) => (
-          <button
-            type="button"
-            key={k}
-            role="tab"
-            aria-selected={tab === k}
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {tabLabel(t, k)}
-            {/* RFC-128: 「问题」tab carries a non-terminal pending-question count badge. */}
-            {k === 'task-questions' && pendingQuestionCount > 0 && (
-              <span className="tabs__tab-badge" data-testid="tq-tab-badge">
-                {pendingQuestionCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </nav>
+      <TabBar<TaskDetailTab>
+        className="task-detail__tab-bar"
+        tabs={tabs.map((k) => ({
+          key: k,
+          label: tabLabel(t, k),
+          // RFC-128: 「问题」tab carries a non-terminal pending-question count badge.
+          badge:
+            k === 'task-questions' && pendingQuestionCount > 0 ? pendingQuestionCount : undefined,
+          badgeTestid: k === 'task-questions' ? 'tq-tab-badge' : undefined,
+        }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
       <div className="task-detail__panes">
-        {/* workflow-status: always mounted so xyflow viewport survives tab switches. */}
-        <div className="task-detail__pane" hidden={tab !== 'workflow-status'}>
-          <div className={taskCanvasLayoutClass(selectedNodeRunId)}>
-            <TaskStatusCanvas
-              canvasRef={canvasRef}
-              task={tk}
-              runs={nodeRuns.data?.runs ?? []}
-              onSelectNodeRun={setSelectedNodeRunId}
-              onJumpToQuestions={jumpToQuestions}
+        {/* RFC-164 PR-4: workgroup chat room — the group task's primary view.
+            Content mounts only for TURN-ENGINE workgroup tasks (RFC-167:
+            dynamic_workflow groups have no turns/chatroom — they get the
+            orchestration pane below instead). The pane div always exists so
+            the hidden-pane structure stays uniform. */}
+        <div className="task-detail__pane" hidden={tab !== 'chatroom'}>
+          {isWorkgroup && !isDynamicWorkgroup && (
+            <WorkgroupRoom taskId={id} taskStatus={tk.status} />
+          )}
+        </div>
+
+        {/* RFC-167 PR-3: dynamic-workflow orchestration panel — generation
+            progress, the confirm gate (read-only DAG preview) and save-as. */}
+        <div className="task-detail__pane" hidden={tab !== 'dw-orchestration'}>
+          {isDynamicWorkgroup && (
+            <DynamicWorkflowPanel
+              taskId={id}
+              taskStatus={tk.status}
+              errorSummary={tk.errorSummary ?? null}
             />
-            {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
-              <NodeDetailDrawer
-                taskId={id}
-                taskStatus={tk.status}
-                nodeRunId={selectedNodeRunId}
-                nodeId={resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId)}
-                workflowNodeKind={resolveNodeKindFromSnapshot(
-                  tk.workflowSnapshot,
-                  resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
-                )}
-                agentName={resolveAgentNameFromSnapshot(
-                  tk.workflowSnapshot,
-                  resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
-                )}
-                runs={nodeRuns.data.runs}
-                outputs={nodeRuns.data.outputs}
-                onClose={closeNodeDrawer}
-                onSelectRun={setSelectedNodeRunId}
+          )}
+        </div>
+
+        {/* workflow-status: always mounted so xyflow viewport survives tab switches.
+            RFC-164 PR-4: except for turn-engine workgroup tasks — their tab set
+            never reaches this pane and the builtin host graph must not render.
+            RFC-167 PR-3: a dynamic task's canvas is REAL once the confirmed DAG
+            is swapped in (phase executing); before that the snapshot is still
+            the generation host graph — show a waiting hint instead. */}
+        <div className="task-detail__pane" hidden={tab !== 'workflow-status'}>
+          {isDynamicWorkgroup && dwPhase !== 'executing' && (
+            <EmptyState size="comfortable" title={t('workgroups.dw.canvasPending')} />
+          )}
+          {(!isWorkgroup || (isDynamicWorkgroup && dwPhase === 'executing')) && (
+            <div className={taskCanvasLayoutClass(selectedNodeRunId)}>
+              <TaskStatusCanvas
+                canvasRef={canvasRef}
+                task={tk}
+                runs={nodeRuns.data?.runs ?? []}
+                onSelectNodeRun={setSelectedNodeRunId}
+                onJumpToQuestions={jumpToQuestions}
               />
-            )}
-          </div>
+              {selectedNodeRunId !== null && nodeRuns.data !== undefined && (
+                <NodeDetailDrawer
+                  taskId={id}
+                  taskStatus={tk.status}
+                  nodeRunId={selectedNodeRunId}
+                  nodeId={resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId)}
+                  workflowNodeKind={resolveNodeKindFromSnapshot(
+                    tk.workflowSnapshot,
+                    resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
+                  )}
+                  agentName={resolveAgentNameFromSnapshot(
+                    tk.workflowSnapshot,
+                    resolveNodeIdFromRuns(nodeRuns.data.runs, selectedNodeRunId),
+                  )}
+                  runs={nodeRuns.data.runs}
+                  outputs={nodeRuns.data.outputs}
+                  onClose={closeNodeDrawer}
+                  onSelectRun={setSelectedNodeRunId}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         <div className="task-detail__pane" hidden={tab !== 'node-runs'}>
-          {nodeRuns.isLoading && <div className="muted">{t('common.loading')}</div>}
+          {nodeRuns.isLoading && <LoadingState size="compact" />}
           {nodeRuns.error !== null && nodeRuns.error !== undefined && (
             <div className="error-box">{describeError(nodeRuns.error)}</div>
           )}
@@ -585,26 +685,18 @@ function TaskDetailPage() {
                   ]}
                 />
                 <span className="structure-pane__scope-label">{t('tasks.structEngineLabel')}</span>
-                <div
-                  className="segmented"
-                  role="radiogroup"
-                  aria-label={t('tasks.structEngineLabel')}
-                >
-                  {(['baseline', 'deep'] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      role="radio"
-                      aria-checked={engineMode === m}
-                      className={`segmented__option ${engineMode === m ? 'segmented__option--active' : ''}`}
-                      onClick={() => setEngineMode(m)}
-                    >
-                      {m === 'baseline'
+                <Segmented<'baseline' | 'deep'>
+                  value={engineMode}
+                  onChange={setEngineMode}
+                  options={(['baseline', 'deep'] as const).map((m) => ({
+                    value: m,
+                    label:
+                      m === 'baseline'
                         ? t('tasks.structEngineBaseline')
-                        : t('tasks.structEngineDeep')}
-                    </button>
-                  ))}
-                </div>
+                        : t('tasks.structEngineDeep'),
+                  }))}
+                  ariaLabel={t('tasks.structEngineLabel')}
+                />
               </div>
               {structuralDiff.isLoading ? (
                 <div className="muted">{t('tasks.loadingDiff')}</div>
@@ -670,6 +762,12 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabQuestions')
     case 'timeline':
       return t('tasks.tabTimeline')
+    // RFC-164 PR-4: workgroup chat room.
+    case 'chatroom':
+      return t('tasks.tabChatroom')
+    // RFC-167 PR-3: dynamic-workflow orchestration panel.
+    case 'dw-orchestration':
+      return t('tasks.tabDwOrchestration')
   }
 }
 
@@ -680,7 +778,9 @@ function TaskStatusCanvas({
   onSelectNodeRun,
   onJumpToQuestions,
 }: {
-  canvasRef?: React.Ref<WorkflowCanvasHandle>
+  // RFC-158: RefObject (not the broader React.Ref) — the onSelect review branch
+  // reads `.current` to clearSelection before routing to the review page.
+  canvasRef?: React.RefObject<WorkflowCanvasHandle | null>
   task: Task
   runs: NodeRun[]
   onSelectNodeRun: (id: string | null) => void
@@ -688,6 +788,7 @@ function TaskStatusCanvas({
   onJumpToQuestions: (nodeId: string) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const definition = useMemo<WorkflowDefinition | null>(() => {
     const snap = task.workflowSnapshot
     if (typeof snap !== 'object' || snap === null) return null
@@ -797,6 +898,51 @@ function TaskStatusCanvas({
     return idMap
   }, [runs])
 
+  // RFC-158: review nodes on the canvas open the review page instead of the
+  // (near-empty) drawer. `reviewNodeIds` gates the onSelect branch; `reviewNavByNode`
+  // holds the click target (or absent when not clickable); `reviewNavs` projects
+  // the kinds to WorkflowCanvas so ReviewNode paints the click hint + cursor.
+  const reviewNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const n of definition?.nodes ?? []) if (n.kind === 'review') ids.add(n.id)
+    return ids
+  }, [definition])
+  const reviewNavByNode = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof deriveReviewNodeNav>>()
+    for (const nodeId of reviewNodeIds) {
+      const nav = deriveReviewNodeNav(runs, nodeId)
+      if (nav !== null) m.set(nodeId, nav)
+    }
+    return m
+  }, [reviewNodeIds, runs])
+  const reviewNavs = useMemo(() => {
+    const out: Record<string, ReviewNodeNavKind> = {}
+    for (const [nodeId, nav] of reviewNavByNode) if (nav !== null) out[nodeId] = nav.kind
+    return out
+  }, [reviewNavByNode])
+
+  // RFC-161: clarify / cross-clarify nodes open the clarify page instead of the
+  // (near-empty) drawer — the sister of the review three-piece above.
+  const clarifyNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const n of definition?.nodes ?? [])
+      if (n.kind === 'clarify' || n.kind === 'clarify-cross-agent') ids.add(n.id)
+    return ids
+  }, [definition])
+  const clarifyNavByNode = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof deriveClarifyNodeNav>>()
+    for (const nodeId of clarifyNodeIds) {
+      const nav = deriveClarifyNodeNav(runs, nodeId)
+      if (nav !== null) m.set(nodeId, nav)
+    }
+    return m
+  }, [clarifyNodeIds, runs])
+  const clarifyNavs = useMemo(() => {
+    const out: Record<string, ClarifyNodeNavKind> = {}
+    for (const [nodeId, nav] of clarifyNavByNode) if (nav !== null) out[nodeId] = nav.kind
+    return out
+  }, [clarifyNavByNode])
+
   if (definition === null) {
     return <div className="muted">{t('tasks.noWorkflowSnapshot')}</div>
   }
@@ -814,9 +960,44 @@ function TaskStatusCanvas({
         onNodeClarifyDirectiveToggle={(nodeId, next) =>
           setDirective.mutate({ nodeId, directive: next })
         }
+        reviewNavs={reviewNavs}
+        clarifyNavs={clarifyNavs}
         onSelect={(sel) => {
           if (sel === null || sel.kind !== 'node') {
             onSelectNodeRun(null)
+            return
+          }
+          // RFC-158: review nodes never open the drawer — they route to the
+          // review page. clearSelection() FIRST releases xyflow's selection
+          // (and resets lastEmittedSelectionSig) so a re-click on the same node
+          // isn't swallowed (the wedge locked by tasks-detail-drawer-close-reclick);
+          // then close any open drawer; then navigate iff the node is clickable.
+          if (reviewNodeIds.has(sel.id)) {
+            canvasRef?.current?.clearSelection()
+            onSelectNodeRun(null)
+            const nav = reviewNavByNode.get(sel.id)
+            if (nav != null) {
+              void navigate({
+                to: '/reviews/$nodeRunId',
+                params: { nodeRunId: nav.nodeRunId },
+                search: {},
+              })
+            }
+            return
+          }
+          // RFC-161: clarify / cross-clarify nodes never open the drawer — they
+          // route to the clarify page (same wedge-guard as the review branch; the
+          // clarify route needs no search param — cf. the node-runs table jump link).
+          if (clarifyNodeIds.has(sel.id)) {
+            canvasRef?.current?.clearSelection()
+            onSelectNodeRun(null)
+            const nav = clarifyNavByNode.get(sel.id)
+            if (nav != null) {
+              void navigate({
+                to: '/clarify/$nodeRunId',
+                params: { nodeRunId: nav.nodeRunId },
+              })
+            }
             return
           }
           const runId = latestRunByNode.get(sel.id)
@@ -909,9 +1090,9 @@ function NodeRunsTable({ runs, workflowSnapshot }: { runs: NodeRun[]; workflowSn
                 {r.shardKey !== null && <span className="muted"> · {r.shardKey}</span>}
               </td>
               <td>
-                <span className={`status-chip status-chip--${nodeRunStatusToKind(r.status)}`}>
+                <StatusChip kind={nodeRunStatusToKind(r.status)}>
                   {t(displayNoderunStatusKey(r))}
-                </span>
+                </StatusChip>
                 {shouldShowReviewJump(r.status) && (
                   <>
                     {' '}
@@ -994,12 +1175,9 @@ function CommitRunRow({ run, allRuns }: { run: NodeRun; allRuns: NodeRun[] }) {
         <code className="data-table__muted">{cp.repoBranch}</code>
       </td>
       <td>
-        <span
-          className={`status-chip status-chip--${nodeRunStatusToKind(run.status)}`}
-          data-testid="commit-push-outcome"
-        >
+        <StatusChip kind={nodeRunStatusToKind(run.status)} data-testid="commit-push-outcome">
           {t(commitOutcomeKey(cp.pushOutcome))}
-        </span>{' '}
+        </StatusChip>{' '}
         {sessionRuns.length > 0 && latestChild !== undefined && (
           <button
             type="button"

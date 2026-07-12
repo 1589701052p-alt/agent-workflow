@@ -10,14 +10,16 @@
 // Resume / single-node retry land in M3 (P-3-08, P-3-09).
 
 import {
+  isTurnEngineWorkgroupTask,
   RepairRequestSchema,
+  rejectRetiredStartTaskKeys,
   StartTaskSchema,
+  taskExecutionKind,
   TaskStatusSchema,
   UploadInputSchema,
   type WorkflowInput,
 } from '@agent-workflow/shared'
 import type { Hono } from 'hono'
-import { ulid } from 'ulid'
 import { eq } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { actorOf } from '@/auth/actor'
@@ -46,15 +48,14 @@ import {
   getTaskDiff,
   getTaskNodeRuns,
   listTasks,
-  materializeWorktree,
-  normalizeStartTaskRepos,
-  resolveRepoSourceSingle,
-  type ResolvedRepoSource,
+  materializeSpace,
   resumeTask,
   retryNode,
   startTask,
   syncTaskWorkflow,
 } from '@/services/task'
+import { materializingSpaces } from '@/services/gc'
+import { rmSync } from 'node:fs'
 import { getTaskStructuralDiff } from '@/services/structuralDiff/service'
 import { getCallTargets } from '@/services/structuralDiff/callGraph/expandService'
 import type { ResolvedDeepConfig } from '@/services/structuralDiff/deep/service'
@@ -72,14 +73,14 @@ import { getInventorySnapshot } from '@/services/inventory'
 import { listWorktreeDir, readWorktreeFile } from '@/services/worktreeFiles'
 import { runLifecycleInvariants } from '@/services/lifecycleInvariants'
 import { resolveLaunchRuntimeConfig } from '@/services/launchRuntimeConfig'
+import { buildStartTaskDeps, resolveSubagentLiveCapture } from '@/services/startTaskDeps'
+import { assertWorkflowLaunchable } from '@/services/taskLaunchGate'
 import { listRecoveryEventsForTask } from '@/services/recovery'
 import { clearAutoRecoverySuspension, isAutoRecoverySuspended } from '@/services/recoveryBreaker'
 import { applyRepairOption, listRepairOptionsForAlert } from '@/services/lifecycleRepair'
 import { listOpenLifecycleAlertsForTask } from '@/services/taskAlerts'
 import { getWorkflow } from '@/services/workflow'
-import { validateWorkflowDef } from '@/services/workflow.validator'
-import { listAgents } from '@/services/agent'
-import { listSkills } from '@/services/skill'
+import { buildWorkflowValidationContext, validateWorkflowDef } from '@/services/workflow.validator'
 import { tasksListBroadcaster, TASKS_LIST_CHANNEL } from '@/ws/broadcaster'
 import { Paths } from '@/util/paths'
 import { NotFoundError, ValidationError } from '@/util/errors'
@@ -98,23 +99,10 @@ function resolveStructuralDeepConfig(configPath: string): ResolvedDeepConfig {
   }
 }
 
-/**
- * RFC-048: forward the configured subagent live-capture cadence to the
- * scheduler/runner. Reading the config here (instead of inside the runner)
- * keeps the runner pure and lets the operator flip `pollMs = 0` to disable
- * live polling without restarting the daemon — the next task pulls the
- * updated value.
- */
-function resolveSubagentLiveCapture(
-  configPath: string,
-): { pollMs: number; consecutiveFailureLimit: number } | undefined {
-  try {
-    const cfg = loadConfig(configPath)
-    return cfg.subagentLiveCapture
-  } catch {
-    return undefined
-  }
-}
+// RFC-159: `resolveSubagentLiveCapture` + the StartTaskDeps assembly
+// (`buildStartTaskDeps`) live in @/services/startTaskDeps, shared with the
+// scheduled-task scheduler so scheduled fires build deps identically to manual
+// launches (live config, per-call). Imported below.
 
 // RFC-103 T2 + RFC-108 T4: `resolveLaunchRuntimeConfig` (commit&push +
 // maxConcurrentNodes + per-node timeout floor) lives in
@@ -140,6 +128,10 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
     if (workflowId !== undefined && workflowId !== '') filters.workflowId = workflowId
     const repoPath = c.req.query('repo_path') ?? c.req.query('repoPath')
     if (repoPath !== undefined && repoPath !== '') filters.repoPath = repoPath
+    // RFC-159: a scheduled task's run history = its launched tasks.
+    const scheduledTaskId = c.req.query('scheduled_task_id') ?? c.req.query('scheduledTaskId')
+    if (scheduledTaskId !== undefined && scheduledTaskId !== '')
+      filters.scheduledTaskId = scheduledTaskId
     const limit = c.req.query('limit')
     if (limit !== undefined) {
       const n = Number(limit)
@@ -222,6 +214,19 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
         'RFC-099 removed per-node assignments; task members answer reviews/clarifications now',
       )
     }
+    // RFC-165 (F1): non-strict zod SILENTLY STRIPS retired path-mode keys, so
+    // a mixed body like {scratch:true, repoPath} would silently degrade to a
+    // scratch launch. Reject the raw keys before parsing (assignments-removed
+    // precedent above).
+    {
+      const retired = rejectRetiredStartTaskKeys(bodyJson)
+      if (retired !== null) {
+        throw new ValidationError(
+          'start-task-path-retired',
+          `RFC-165 retired path-mode launches; remove '${retired}' (use a file:// repoUrl for local repos)`,
+        )
+      }
+    }
     const parsed = StartTaskSchema.safeParse(bodyJson)
     if (!parsed.success) {
       throw new ValidationError('task-invalid', 'invalid task payload', {
@@ -229,31 +234,15 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
       })
     }
     const actor = actorOf(c)
-    // RFC-099 (D3): launching requires the WORKFLOW to be usable by the
-    // launcher; the referenced agent/skill/mcp/plugin closure is implicitly
-    // authorized. Invisible and missing produce the identical 404.
-    {
-      const wf = await getWorkflow(deps.db, parsed.data.workflowId)
-      if (wf === null || !(await canViewResource(deps.db, actor, 'workflow', wf))) {
-        throw new NotFoundError(
-          'workflow-not-found',
-          `workflow '${parsed.data.workflowId}' not found`,
-        )
-      }
-      // RFC-104: built-in workflows cannot be launched manually — only the
-      // fusion engine drives aw-skill-fusion, via the service layer (which is
-      // intentionally not guarded). 403 here, not 404 (the row IS visible).
-      assertNotBuiltin('workflow', wf)
-    }
-    const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
-    const task = await startTask(parsed.data, {
-      db: deps.db,
-      actorUserId: actor.user.id,
-      ...(opencodeCmd ? { opencodeCmd } : {}),
-      ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
-      // RFC-103 T2: commit&push + maxConcurrentNodes from settings (all entries).
-      ...resolveLaunchRuntimeConfig(deps.configPath),
-    })
+    // RFC-099 (D3) + RFC-104: the launcher must be able to use the WORKFLOW; the
+    // referenced agent/skill/mcp/plugin closure is implicitly authorized. Invisible
+    // and missing produce the identical 404; built-in → 403. Shared gate — the
+    // multipart path and scheduled-task fires enforce the exact same policy.
+    await assertWorkflowLaunchable(deps.db, actor, parsed.data.workflowId)
+    const task = await startTask(
+      parsed.data,
+      buildStartTaskDeps(deps.db, deps.configPath, actor.user.id, opencodeCmd),
+    )
     return c.json(task, 201)
   })
 
@@ -439,7 +428,7 @@ export function mountTaskRoutes(app: Hono, deps: AppDeps): void {
   // the version-TOCTOU / invalid / noop / wrapper-blocker / status gates.
   app.post('/api/tasks/:id/sync-workflow', async (c) => {
     const id = c.req.param('id')
-    await assertTaskWorkflowNotBuiltin(deps, id) // RFC-104: no manual exec of built-ins
+    await assertTaskSyncable(deps, id) // RFC-104 builtin 403 / RFC-165 host 422
     const task = await getTask(deps.db, id)
     if (task === null) throw new NotFoundError('task-not-found', `task '${id}' not found`)
     const workflow = await getWorkflow(deps.db, task.workflowId)
@@ -660,15 +649,65 @@ async function visibilityCheck(c: Context, deps: AppDeps): Promise<void> {
 }
 
 /**
- * RFC-104: refuse manual resume/retry of a task whose workflow is a built-in.
- * Built-in workflows cannot be manually executed; only the fusion engine drives
- * aw-skill-fusion, and its own continuation (clarify / review → resumeTask) plus
- * daemon recovery (lifecycleRepair) call the SERVICE directly, bypassing these
- * user-facing routes. A null task returns so the route's own 404 still fires.
+ * RFC-104 + RFC-165 (F13-r3): lifecycle guard by EXECUTION KIND.
+ * - 'agent' host tasks (RFC-165 single-agent launches): the synthesized
+ *   snapshot is a REAL DAG run by the normal engine, so generic resume /
+ *   node retry semantics hold → ALLOWED (this is the only carve-out from
+ *   the builtin-workflow lock; the __agent_host__ FK anchor is builtin).
+ * - TURN-ENGINE 'workgroup' host tasks (leader_worker / free_collab): generic
+ *   resume/retry does not apply (the engine adopts only pending rows;
+ *   recovery belongs to RFC-164's engine re-entry) → stays 403 via the
+ *   builtin host row, explicitly LOCKED by tests.
+ * - RFC-167 dynamic_workflow workgroup tasks (Codex impl-gate P1): every
+ *   phase IS generically recoverable (generating re-enters the generate pass
+ *   idempotently, awaiting_confirm re-parks, executing resumes the real DAG
+ *   through runScope) — without this carve-out an executing dynamic task that
+ *   failed or was interrupted had NO recovery endpoint at all → ALLOWED.
+ * - plain workflow tasks whose workflow is builtin (fusion): 403 — only the
+ *   fusion engine drives aw-skill-fusion; its own continuation + daemon
+ *   recovery call the SERVICE directly, bypassing these user routes.
+ * A null task returns so the route's own 404 still fires.
  */
 async function assertTaskWorkflowNotBuiltin(deps: AppDeps, taskId: string): Promise<void> {
   const task = await getTask(deps.db, taskId)
   if (task === null) return
+  if (taskExecutionKind(task) === 'agent') return
+  if (task.workgroupId != null && task.workgroupId !== '') {
+    const row = (
+      await deps.db
+        .select({ workgroupConfigJson: tasksTable.workgroupConfigJson })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, taskId))
+        .limit(1)
+    )[0]
+    if (
+      !isTurnEngineWorkgroupTask({
+        workgroupId: task.workgroupId,
+        workgroupConfigJson: row?.workgroupConfigJson ?? null,
+      })
+    ) {
+      return // dynamic_workflow — generically recoverable (see doc above)
+    }
+  }
+  const wf = await getWorkflow(deps.db, task.workflowId)
+  if (wf !== null) assertNotBuiltin('workflow', wf)
+}
+
+/**
+ * RFC-165 (F13-r3): host tasks (agent / workgroup) freeze a SYNTHESIZED
+ * snapshot — there is no authored workflow to sync from, so sync-workflow is
+ * uniformly 422 for them (vs. the 403 builtin lock, which is about manual
+ * execution). Plain builtin-workflow tasks (fusion) keep the 403.
+ */
+async function assertTaskSyncable(deps: AppDeps, taskId: string): Promise<void> {
+  const task = await getTask(deps.db, taskId)
+  if (task === null) return
+  if (taskExecutionKind(task) !== 'workflow') {
+    throw new ValidationError(
+      'task-host-sync-unsupported',
+      'agent/workgroup host tasks run a synthesized snapshot — there is no workflow to sync from',
+    )
+  }
   const wf = await getWorkflow(deps.db, task.workflowId)
   if (wf !== null) assertNotBuiltin('workflow', wf)
 }
@@ -777,6 +816,17 @@ async function handleMultipartTaskStart(
       'RFC-099 removed per-node assignments; task members answer reviews/clarifications now',
     )
   }
+  // RFC-165 (F1): same raw-key gate as the JSON route (multipart payloads
+  // are just as spoofable).
+  {
+    const retired = rejectRetiredStartTaskKeys(payloadJson)
+    if (retired !== null) {
+      throw new ValidationError(
+        'start-task-path-retired',
+        `RFC-165 retired path-mode launches; remove '${retired}' (use a file:// repoUrl for local repos)`,
+      )
+    }
+  }
   const parsed = StartTaskSchema.safeParse(payloadJson)
   if (!parsed.success) {
     throw new ValidationError('task-invalid', 'invalid task payload', {
@@ -787,12 +837,7 @@ async function handleMultipartTaskStart(
 
   // 2. Resolve workflow → extract upload input declarations. RFC-099 (D3):
   // the launcher must be able to use the workflow; invisible == missing.
-  const workflow = await getWorkflow(deps.db, startInput.workflowId)
-  if (workflow === null || !(await canViewResource(deps.db, actor, 'workflow', workflow))) {
-    throw new NotFoundError('workflow-not-found', `workflow '${startInput.workflowId}' not found`)
-  }
-  // RFC-104: built-in workflows cannot be launched manually (multipart path).
-  assertNotBuiltin('workflow', workflow)
+  const workflow = await assertWorkflowLaunchable(deps.db, actor, startInput.workflowId)
   const uploadDefs = collectUploadInputDefs(workflow.definition.inputs)
 
   // 3. Walk multipart fields, bind each file blob to its inputKey.
@@ -835,9 +880,8 @@ async function handleMultipartTaskStart(
     })
   }
 
-  // 4. Materialize the worktree first so we have a real path to write into.
+  // 4. Materialize the space first so we have a real path to write into.
   const appHome = Paths.root
-  const taskId = ulid()
   // RFC-066: multi-repo + multipart uploads is not supported in v1. The
   // upload pipeline writes files into a single worktree; with N sibling
   // worktrees there's no obvious target. Gate at the route so the caller
@@ -861,10 +905,10 @@ async function handleMultipartTaskStart(
   // triggers a clone. startTask validates again; validateWorkflowDef is a pure,
   // side-effect-free function so the double check is cheap.
   {
-    const validation = validateWorkflowDef(workflow.definition, {
-      agents: await listAgents(deps.db),
-      skills: await listSkills(deps.db),
-    })
+    const validation = validateWorkflowDef(
+      workflow.definition,
+      await buildWorkflowValidationContext(deps.db),
+    )
     if (!validation.ok) {
       const errors = validation.issues.filter((i) => (i.severity ?? 'error') === 'error')
       throw new ValidationError(
@@ -881,46 +925,21 @@ async function handleMultipartTaskStart(
   // these checks; limits are resolved once and reused at step 5.
   const limits = resolveUploadLimits(deps.configPath)
   validateUploadPlan({ defs: uploadDefs, files: uploadFiles, limits })
-  // RFC-107: resolve the (single) repo source BEFORE materializing the worktree.
-  // resolveRepoSourceSingle handles BOTH path mode (repoPath passes through) and
-  // URL mode (clones into the gitRepoCache and returns the local cache path) —
-  // so URL + upload now works. A URL clone/resolve failure throws the SAME
-  // structured error a JSON URL-mode launch would (parity); it propagates as a
-  // 4xx and no task row is created. The resolved source is threaded into
-  // startTask via `preResolvedSource` so the URL is resolved EXACTLY ONCE
-  // (RFC-107 D1-B) on both the success and the materialize-failure handoff.
-  // `normalizeStartTaskRepos` reuses startTask's own legacy/v2 body normalization
-  // (the multi-repo>1 case was rejected above, so [0] is the single repo).
-  const multipartSpec = normalizeStartTaskRepos(startInput)[0]!
-  const resolvedSource: ResolvedRepoSource = await resolveRepoSourceSingle(
-    multipartSpec,
-    startInput,
-    {
-      db: deps.db,
-      appHome,
-    },
-  )
-  // RFC-107 (Codex design-gate F2 / D5): thread the working branch + git identity
-  // into materializeWorktree exactly like the JSON single-repo path
-  // (services/task.ts) so an upload launch with a working branch actually checks
-  // it out instead of silently persisting workingBranch while running on the
-  // default `agent-workflow/{taskId}` isolation branch.
-  const wt = await materializeWorktree({
-    repoPath: resolvedSource.repoPath,
-    baseBranch: resolvedSource.baseBranch,
-    taskId,
-    appHome,
-    // Normalize null → undefined to match materializeWorktree's `workingBranch?:
-    // string` contract (null/unset → default isolation branch; a string → check
-    // it out). Same observable behavior as the JSON single-repo path.
-    workingBranch: startInput.workingBranch ?? undefined,
-    gitUserName: startInput.gitUserName ?? null,
-    gitUserEmail: startInput.gitUserEmail ?? null,
-  })
+  // RFC-165 (F3): resolve + materialize via the single tagged entry —
+  // `materializeSpace` handles URL mode (clone into gitRepoCache), path mode
+  // and scratch alike, resolving each source EXACTLY ONCE (RFC-107 D1-B is
+  // internal to it) and carrying materialize failure in its `earlyError` arm
+  // instead of throwing — so the failure handoff below mints ONE failed row
+  // without re-resolving or re-materializing. Working branch + git identity
+  // thread through exactly like the JSON path (RFC-107 F2/D5). A URL
+  // clone/resolve failure still throws the same structured 4xx a JSON launch
+  // would (no task row). scratch + uploads is a legal combination: the files
+  // land in the fresh scratch repo.
+  const space = await materializeSpace(startInput, { db: deps.db }, appHome)
   const subagentLiveCapture = resolveSubagentLiveCapture(deps.configPath)
-  if (wt.earlyError !== null) {
-    // Fall back to the original behavior: create a failed task row so the
-    // user sees the error. No files were written (worktree never existed).
+  if (space.earlyError !== null) {
+    // Create a failed task row so the user sees the error. No files were
+    // written (the workspace never fully existed; scratch already cleaned).
     const task = await startTask(startInput, {
       db: deps.db,
       actorUserId: actor.user.id,
@@ -928,9 +947,7 @@ async function handleMultipartTaskStart(
       ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
       // RFC-103 T2: multipart (upload) start must thread runtime config too.
       ...resolveLaunchRuntimeConfig(deps.configPath),
-      // RFC-107 (D1-B): reuse the route's already-resolved source so the
-      // materialize-failure path does NOT re-resolve (no second clone/fetch).
-      preResolvedSource: resolvedSource,
+      materializedSpace: space,
     })
     return task
   }
@@ -938,7 +955,7 @@ async function handleMultipartTaskStart(
   // 5. Write uploads + pack paths back into inputs[] (limits resolved at step 4).
   try {
     const result = await applyUploadsToWorktree({
-      worktreePath: wt.worktreePath,
+      worktreePath: space.worktreePath,
       defs: uploadDefs,
       files: uploadFiles,
       limits,
@@ -947,7 +964,7 @@ async function handleMultipartTaskStart(
     for (const [key, paths] of result.packedByKey.entries()) {
       inputsOut[key] = paths.join('\n')
     }
-    // 6. Hand off to startTask with the pre-created worktree.
+    // 6. Hand off to startTask with the materialized space (consumed verbatim).
     return await startTask(
       { ...startInput, inputs: inputsOut },
       {
@@ -957,21 +974,19 @@ async function handleMultipartTaskStart(
         ...(subagentLiveCapture !== undefined ? { subagentLiveCapture } : {}),
         // RFC-103 T2: multipart (upload) start must thread runtime config too.
         ...resolveLaunchRuntimeConfig(deps.configPath),
-        // RFC-107 (D1-B): reuse the route's already-resolved source so startTask
-        // does not resolve the URL a second time (resolve exactly once).
-        preResolvedSource: resolvedSource,
-        preCreatedWorktree: {
-          taskId,
-          worktreePath: wt.worktreePath,
-          branch: wt.branch,
-          baseCommit: wt.baseCommit,
-        },
+        materializedSpace: space,
       },
     )
   } catch (err) {
     // Upload write failed (limits, accept, or fs error). Throw a structured
-    // error; the worktree directory stays on disk but no task row is
-    // created, matching the "createWorktree failed" semantics.
+    // error; no task row is created. RFC-165 (F9): a scratch workspace has no
+    // anchor without a row — the launch flow owns its cleanup and releases
+    // the materialize lease. A repo worktree stays on disk (pre-existing
+    // "createWorktree failed" semantics; the orphan belongs to worktree GC).
+    if (space.kind === 'scratch' && space.worktreePath !== '') {
+      rmSync(space.worktreePath, { recursive: true, force: true })
+    }
+    materializingSpaces.delete(space.taskId)
     if (err instanceof ValidationError) throw err
     throw new ValidationError(
       'task-upload-failed',

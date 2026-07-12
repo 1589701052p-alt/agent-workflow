@@ -72,7 +72,6 @@ function ReposPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('repos.title')}</h1>
-          <p className="page__hint">{t('repos.hint')}</p>
         </div>
         <button
           ref={batchImportTriggerRef}

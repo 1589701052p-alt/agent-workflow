@@ -65,6 +65,21 @@ export function isInlineMarkdownListReviewInput(kind: string): boolean {
 }
 
 /**
+ * RFC-149: the two values `reviewApprovedPortName` can return, exported so the
+ * runtime publish sites (backend services/review.ts) reference the SAME oracle
+ * constants instead of re-hardcoding the literals — the publish side used to
+ * re-derive these two names from the archived data shape, bypassing the
+ * oracle below.
+ */
+export const REVIEW_APPROVED_PORT_SINGLE = 'approved_doc' as const
+export const REVIEW_APPROVED_PORT_MULTI = 'accepted' as const
+/**
+ * RFC-149: the metadata port every review node publishes alongside its
+ * approved-document port (nodePorts.ts declaration + review.ts publish sites).
+ */
+export const REVIEW_APPROVAL_META_PORT = 'approval_meta' as const
+
+/**
  * RFC-079/081: the downstream output port name a review node publishes for the
  * curated/approved document(s). Multi-document review (inputSource is a
  * `list<markdownish>` port) publishes `accepted` (the curated subset, kind
@@ -82,7 +97,9 @@ export function isInlineMarkdownListReviewInput(kind: string): boolean {
  * against a multi-doc review node.
  */
 export function reviewApprovedPortName(inputKind: string | undefined): 'accepted' | 'approved_doc' {
-  return inputKind !== undefined && isMultiDocReviewInput(inputKind) ? 'accepted' : 'approved_doc'
+  return inputKind !== undefined && isMultiDocReviewInput(inputKind)
+    ? REVIEW_APPROVED_PORT_MULTI
+    : REVIEW_APPROVED_PORT_SINGLE
 }
 
 // -----------------------------------------------------------------------------

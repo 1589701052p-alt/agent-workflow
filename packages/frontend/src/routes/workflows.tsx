@@ -1,17 +1,24 @@
 // Workflows list. Each row links into the xyflow editor at /workflows/$id.
+// Creation is a QUICK-CREATE dialog (name + description only — the definition
+// starts empty; all canvas editing happens on the editor page). Mirrors the
+// RFC-164 workgroup list-page pattern.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, createRoute } from '@tanstack/react-router'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link, createRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Workflow } from '@agent-workflow/shared'
-import { api, ApiError } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import type { CreateWorkflow, Workflow } from '@agent-workflow/shared'
+import { api, ApiError, extractErrorBody } from '@/api/client'
+import { useResourceList } from '@/hooks/useResourceList'
+import { describeApiError } from '@/i18n'
 import { getBaseUrl, getToken } from '@/stores/auth'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { QuickCreateDialog } from '@/components/QuickCreateDialog'
+import { ResourceNameCell } from '@/components/ResourceNameCell'
+import { buildQuickCreateWorkflowPayload } from '@/lib/workflow-form'
 import { Route as RootRoute } from './__root'
 
 export const Route = createRoute({
@@ -20,21 +27,65 @@ export const Route = createRoute({
   component: WorkflowsPage,
 })
 
+// Retired creation URL — the full-page creator is gone, but old bookmarks /
+// browser history may still open it. Redirect to the list page (the dialog
+// lives there); registered before '/workflows/$id' so "new" never resolves
+// as a workflow id.
+export const NewRedirectRoute = createRoute({
+  getParentRoute: () => RootRoute,
+  path: '/workflows/new',
+  beforeLoad: () => {
+    throw redirect({ to: '/workflows' })
+  },
+})
+
 function WorkflowsPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Workflow[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  // The YAML import flow below stays page-specific.
+  const { data, isLoading, error, del, owners } = useResourceList<Workflow>({
     queryKey: ['workflows'],
-    queryFn: ({ signal }) => api.get('/api/workflows', undefined, signal),
+    endpoint: '/api/workflows',
+    deleteBy: 'id',
   })
 
-  const del = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/workflows/${encodeURIComponent(id)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
+  // Quick create — name + description only; navigate straight into the
+  // editor (where the empty definition gets built out) on success.
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createDescription, setCreateDescription] = useState('')
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null)
+  // Mirrors createOpen for the mutation callback: dismissing the dialog while
+  // a slow POST is in flight must NOT yank the user into the editor when the
+  // response lands later (the row still appears via the list invalidation).
+  const createOpenRef = useRef(false)
+  function setCreateOpenTracked(open: boolean): void {
+    createOpenRef.current = open
+    setCreateOpen(open)
+  }
+  const create = useMutation({
+    mutationFn: (body: CreateWorkflow): Promise<Workflow> => api.post('/api/workflows', body),
+    onSuccess: (wf) => {
+      void qc.invalidateQueries({ queryKey: ['workflows'] })
+      qc.setQueryData(['workflows', wf.id], wf)
+      if (!createOpenRef.current) return
+      setCreateOpenTracked(false)
+      navigate({ to: '/workflows/$id', params: { id: wf.id } })
+    },
+  })
+  const builtCreate = buildQuickCreateWorkflowPayload({
+    name: createName,
+    description: createDescription,
   })
 
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
+  function openCreate(): void {
+    setCreateName('')
+    setCreateDescription('')
+    create.reset()
+    setCreateOpenTracked(true)
+  }
 
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
@@ -60,7 +111,9 @@ function WorkflowsPage() {
           setImportMsg(t('workflows.importCanceled'))
         }
       } else {
-        setImportMsg(err instanceof Error ? err.message : String(err))
+        // describeApiError maps coded failures (e.g. workflow-name-invalid on
+        // a legacy free-form name) to the localized remediation text.
+        setImportMsg(describeApiError(err))
       }
     }
   }
@@ -70,7 +123,6 @@ function WorkflowsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('workflows.title')}</h1>
-          <p className="page__hint">{t('workflows.hint')}</p>
         </div>
         <div className="page__actions">
           <input
@@ -87,9 +139,15 @@ function WorkflowsPage() {
           <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
             {t('workflows.importButton')}
           </button>
-          <Link to="/workflows/new" className="btn btn--primary">
+          <button
+            type="button"
+            className="btn btn--primary"
+            ref={createTriggerRef}
+            onClick={openCreate}
+            data-testid="workflow-new-button"
+          >
             {t('workflows.newButton')}
-          </Link>
+          </button>
         </div>
       </header>
       {importMsg !== null && <div className="info-box info-box--muted">{importMsg}</div>}
@@ -115,19 +173,17 @@ function WorkflowsPage() {
           <tbody>
             {data.map((w) => (
               <tr key={w.id}>
-                <td>
-                  <Link to="/workflows/$id" params={{ id: w.id }} className="data-table__link">
-                    {w.name}
-                  </Link>
-                  {w.visibility === 'private' && (
-                    <span className="chip chip--tight">{t('acl.privateChip')}</span>
-                  )}
-                  {w.ownerUserId != null && owners.get(w.ownerUserId) !== undefined && (
-                    <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
-                      {owners.get(w.ownerUserId)?.displayName}
-                    </span>
-                  )}
-                </td>
+                {/* RFC-151 PR-3: the shared cell adds data-table__nowrap (the
+                    other resource lists already had it) — long workflow names
+                    now stay single-line like every sibling list. */}
+                <ResourceNameCell
+                  to="/workflows/$id"
+                  params={{ id: w.id }}
+                  name={w.name}
+                  visibility={w.visibility}
+                  ownerUserId={w.ownerUserId}
+                  owners={owners}
+                />
                 <td className="data-table__muted">v{w.version}</td>
                 <td className="data-table__muted">
                   <code>{w.id}</code>
@@ -138,8 +194,8 @@ function WorkflowsPage() {
                   </Link>
                   <ConfirmButton
                     label={t('common.delete')}
-                    onConfirm={() => del.mutateAsync(w.id)}
-                    danger
+                    onConfirm={() => del.mutateAsync(w)}
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />
@@ -149,11 +205,47 @@ function WorkflowsPage() {
           </tbody>
         </table>
       )}
+
+      <QuickCreateDialog
+        open={createOpen}
+        onClose={() => setCreateOpenTracked(false)}
+        title={t('editor.newTitle')}
+        createLabel={t('workflows.createButton')}
+        nameLabel={t('editor.fieldName')}
+        nameHint={t('workflows.fieldNameHint')}
+        descriptionLabel={t('editor.fieldDescription')}
+        name={createName}
+        onNameChange={setCreateName}
+        description={createDescription}
+        onDescriptionChange={setCreateDescription}
+        nameError={
+          createName !== '' && !builtCreate.ok && builtCreate.errors.name !== undefined
+            ? t(builtCreate.errors.name)
+            : undefined
+        }
+        canCreate={builtCreate.ok}
+        pending={create.isPending}
+        submitError={
+          create.error !== null && create.error !== undefined
+            ? describeApiError(create.error)
+            : undefined
+        }
+        onCreate={() => {
+          if (builtCreate.ok) create.mutate(builtCreate.payload)
+        }}
+        triggerRef={createTriggerRef}
+        testidPrefix="workflow"
+      />
     </div>
   )
 }
 
-async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'): Promise<void> {
+/** Exported for tests — hand-rolled fetch (text/yaml body + query param), so
+ *  it must share the api client's FLAT/nested error decoding. */
+export async function postYaml(
+  yaml: string,
+  onConflict: 'fail' | 'overwrite' | 'new',
+): Promise<void> {
   const base = getBaseUrl()
   const token = getToken()
   const url = new URL('/api/workflows/import', base)
@@ -162,13 +254,10 @@ async function postYaml(yaml: string, onConflict: 'fail' | 'overwrite' | 'new'):
   if (token !== null) headers.Authorization = `Bearer ${token}`
   const res = await fetch(url.toString(), { method: 'POST', headers, body: yaml })
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as {
-      error?: { code: string; message: string }
-    } | null
-    const err = body?.error ?? {
-      code: `http-${res.status}`,
-      message: res.statusText || 'request failed',
-    }
-    throw new ApiError(res.status, err.code, err.message)
+    // Shared decoder: the daemon emits FLAT {ok:false, code, message} — the
+    // old nested-only parse here degraded every import failure (including
+    // the 409 conflict that drives the overwrite/new prompt) to `http-<n>`.
+    const err = extractErrorBody(await res.json().catch(() => null), res)
+    throw new ApiError(res.status, err.code, err.message, err.details)
   }
 }

@@ -30,7 +30,12 @@ import { dbTxSync } from '@/db/txSync'
 import { abandonSupersededMergeStates } from '@/services/lifecycle'
 import type { RuntimeKind } from '@/services/runtime'
 import { isKnownRuntimeKind } from '@/services/runtime'
-import { resolveAgentRuntime, type RuntimeProfile } from '@/services/runtimeRegistry'
+import {
+  defaultConfigDirProfile,
+  resolveAgentRuntime,
+  type RuntimeProfile,
+} from '@/services/runtimeRegistry'
+import type { RuntimeConfigDirProfile } from '@agent-workflow/shared'
 import { createLogger } from '@/util/log'
 
 /**
@@ -265,6 +270,15 @@ export interface FrozenRuntime {
   binary: string | null
   /** RFC-113 (Codex P1-2): the execution params (model/variant/...) frozen too. */
   params: RuntimeProfile
+  /**
+   * RFC-154: the config-dir injection profile frozen too (sibling of `params`,
+   * NOT inside it — it is a per-node-run property, not per-agent; dependents
+   * share the root's config dir). Serialized as the `__configDir` key inside
+   * `runtime_params_json` (no extra column); resume/retry MUST read this
+   * snapshot, not the mutable runtimes row — claude especially: the session
+   * transcript lives under the frozen dir, re-resolving would lose it.
+   */
+  configDir: RuntimeConfigDirProfile
 }
 
 /** Parse the frozen `runtime_params_json`, tolerating legacy NULL / bad JSON. */
@@ -284,6 +298,36 @@ function parseFrozenParams(json: string | null | undefined): RuntimeProfile {
     }
   }
   return { model: null, variant: null, temperature: null, steps: null, maxSteps: null }
+}
+
+/**
+ * RFC-154: extract the frozen `__configDir` from `runtime_params_json`. Legacy
+ * rows (pre-RFC-154, no key) and bad JSON fall back to the protocol default —
+ * byte-equivalent to their pre-RFC-154 behavior. Downgrade-safe the other way:
+ * old parseFrozenParams whitelists its five keys, so it ignores `__configDir`.
+ */
+function parseFrozenConfigDir(
+  json: string | null | undefined,
+  protocol: RuntimeKind,
+): RuntimeConfigDirProfile {
+  if (json != null && json.length > 0) {
+    try {
+      const p = JSON.parse(json) as { __configDir?: Partial<RuntimeConfigDirProfile> }
+      const cd = p.__configDir
+      if (
+        cd !== undefined &&
+        typeof cd.env === 'string' &&
+        cd.env.length > 0 &&
+        typeof cd.name === 'string' &&
+        cd.name.length > 0
+      ) {
+        return { env: cd.env, name: cd.name }
+      }
+    } catch {
+      /* fall through to default */
+    }
+  }
+  return defaultConfigDirProfile(protocol)
 }
 
 /**
@@ -327,6 +371,7 @@ export async function resolveFrozenRuntime(
       protocol: row.runtime,
       binary: row.runtimeBinary ?? null,
       params: parseFrozenParams(row.runtimeParamsJson),
+      configDir: parseFrozenConfigDir(row.runtimeParamsJson, row.runtime),
     }
   }
   // Codex impl-gate P2-2: a NON-null stored value that isn't a known protocol
@@ -340,7 +385,8 @@ export async function resolveFrozenRuntime(
   }
   // RFC-112 P1: a resuming row inherits the session-owner's frozen snapshot so the
   // session id + (protocol, binary, params) stay consumed together across the new
-  // row. RFC-113: params are part of the snapshot.
+  // row. RFC-113: params are part of the snapshot. RFC-154: so is configDir —
+  // the resumed session's transcript/skills live under the frozen dir.
   const frozen: FrozenRuntime =
     inheritFrom != null
       ? inheritFrom
@@ -354,13 +400,16 @@ export async function resolveFrozenRuntime(
             steps: r.steps,
             maxSteps: r.maxSteps,
           },
+          configDir: r.configDir,
         }))
   await db
     .update(nodeRuns)
     .set({
       runtime: frozen.protocol,
       runtimeBinary: frozen.binary,
-      runtimeParamsJson: JSON.stringify(frozen.params),
+      // RFC-154: __configDir rides inside the same JSON column (no new column);
+      // parseFrozenParams whitelists its keys so it never leaks into params.
+      runtimeParamsJson: JSON.stringify({ ...frozen.params, __configDir: frozen.configDir }),
     })
     .where(eq(nodeRuns.id, nodeRunId))
   return frozen
@@ -392,6 +441,7 @@ export async function frozenRuntimeOfSession(
       protocol: row.runtime,
       binary: row.runtimeBinary ?? null,
       params: parseFrozenParams(row.runtimeParamsJson),
+      configDir: parseFrozenConfigDir(row.runtimeParamsJson, row.runtime),
     }
   }
   return null

@@ -76,7 +76,6 @@ function twoQuestionSelfRound(): ClarifyRound {
     sessionMode: null,
     designerRunTriggeredAt: null,
     abandonedAt: null,
-    questionScopes: null,
     createdAt: 0,
     answeredAt: null,
     answeredBy: null,

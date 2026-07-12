@@ -40,7 +40,7 @@ import {
   buildSiblingOutputsBlock,
   submitReviewDecision,
 } from '../src/services/review'
-import { startTask } from '../src/services/task'
+import { startTaskWithLocalRepo } from '../src/services/task'
 import { isWindows, stubCmd } from './helpers/stub-runtime'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -205,7 +205,7 @@ async function buildHarness(opts: HarnessOpts): Promise<Harness> {
 
   process.env.AGENT_WORKFLOW_HOME = appHome
 
-  const task = await startTask(
+  const task = await startTaskWithLocalRepo(
     {
       workflowId: wf.id,
       name: 'fixture-task',

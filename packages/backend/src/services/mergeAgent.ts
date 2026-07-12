@@ -39,6 +39,7 @@ export function buildMergeAgent(): Agent {
     name: MERGE_AGENT_NAME,
     description: 'Framework built-in: resolve git merge conflicts (RFC-130).',
     outputs: [MERGE_RESOLUTION_PORT],
+    inputs: [], // RFC-166
     syncOutputsOnIterate: true,
     permission: {},
     skills: [],

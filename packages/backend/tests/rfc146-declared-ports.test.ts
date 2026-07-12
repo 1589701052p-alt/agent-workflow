@@ -180,6 +180,16 @@ describe('declaredPorts — 逐 kind 表值锁', () => {
     expect(d).toEqual({ dataInputs: [], dataOutputs: [], systemInputs: [], systemOutputs: [] })
   })
 
+  test('继承键不索引派生表（constructor/toString/__proto__ ⇒ 全空，不崩溃）', () => {
+    // Codex 实现门 medium 同型：`in`/裸索引会经原型链把 'constructor' 解析成
+    // Function 并当 deriver 调用。Object.hasOwn 守门后一律走未知 kind 路径。
+    for (const evil of ['constructor', 'toString', '__proto__']) {
+      const node = { id: `evil-${evil}`, kind: evil }
+      const d = declaredPorts(node as never, defOf([node]), new Map())
+      expect(d).toEqual({ dataInputs: [], dataOutputs: [], systemInputs: [], systemOutputs: [] })
+    }
+  })
+
   test('穷举保障：每个 NODE_KIND 都能取到声明（satisfies 之外的运行时冒烟）', () => {
     for (const kind of NODE_KIND) {
       const node = { id: `n-${kind}`, kind, nodeIds: [], inputs: [], ports: [] }

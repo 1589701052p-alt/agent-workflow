@@ -1,6 +1,7 @@
 // Renderer for agent-single nodes. (RFC-060 PR-E removed agent-multi.)
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { PortHandles } from './PortHandles'
 import { QuestionBadge } from './QuestionBadge'
@@ -21,7 +22,9 @@ export function AgentNode({ data, selected }: Props) {
     >
       <QuestionBadge data={data} />
       <div className="canvas-node__header">
-        <span className="canvas-node__kind">⚙ {t('agentNode.label')}</span>
+        <span className="canvas-node__kind">
+          {NODE_GLYPHS['agent-single']} {t('agentNode.label')}
+        </span>
         <span className="canvas-node__title">{data.title}</span>
       </div>
       <div className="canvas-node__id">{data.nodeId}</div>

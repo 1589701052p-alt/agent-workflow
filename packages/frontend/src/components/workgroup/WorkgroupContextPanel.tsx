@@ -1,0 +1,416 @@
+// RFC-168 T1/T3/T4 — the detail page's right-hand CONTEXT PANEL. Three states
+// (design §1.3):
+//   config — the workgroup config form (draft + header Save, unchanged flow)
+//   member — the selected member's editor: alias / role saved via immediate
+//            PUT, set-leader / remove, read-only capability card + a jump to
+//            /agents/$name (D2: "编辑 agent" = editing the MEMBER; the agent
+//            definition itself is edited on its own page)
+//   add    — the add-member form (same MemberFields the mid-run dialogs use)
+//
+// Focus contract (design §6, F8): on entering member/add the first input (or
+// the title, after an add-success handoff) receives focus; Esc is handled on
+// the panel container — not document — so it never races a Dialog (F9).
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Link } from '@tanstack/react-router'
+import type { Workgroup } from '@agent-workflow/shared'
+import { AgentCapabilityCard } from '@/components/agent/AgentCapabilityCard'
+import { ConfirmButton } from '@/components/ConfirmButton'
+import { Field, TextInput } from '@/components/Form'
+import { StatusChip } from '@/components/StatusChip'
+import { useAgentsList } from '@/hooks/useAgentsList'
+import { useUserLookup } from '@/hooks/useUserLookup'
+import { describeApiError } from '@/i18n'
+import {
+  validateMemberDraft,
+  workgroupToMembersState,
+  type WorkgroupConfigDraft,
+  type WorkgroupMemberRowState,
+} from '@/lib/workgroup-form'
+import {
+  AgentMemberFields,
+  HumanMemberFields,
+  useAgentMemberDraft,
+  useHumanMemberDraft,
+} from './MemberFields'
+import { WorkgroupForm } from './WorkgroupForm'
+
+export type WorkgroupPanelState =
+  | { kind: 'config' }
+  | { kind: 'member'; key: string }
+  | { kind: 'add'; memberType: 'agent' | 'human' }
+
+export interface WorkgroupContextPanelProps {
+  group: Workgroup
+  /** Effective state — the page already collapsed dangling member keys. */
+  panel: WorkgroupPanelState
+  /** Panel-mount focus target (F8): 'field' on card activation, 'title'
+   *  after an add-success handoff (the user just typed the alias —
+   *  re-focusing it would be odd), 'none' after save/set-leader re-selection
+   *  (the body remounts under the regenerated member id; stealing focus from
+   *  the clicked button would be jarring). */
+  focusOn: 'field' | 'title' | 'none'
+  applying: boolean
+  applyError: unknown
+  onClose: () => void
+  configDraft: WorkgroupConfigDraft | undefined
+  configErrors: Record<string, string>
+  onConfigChange: (d: WorkgroupConfigDraft) => void
+  onSaveMember: (key: string, patch: { displayName: string; roleDesc: string }) => Promise<boolean>
+  onSetLeader: (key: string) => void
+  onRemoveMember: (key: string) => Promise<void>
+  onAddMember: (row: WorkgroupMemberRowState) => Promise<void>
+}
+
+/** CONTENT identity of a member row. The backend regenerates member IDs on
+ *  every full-replace PUT (Codex impl-gate P1/P2): keying the editor body and
+ *  the focus effect on the server id would remount the body — discarding the
+ *  unsaved alias/role draft — after ANY sibling write (config save, set-leader).
+ *  Content identity survives id churn; it only changes when the selection
+ *  really moves to a different member (or the alias was SAVED — a remount to
+ *  the fresh server row is then lossless). displayName participates because
+ *  the same agent may join a group twice under different aliases. */
+function memberIdentity(row: WorkgroupMemberRowState): string {
+  return `${row.memberType}:${row.memberType === 'agent' ? row.agentName : row.userId}:${row.displayName}`
+}
+
+export function WorkgroupContextPanel(props: WorkgroupContextPanelProps) {
+  const { t } = useTranslation()
+  const { panel } = props
+  const state = useMemo(() => workgroupToMembersState(props.group), [props.group])
+  const row =
+    panel.kind === 'member' ? (state.members.find((m) => m.key === panel.key) ?? null) : null
+
+  const titleRef = useRef<HTMLHeadingElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+
+  // Focus on entering member/add (or switching between members) — keyed by
+  // the panel CONTENT identity so re-renders inside one state (including
+  // server-id regeneration on sibling writes) never re-steal focus.
+  const identity =
+    panel.kind === 'member'
+      ? `member:${row === null ? 'gone' : memberIdentity(row)}`
+      : panel.kind === 'add'
+        ? `add:${panel.memberType}`
+        : 'config'
+  useEffect(() => {
+    if (panel.kind === 'config' || props.focusOn === 'none') return
+    if (props.focusOn === 'title') {
+      titleRef.current?.focus()
+      return
+    }
+    bodyRef.current
+      ?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), textarea')
+      ?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity])
+
+  const title =
+    panel.kind === 'config'
+      ? t('workgroups.panelConfigTitle')
+      : panel.kind === 'member'
+        ? (row?.displayName ?? '')
+        : panel.memberType === 'agent'
+          ? t('workgroups.addAgentTitle')
+          : t('workgroups.addHumanTitle')
+
+  return (
+    <aside
+      id="workgroup-context-panel"
+      className="workgroup-panel"
+      aria-label={t('workgroups.panelAria')}
+      data-testid="workgroup-context-panel"
+      onKeyDown={(e) => {
+        // F9 — panel-scoped Esc: fires only while focus lives INSIDE the
+        // panel, so Dialog-layer Esc (rename / delete confirm, focus-trapped
+        // elsewhere) never lands here.
+        if (e.key === 'Escape' && panel.kind !== 'config') {
+          e.stopPropagation()
+          props.onClose()
+        }
+      }}
+    >
+      <div className="workgroup-panel__head">
+        <h2 className="workgroup-panel__title" tabIndex={-1} ref={titleRef}>
+          {title}
+        </h2>
+        {panel.kind !== 'config' && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={props.onClose}
+            data-testid="workgroup-panel-close"
+          >
+            {t('workgroups.panelClose')}
+          </button>
+        )}
+      </div>
+
+      <div className="workgroup-panel__body" ref={bodyRef}>
+        {panel.kind === 'config' && props.configDraft !== undefined && (
+          <WorkgroupForm
+            value={props.configDraft}
+            onChange={props.onConfigChange}
+            errors={props.configErrors}
+          />
+        )}
+
+        {panel.kind === 'member' && row !== null && (
+          <MemberBody
+            key={memberIdentity(row)}
+            row={row}
+            others={state.members.filter((m) => m.key !== row.key)}
+            isLeader={state.leaderKey === row.key}
+            showLeaderControls={props.group.mode === 'leader_worker'}
+            applying={props.applying}
+            applyError={props.applyError}
+            onSave={(patch) => props.onSaveMember(row.key, patch)}
+            onSetLeader={() => props.onSetLeader(row.key)}
+            onRemove={() => props.onRemoveMember(row.key)}
+          />
+        )}
+
+        {panel.kind === 'add' &&
+          (panel.memberType === 'agent' ? (
+            <AddAgentBody
+              key="add-agent"
+              others={state.members}
+              applying={props.applying}
+              applyError={props.applyError}
+              onSubmit={props.onAddMember}
+              onCancel={props.onClose}
+            />
+          ) : (
+            <AddHumanBody
+              key="add-human"
+              others={state.members}
+              applying={props.applying}
+              applyError={props.applyError}
+              onSubmit={props.onAddMember}
+              onCancel={props.onClose}
+            />
+          ))}
+      </div>
+    </aside>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// member state — alias/role editor + actions + read-only capability card
+// ---------------------------------------------------------------------------
+
+function MemberBody(props: {
+  row: WorkgroupMemberRowState
+  others: ReadonlyArray<Pick<WorkgroupMemberRowState, 'displayName'>>
+  isLeader: boolean
+  showLeaderControls: boolean
+  applying: boolean
+  applyError: unknown
+  onSave: (patch: { displayName: string; roleDesc: string }) => Promise<boolean>
+  onSetLeader: () => void
+  onRemove: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const { row } = props
+  const [displayName, setDisplayName] = useState(row.displayName)
+  const [roleDesc, setRoleDesc] = useState(row.roleDesc)
+
+  const errors = validateMemberDraft({ ...row, displayName }, props.others)
+  const invalid = Object.keys(errors).length > 0
+  const dirty = displayName !== row.displayName || roleDesc !== row.roleDesc
+
+  const agentsList = useAgentsList({ enabled: row.memberType === 'agent' })
+  const agent =
+    row.memberType === 'agent' ? agentsList.agents.find((a) => a.name === row.agentName) : undefined
+  const users = useUserLookup([row.memberType === 'human' ? row.userId : null])
+  const reference =
+    row.memberType === 'agent' ? row.agentName : (users.get(row.userId)?.displayName ?? row.userId)
+
+  return (
+    <div className="workgroup-panel__member">
+      <div className="workgroup-panel__meta">
+        <span className="chip chip--tight">
+          {row.memberType === 'agent'
+            ? t('workgroups.memberTypeAgent')
+            : t('workgroups.memberTypeHuman')}
+        </span>
+        {props.isLeader && props.showLeaderControls && (
+          <StatusChip kind="info" size="sm" data-testid="workgroup-leader-badge">
+            {t('workgroups.leaderBadge')}
+          </StatusChip>
+        )}
+        <span className="workgroup-card__ref" title={reference}>
+          {reference}
+        </span>
+      </div>
+
+      <Field
+        label={t('workgroups.memberFieldDisplayName')}
+        required
+        hint={t('workgroups.memberDisplayNamePlaceholder')}
+        error={errors.displayName !== undefined ? t(errors.displayName) : undefined}
+      >
+        <TextInput
+          value={displayName}
+          onChange={setDisplayName}
+          maxLength={64}
+          data-testid="workgroup-member-displayname-input"
+        />
+      </Field>
+      <Field label={t('workgroups.memberFieldRole')} hint={t('workgroups.memberRolePlaceholder')}>
+        <TextInput
+          value={roleDesc}
+          onChange={setRoleDesc}
+          maxLength={2048}
+          data-testid="workgroup-member-role-input"
+        />
+      </Field>
+
+      <div className="workgroup-panel__actions">
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          disabled={invalid || !dirty || props.applying}
+          onClick={() => void props.onSave({ displayName, roleDesc })}
+          data-testid="workgroup-member-save"
+        >
+          {props.applying ? t('common.saving') : t('workgroups.memberSave')}
+        </button>
+        {props.showLeaderControls && row.memberType === 'agent' && !props.isLeader && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            disabled={props.applying}
+            onClick={props.onSetLeader}
+            data-testid={`workgroup-set-leader-${row.displayName}`}
+          >
+            {t('workgroups.setLeaderButton')}
+          </button>
+        )}
+        <ConfirmButton
+          label={t('workgroups.memberRemove')}
+          onConfirm={props.onRemove}
+          variant="danger"
+          size="sm"
+          disabled={props.applying}
+        />
+      </div>
+
+      {props.applyError != null && (
+        <div className="form-actions">
+          <span className="form-actions__error" data-testid="workgroup-panel-error">
+            {describeApiError(props.applyError)}
+          </span>
+        </div>
+      )}
+
+      {row.memberType === 'agent' && (
+        <div className="workgroup-panel__capability">
+          {agent !== undefined ? (
+            <AgentCapabilityCard agent={agent} />
+          ) : agentsList.loaded ? (
+            <StatusChip kind="warn" size="sm" data-testid="workgroup-panel-agent-missing">
+              {t('workgroups.agentMissing')}
+            </StatusChip>
+          ) : null}
+          {agent !== undefined && (
+            <Link
+              to="/agents/$name"
+              params={{ name: row.agentName }}
+              className="workgroup-panel__agent-link"
+              data-testid="workgroup-edit-agent-link"
+            >
+              {t('workgroups.editAgentDefinition')}
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// add state — same MemberFields the mid-run dialog shells use
+// ---------------------------------------------------------------------------
+
+interface AddBodyProps {
+  others: ReadonlyArray<Pick<WorkgroupMemberRowState, 'displayName'>>
+  applying: boolean
+  applyError: unknown
+  onSubmit: (row: WorkgroupMemberRowState) => Promise<void>
+  onCancel: () => void
+}
+
+function AddActions(props: {
+  confirmTestid: string
+  invalid: boolean
+  applying: boolean
+  applyError: unknown
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <div className="workgroup-panel__actions">
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          disabled={props.invalid || props.applying}
+          onClick={props.onConfirm}
+          data-testid={props.confirmTestid}
+        >
+          {t('workgroups.addMemberConfirm')}
+        </button>
+        <button type="button" className="btn btn--sm" onClick={props.onCancel}>
+          {t('common.cancel')}
+        </button>
+      </div>
+      {props.applyError != null && (
+        <div className="form-actions">
+          <span className="form-actions__error" data-testid="workgroup-panel-error">
+            {describeApiError(props.applyError)}
+          </span>
+        </div>
+      )}
+    </>
+  )
+}
+
+function AddAgentBody(props: AddBodyProps) {
+  const draft = useAgentMemberDraft(props.others)
+  return (
+    <div className="workgroup-panel__add" data-testid="workgroup-panel-add">
+      <AgentMemberFields draft={draft} />
+      <AddActions
+        confirmTestid="workgroup-add-agent-confirm"
+        invalid={draft.invalid}
+        applying={props.applying}
+        applyError={props.applyError}
+        onConfirm={() => void props.onSubmit(draft.buildRow())}
+        onCancel={props.onCancel}
+      />
+    </div>
+  )
+}
+
+function AddHumanBody(props: AddBodyProps) {
+  const draft = useHumanMemberDraft(props.others)
+  return (
+    <div className="workgroup-panel__add" data-testid="workgroup-panel-add">
+      <HumanMemberFields draft={draft} />
+      <AddActions
+        confirmTestid="workgroup-add-human-confirm"
+        invalid={draft.invalid}
+        applying={props.applying}
+        applyError={props.applyError}
+        onConfirm={() => {
+          const row = draft.buildRow()
+          if (row !== null) void props.onSubmit(row)
+        }}
+        onCancel={props.onCancel}
+      />
+    </div>
+  )
+}

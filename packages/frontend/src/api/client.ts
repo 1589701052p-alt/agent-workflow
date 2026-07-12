@@ -79,8 +79,12 @@ export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Pr
  * code/message from the user (most painfully for RFC-024 clone failures whose
  * stderr is the only useful debugging signal). Now we recognize both shapes
  * so any future endpoint that wraps in `{ error: ... }` still parses.
+ *
+ * Exported for the few hand-rolled fetches that can't go through `api.*`
+ * (e.g. the YAML import POST in routes/workflows.tsx) — they had re-grown
+ * the exact nested-only bug this function fixed.
  */
-function extractErrorBody(
+export function extractErrorBody(
   payload: unknown,
   res: Response,
 ): { code: string; message: string; details?: unknown } {

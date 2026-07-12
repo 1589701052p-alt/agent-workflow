@@ -142,7 +142,11 @@ describe('RFC-120 /api/tasks/:id/questions routes', () => {
     expect(after[0]!.phase).toBe('done')
   })
 
-  test('reassign requires targetNodeId (422) and overrides on success', async () => {
+  // RFC-162: a cross round reconciles to ONE questioner entry (designer-by-default deleted).
+  // Reassigning the asker UPSTREAM ADDS a `designer` handler row (route returns action
+  // 'added-designer'); reassigning it again re-targets that handler. The 422 (missing targetNodeId)
+  // is checked before the service runs, so it fires on any entry.
+  test('reassign requires targetNodeId (422); reassign-to-upstream adds + re-targets a designer handler', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const app = makeApp(db)
     await seedTask(db, 'task-b')
@@ -169,31 +173,45 @@ describe('RFC-120 /api/tasks/:id/questions routes', () => {
           ],
         },
       ]),
-      questionScopesJson: JSON.stringify({ q1: 'designer' }),
       status: 'answered',
     })
     const list = (await (
       await app.request('/api/tasks/task-b/questions', { headers: AUTH })
     ).json()) as Array<{ id: string; roleKind: string }>
-    const designer = list.find((e) => e.roleKind === 'designer')!
+    const questioner = list.find((e) => e.roleKind === 'questioner')!
 
-    const bad = await app.request(`/api/tasks/task-b/questions/${designer.id}/reassign`, {
+    const bad = await app.request(`/api/tasks/task-b/questions/${questioner.id}/reassign`, {
       method: 'POST',
       headers: { ...AUTH, 'content-type': 'application/json' },
       body: JSON.stringify({}),
     })
     expect(bad.status).toBe(422)
 
-    const ok = await app.request(`/api/tasks/task-b/questions/${designer.id}/reassign`, {
+    // reassign the asker UPSTREAM to 'coder' → ADDS a designer handler; the route returns the action.
+    const ok = await app.request(`/api/tasks/task-b/questions/${questioner.id}/reassign`, {
+      method: 'POST',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({ targetNodeId: 'coder' }),
+    })
+    expect(ok.status).toBe(200)
+    expect(((await ok.json()) as { action: string }).action).toBe('added-designer')
+    const after = (await (
+      await app.request('/api/tasks/task-b/questions', { headers: AUTH })
+    ).json()) as Array<{ roleKind: string; effectiveTargetNodeId: string }>
+    expect(after.find((e) => e.roleKind === 'designer')!.effectiveTargetNodeId).toBe('coder')
+
+    // reassign the asker again → re-targets the SAME (undispatched) designer handler to 'fixer'.
+    const move = await app.request(`/api/tasks/task-b/questions/${questioner.id}/reassign`, {
       method: 'POST',
       headers: { ...AUTH, 'content-type': 'application/json' },
       body: JSON.stringify({ targetNodeId: 'fixer' }),
     })
-    expect(ok.status).toBe(200)
-    const after = (await (
+    expect(move.status).toBe(200)
+    const moved = (await (
       await app.request('/api/tasks/task-b/questions', { headers: AUTH })
     ).json()) as Array<{ roleKind: string; effectiveTargetNodeId: string }>
-    expect(after.find((e) => e.roleKind === 'designer')!.effectiveTargetNodeId).toBe('fixer')
+    expect(moved.filter((e) => e.roleKind === 'designer')).toHaveLength(1)
+    expect(moved.find((e) => e.roleKind === 'designer')!.effectiveTargetNodeId).toBe('fixer')
   })
 
   test('stage toggles; cross-task entry → 404; missing task → 404', async () => {

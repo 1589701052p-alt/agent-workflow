@@ -56,6 +56,12 @@ describe('serialize/deserialize', () => {
   test('unknown kind / garbage → null', () => {
     expect(deserialize('not json')).toBeNull()
     expect(deserialize(JSON.stringify({ kind: 'magic' }))).toBeNull()
+    // RFC-146 impl-gate（Codex medium）：dataTransfer 载荷不可信，继承键
+    // （原型链上 'constructor' in TABLE === true）不得当 kind 放行——旧
+    // switch 天然拒绝，表驱动后靠 Object.hasOwn 守门。
+    expect(deserialize(JSON.stringify({ kind: 'constructor' }))).toBeNull()
+    expect(deserialize(JSON.stringify({ kind: 'toString' }))).toBeNull()
+    expect(deserialize(JSON.stringify({ kind: '__proto__' }))).toBeNull()
     expect(deserialize(JSON.stringify({ random: 'shape' }))).toBeNull()
   })
 })

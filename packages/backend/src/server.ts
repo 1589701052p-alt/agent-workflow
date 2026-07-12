@@ -9,6 +9,7 @@ import { requirePermission, resourcePermissionGate } from '@/auth/permissions'
 import type { SecretBox } from '@/auth/secretBox'
 import { multiAuth } from '@/auth/session'
 import type { DbClient } from '@/db/client'
+import type { BuildScheduleLaunch } from '@/services/scheduledTasks'
 import { ForbiddenError } from '@/util/errors'
 import { getEmbeddedAsset, IS_EMBEDDED } from '@/embed'
 import { mountAgentRoutes } from '@/routes/agents'
@@ -16,6 +17,7 @@ import { mountAuthRoutes } from '@/routes/auth'
 import { mountBackupRoutes } from '@/routes/backup'
 import { mountCachedRepoRoutes } from '@/routes/cached-repos'
 import { mountConfigRoutes } from '@/routes/config'
+import { mountDaemonRoutes } from '@/routes/daemon'
 import { mountHealthRoutes } from '@/routes/health'
 import { mountMcpRoutes } from '@/routes/mcps'
 import { mountMemoryRoutes } from '@/routes/memories'
@@ -38,7 +40,10 @@ import { mountTaskClarifyDirectiveRoutes } from '@/routes/taskClarifyDirective'
 import { mountFusionRoutes } from '@/routes/fusions'
 import { mountReviewRoutes } from '@/routes/reviews'
 import { mountTaskRoutes } from '@/routes/tasks'
+import { mountScheduledTaskRoutes } from '@/routes/scheduledTasks'
 import { mountWorkflowRoutes } from '@/routes/workflows'
+import { mountWorkgroupRoutes } from '@/routes/workgroups'
+import { mountWorkgroupTaskRoutes } from '@/routes/workgroupTasks'
 import { mountWorktreeFilesRoutes } from '@/routes/worktree-files'
 import { errorHandler } from '@/util/errors'
 import { createLogger } from '@/util/log'
@@ -48,6 +53,12 @@ export interface AppDeps {
   token: string
   /** Absolute path to config.json (lets tests use a temp file). */
   configPath: string
+  /**
+   * Absolute path to the daemon run-info file (host/port/url the daemon is
+   * actually bound to). Optional — defaults to `Paths.daemonInfo` in the route;
+   * tests inject a temp file. Read by GET /api/daemon.
+   */
+  daemonInfoPath?: string
   /** Opencode version detected at startup; null if probe failed. */
   opencodeVersion: string | null
   /** DB schema version (count of applied migrations). */
@@ -69,6 +80,12 @@ export interface AppDeps {
    * shutdown can omit it (the route returns 503).
    */
   shutdown?: () => void
+  /**
+   * RFC-159 — override the scheduled-task run-now launch closure. Production
+   * omits it (the route builds the real one from db + configPath); tests inject
+   * a stub so POST /:id/run-now doesn't spawn a real opencode task.
+   */
+  buildScheduleLaunch?: BuildScheduleLaunch
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -129,8 +146,24 @@ export function createApp(deps: AppDeps): Hono {
   // permitted actor (e.g. a regular-user session token) is rejected with 403
   // before any service-layer code runs. The gates pick the permission point
   // from the request method (GET → :read, mutating verbs → :write).
-  app.use('/api/agents', resourcePermissionGate('agents'))
-  app.use('/api/agents/*', resourcePermissionGate('agents'))
+  // RFC-165 (F15/N1): launching is a TASK operation on every subject face —
+  // all three launch endpoints gate on tasks:launch uniformly, and the agent
+  // launch path is exempt from the agents:write method gate below.
+  app.on('POST', '/api/tasks', requirePermission('tasks:launch'))
+  app.on('POST', '/api/workgroups/:name/tasks', requirePermission('tasks:launch'))
+  app.on('POST', '/api/agents/:name/tasks', requirePermission('tasks:launch'))
+  app.use(
+    '/api/agents',
+    resourcePermissionGate('agents', {
+      skip: (method, path) => method === 'POST' && /^\/api\/agents\/[^/]+\/tasks$/.test(path),
+    }),
+  )
+  app.use(
+    '/api/agents/*',
+    resourcePermissionGate('agents', {
+      skip: (method, path) => method === 'POST' && /^\/api\/agents\/[^/]+\/tasks$/.test(path),
+    }),
+  )
   app.use('/api/skills', resourcePermissionGate('skills'))
   app.use('/api/skills/*', resourcePermissionGate('skills'))
   app.use('/api/skill-sources', resourcePermissionGate('skills'))
@@ -163,6 +196,11 @@ export function createApp(deps: AppDeps): Hono {
   }
   app.use('/api/config', configGate)
   app.use('/api/config/*', configGate)
+  // GET /api/daemon surfaces the same Network-settings readout as /api/config
+  // (daemon bind host/port + pid/startedAt). Gate it with settings:read like
+  // config so a regular user session / narrow PAT can't read daemon internals
+  // through the generic /api/* auth. Read-only route → no write variant.
+  app.use('/api/daemon', requirePermission('settings:read'))
   app.use('/api/backup', requirePermission('backup:run'))
   app.use('/api/backup/*', requirePermission('backup:run'))
 
@@ -171,6 +209,7 @@ export function createApp(deps: AppDeps): Hono {
   app.use('/api/runtime/*', requirePermission('runtime:read'))
 
   mountConfigRoutes(app, deps)
+  mountDaemonRoutes(app, deps)
   mountPlantumlRoutes(app, deps)
   mountRuntimeRoutes(app, deps)
   mountRuntimesRoutes(app, deps)
@@ -182,7 +221,10 @@ export function createApp(deps: AppDeps): Hono {
   mountRepoRoutes(app, deps)
   mountCachedRepoRoutes(app, deps)
   mountWorkflowRoutes(app, deps)
+  mountWorkgroupRoutes(app, deps) // RFC-164
+  mountWorkgroupTaskRoutes(app, deps) // RFC-164 PR-4
   mountTaskRoutes(app, deps)
+  mountScheduledTaskRoutes(app, deps) // RFC-159
   mountBackupRoutes(app, deps)
   mountWorktreeFilesRoutes(app, deps)
   mountReviewRoutes(app, deps)

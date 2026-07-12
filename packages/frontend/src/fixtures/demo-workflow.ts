@@ -7,7 +7,9 @@
 // not by binding. If the user creates a different agent the workflow will
 // fail validation with `agent-not-found` and they can rename the node.
 
-export const DEMO_WORKFLOW_NAME = 'Demo - code with a single agent'
+// 2026-07-10 naming unification: workflow names are slug-only now and the
+// demo goes through the real import endpoint, so the name must comply.
+export const DEMO_WORKFLOW_NAME = 'demo-single-agent-code'
 
 export const DEMO_WORKFLOW_YAML = `name: ${DEMO_WORKFLOW_NAME}
 description: |

@@ -69,9 +69,11 @@ export const REPO_IMPORT_CHANNEL = (batchId: string): ChannelKey => `repo-import
 export const MEMORY_CHANNEL: ChannelKey = 'memories'
 /** RFC-041: admin-only distill queue monitor. */
 export const MEMORY_DISTILL_JOB_CHANNEL: ChannelKey = 'memory-distill-jobs'
+export const SCHEDULED_TASK_CHANNEL: ChannelKey = 'scheduled-tasks' // RFC-159
 
 import type {
   MemoryDistillJobWsMessage,
+  ScheduledTaskWsMessage,
   MemoryWsMessage,
   RepoImportWsMessage,
   TaskWsMessage,
@@ -85,6 +87,7 @@ export const workflowsBroadcaster = new TypedBroadcaster<WorkflowsWsMessage>()
 export const repoImportsBroadcaster = new TypedBroadcaster<RepoImportWsMessage>()
 export const memoryBroadcaster = new TypedBroadcaster<MemoryWsMessage>()
 export const memoryDistillJobBroadcaster = new TypedBroadcaster<MemoryDistillJobWsMessage>()
+export const scheduledTaskBroadcaster = new TypedBroadcaster<ScheduledTaskWsMessage>() // RFC-159
 
 /** Reset all broadcasters — only used in tests between cases. */
 export function resetBroadcastersForTests(): void {

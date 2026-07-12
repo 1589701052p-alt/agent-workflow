@@ -170,6 +170,7 @@ const S1_DEMOTE_TASK: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.S1.demoteTask.desc',
   risk: 'medium',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     // RFC-097 (audit S-23): refuse while an in-process scheduler owns the task.
     const gate = schedulerLivenessGate(rc)

@@ -56,7 +56,6 @@ import {
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
-  ClarifyQuestionScopeSchema,
   findCrossClarifyNodesPointingToDesigner,
   findDesignerNodeForCrossClarify,
   findQuestionerNodeForCrossClarify,
@@ -65,7 +64,6 @@ import {
   type ClarifyCrossAgentNode,
   type ClarifyDirective,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
   type ClarifyTruncationWarning,
   type WorkflowDefinition,
 } from '@agent-workflow/shared'
@@ -76,7 +74,7 @@ import type { DbClient } from '@/db/client'
 import { clarifyRounds, crossClarifySessions, tasks } from '@/db/schema'
 import { setNodeRunStatus } from '@/services/lifecycle'
 import { mintNodeRun } from '@/services/nodeRunMint'
-import { NotFoundError, ValidationError } from '@/util/errors'
+import { NotFoundError } from '@/util/errors'
 import { createLogger } from '@/util/log'
 import { getNodeClarifyDirectiveRow } from '@/services/taskClarifyDirective'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
@@ -107,11 +105,7 @@ export interface CrossClarifySession {
   createdAt: number
   answeredAt: number | null
   abandonedAt: number | null
-  /** RFC-059: per-question scope persisted at submit time. NULL when row
-   *  predates RFC-059 OR when client did not send `questionScopes` — runtime
-   *  treats NULL as "every question is 'designer'" via `resolveQuestionScope`
-   *  (preserves RFC-056/058 behaviour). */
-  questionScopes: Record<string, ClarifyQuestionScope> | null
+  // RFC-162: `questionScopes` removed (scope deleted).
 }
 
 export interface CrossClarifySessionSummary {
@@ -277,7 +271,6 @@ export async function createCrossClarifySession(
     directive: null,
     status: 'awaiting_human',
     designerRunTriggeredAt: null,
-    questionScopes: null,
     createdAt,
     answeredAt: null,
     abandonedAt: null,
@@ -317,12 +310,6 @@ export interface DesignerRerunReadinessSource {
   iteration: number
   questions: ClarifyQuestion[]
   answers: ClarifyAnswer[]
-  /** RFC-059: per-question scope captured at submit time. NULL on RFC-056
-   *  legacy rows; runtime falls back to all-designer via
-   *  `resolveQuestionScope`. Downstream callers
-   *  (`buildExternalFeedbackContext`, submit `countDesignerScopedAcrossSources`)
-   *  use this to keep designer-scoped Q&A only. */
-  questionScopes: Record<string, ClarifyQuestionScope> | null
 }
 
 export interface DesignerRerunReadiness {
@@ -356,8 +343,15 @@ export async function evaluateDesignerRerunReadiness(
     args.definition,
     args.designerNodeId,
   )
+  // RFC-162 (correlation-readiness barrier reframe): a handler node with NO cross-clarify
+  // to_designer sibling has NOTHING to correlate — it is immediately READY. This is the case
+  // for a reassign-added upstream/downstream reviser (an arbitrary agent node that is not a
+  // graph designer). The N:1 barrier below still applies to GENUINE graph designers (≥1
+  // sibling cross-clarify node points at them via to_designer). Pre-RFC-162 this returned
+  // `ready:false` (a defensive relic: an unwired designer never reran) — but the old model
+  // never reassigned to a non-designer, so nothing depended on the false.
   if (siblingNodeIds.length === 0) {
-    return { ready: false, sources: [], pendingCrossClarifyNodeIds: [] }
+    return { ready: true, sources: [], pendingCrossClarifyNodeIds: [] }
   }
 
   const sources: DesignerRerunReadinessSource[] = []
@@ -410,7 +404,6 @@ export async function evaluateDesignerRerunReadiness(
         iteration: latest.iteration,
         questions,
         answers,
-        questionScopes: parseQuestionScopesJson(latest.questionScopesJson),
       })
     }
     // 'answered'+'stop' / 'abandoned' → resolved, no source contribution.
@@ -585,45 +578,7 @@ export async function cleanupCrossClarifySessionsForTask(
 // internal helpers
 // ---------------------------------------------------------------------------
 
-/**
- * RFC-059 — defensive validation of submit body's `questionScopes` map
- * against the session's persisted questions. Three failure modes are turned
- * into a single `ValidationError` 400 'cross-clarify-question-scopes-
- * malformed' so the REST route maps cleanly:
- *
- *   - undefined / null input → returns undefined (caller writes NULL,
- *     runtime falls back to all-designer).
- *   - any key that is NOT a questionId in the session → reject.
- *   - any value that is not 'designer' | 'questioner' (zod parse fails) → reject.
- *
- * Empty object `{}` is accepted (every question defaults to 'designer').
- * Sparse maps are accepted (questions not mentioned default to 'designer').
- */
-export function validateQuestionScopes(
-  scopes: Record<string, ClarifyQuestionScope> | undefined,
-  questions: ClarifyQuestion[],
-): Record<string, ClarifyQuestionScope> | undefined {
-  if (scopes === undefined) return undefined
-  const validQuestionIds = new Set(questions.map((q) => q.id))
-  const out: Record<string, ClarifyQuestionScope> = {}
-  for (const [questionId, scope] of Object.entries(scopes)) {
-    if (!validQuestionIds.has(questionId)) {
-      throw new ValidationError(
-        'cross-clarify-question-scopes-malformed',
-        `questionScopes references unknown questionId '${questionId}'`,
-      )
-    }
-    const parsed = ClarifyQuestionScopeSchema.safeParse(scope)
-    if (!parsed.success) {
-      throw new ValidationError(
-        'cross-clarify-question-scopes-malformed',
-        `questionScopes['${questionId}'] is not 'designer' or 'questioner' (got ${JSON.stringify(scope)})`,
-      )
-    }
-    out[questionId] = parsed.data
-  }
-  return out
-}
+// RFC-162: `validateQuestionScopes` / `parseQuestionScopesJson` deleted with scope.
 
 function rowToSession(row: typeof crossClarifySessions.$inferSelect): CrossClarifySession {
   const questions = JSON.parse(row.questionsJson) as ClarifyQuestion[]
@@ -644,7 +599,6 @@ function rowToSession(row: typeof crossClarifySessions.$inferSelect): CrossClari
     createdAt: row.createdAt,
     answeredAt: row.answeredAt,
     abandonedAt: row.abandonedAt,
-    questionScopes: parseQuestionScopesJson(row.questionScopesJson),
   }
   if (row.answersJson !== null) {
     try {
@@ -654,27 +608,6 @@ function rowToSession(row: typeof crossClarifySessions.$inferSelect): CrossClari
     }
   }
   return out
-}
-
-/**
- * RFC-059 — parse the `question_scopes_json` column back into the runtime
- * map. NULL / parse failure → null (runtime treats null as all-designer via
- * `resolveQuestionScope`).
- */
-function parseQuestionScopesJson(raw: string | null): Record<string, ClarifyQuestionScope> | null {
-  if (raw === null) return null
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
-    const out: Record<string, ClarifyQuestionScope> = {}
-    for (const [k, v] of Object.entries(parsed)) {
-      const z = ClarifyQuestionScopeSchema.safeParse(v)
-      if (z.success) out[k] = z.data
-    }
-    return out
-  } catch {
-    return null
-  }
 }
 
 function rowToSummary(

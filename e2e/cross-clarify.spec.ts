@@ -1,35 +1,38 @@
-// RFC-056 PR-D T10 — cross-clarify e2e (A1 happy path).
+// RFC-056 PR-D T10 — cross-clarify e2e (A1 happy path). Updated for RFC-162.
 //
-// Drives a workflow with a designer + questioner + cross-clarify node
-// through the full ask → user-answers → designer-rerun-with-external-
-// feedback → questioner-rerun-no-questions → final-output cycle. API-driven
-// so we exercise the real runtime path (daemon + scheduler + crossClarify
-// service + DB + WS).
+// Drives a workflow with a designer + questioner + cross-clarify node through
+// the full ask → user-answers → QUESTIONER-rerun-with-Q&A → final-output cycle.
+// API-driven so we exercise the real runtime path (daemon + scheduler +
+// crossClarify service + DB + WS).
 //
-// The stub binary in e2e/fixtures/stub-opencode-cross-clarify.sh emits:
-//   Round 1 — designer.first    → <workflow-output> "design v1"
-//   Round 2 — questioner.first  → <workflow-clarify> (1 question)
-//   ★ task pauses awaiting_human; user POSTs answers ★
-//   Round 3 — designer.second   → <workflow-output> "design v2"
-//   Round 4 — questioner.second → <workflow-output> "questioner v2"
+// RFC-162 (反问机制完全归一): a cross-clarify submit now reruns the QUESTIONER
+// (the asker / single default card) with the Q&A injected — NOT the designer.
+// "Designer-by-default" was removed; making the upstream designer revise is now
+// an explicit reassign, not the default. So the designer runs exactly ONCE here.
+//
+// The (agent-driven) stub in e2e/fixtures/stub-opencode-cross-clarify.sh emits,
+// under RFC-162's questioner-rerun sequence:
+//   designer round 1    → <workflow-output> "design v1"   (runs ONCE)
+//   questioner round 1  → <workflow-clarify> (1 question)
+//   ★ task pauses awaiting_human; user POSTs answers (continue) ★
+//   questioner round 2  → <workflow-clarify> AGAIN (RFC-100 ask-back), prompt
+//                          now carries the flat `## Clarify Q&A` block
+//   ★ pauses; user POSTs answers (stop) ★
+//   questioner round 3  → <workflow-output> "questioner v3"
 //
 // LOCKS (in addition to status transitions):
 //   * GET /api/clarify returns a cross-tagged entry while awaiting_human.
-//   * Designer round 3's prompt (captured via CROSS_CLARIFY_PROMPT_LOG)
+//   * The QUESTIONER round 2 prompt (captured via CROSS_CLARIFY_PROMPT_LOG)
 //     contains the flat `## Clarify Q&A` block — proves the framework injected
-//     the user's submitted Q&A into the rerun prompt. RFC-132 (PR-C): the
-//     designer's cross-clarify Q&A rides the single flat block, not a separate
-//     `## External Feedback` section.
-//   * clarifyIteration on designer's second node_run is bumped (>0) — under
-//     RFC-064 the previously-separate cross_clarify_iteration column was
-//     folded into clarify_iteration via the §3.2 max+1 mint algorithm.
+//     the user's submitted Q&A into the ASKER's rerun (RFC-132 PR-C single-block
+//     format). The designer NEVER reruns (no `designer round 2`).
 
 import { test, expect } from '@playwright/test'
 import { execSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -257,15 +260,6 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     expectOk(wfRes, 'create workflow')
     const workflow = (await wfRes.json()) as { id: string }
 
-    expectOk(
-      await fetch(`${daemon.baseUrl}/api/repos/recent`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ path: repoDir }),
-      }),
-      'register recent repo',
-    )
-
     fixtures = { workflowId: workflow.id, repoPath: repoDir }
   })
 
@@ -279,7 +273,7 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     if (daemon !== undefined) await daemon.stop()
   })
 
-  test('full cycle: launch → questioner emits cross-clarify → user submits → designer reruns with External Feedback → done', async () => {
+  test('full cycle: launch → questioner emits cross-clarify → user submits → questioner reruns with the Q&A (RFC-162: designer does NOT rerun by default) → done', async () => {
     const headers = {
       Authorization: `Bearer ${daemon.token}`,
       'Content-Type': 'application/json',
@@ -292,8 +286,8 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
       body: JSON.stringify({
         workflowId: fixtures.workflowId,
         name: 'e2e-cross-clarify-task',
-        repoPath: fixtures.repoPath,
-        baseBranch: 'main',
+        repoUrl: pathToFileURL(fixtures.repoPath).href,
+        ref: 'main',
         inputs: { topic: 'cache eviction strategy' },
       }),
     })
@@ -341,8 +335,9 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
 
     // 4b. RFC-100: the cross-clarify questioner is MANDATORY ask-back — a
     //     'continue' answer makes it ask AGAIN (it may not finalize with
-    //     <workflow-output> until the user clicks "Stop clarifying"). The
-    //     designer still reran with External Feedback (asserted at step 6).
+    //     <workflow-output> until the user clicks "Stop clarifying"). RFC-162:
+    //     it is the QUESTIONER (the asker) that reruns with the Q&A on a plain
+    //     cross submit — the designer does not (asserted at step 6/7).
     //     Poll for the questioner's second cross-clarify round and answer it
     //     with 'stop' so the questioner finalizes and the task can complete.
     const row2 = await pollCrossClarifyAwaiting(daemon, taskId, 30_000)
@@ -374,22 +369,24 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
     const final = await pollTaskStatus(daemon, taskId, (t) => t.status === 'done', 30_000)
     expect(final.status).toBe('done')
 
-    // 6. Designer round 2 prompt contains the flat `## Clarify Q&A` block —
-    //    proves the framework injected the user's Q&A into the rerun. RFC-132 (PR-C): the designer's
-    //    cross-clarify Q&A now rides the SINGLE flat block (§5 ②b), not a separate `## External
-    //    Feedback` section.
+    // 6. RFC-162: the ASKER (questioner) — NOT the designer — reruns with the Q&A. Cross-clarify is
+    //    now a single questioner card by default (designer-by-default removed); "let the upstream
+    //    designer revise" is an explicit reassign, not the default. So the framework injects the
+    //    user's submitted Q&A into the QUESTIONER's rerun prompt (round 2, the continue-answer
+    //    cascade), as the flat `## Clarify Q&A` block (RFC-132 PR-C single-block format is unchanged).
     const log = readFileSync(promptLog, 'utf-8')
-    const designerRound2 = log.match(
-      /=== designer round 2 ===([\s\S]*?)=== END designer round 2 ===/,
+    const questionerRound2 = log.match(
+      /=== questioner round 2 ===([\s\S]*?)=== END questioner round 2 ===/,
     )
-    expect(designerRound2, 'designer round 2 prompt was logged').not.toBeNull()
-    expect(designerRound2![1]).toContain('## Clarify Q&A')
+    expect(questionerRound2, 'questioner round 2 prompt was logged').not.toBeNull()
+    expect(questionerRound2![1]).toContain('## Clarify Q&A')
+    // The designer NEVER reran — RFC-162 removed the designer-by-default entry, so a plain cross
+    // submit reruns only the questioner. (A prior version of this spec asserted a designer round 2;
+    // that was the pre-RFC-162 scope=designer behavior.)
+    expect(log).not.toContain('=== designer round 2 ===')
 
-    // 7. Designer reran after the cross-clarify submit. RFC-074 PR-C: the
-    //    retired clarifyIteration counter is gone — the rerun is identified by
-    //    id-order, i.e. a SECOND done top-level designer node_run minted after
-    //    the original (the cross-clarify answer auto-dispatches the designer
-    //    rerun via the unified dispatch, RFC-132).
+    // 7. Node-runs confirm RFC-162: the QUESTIONER reran (>= 2 top-level questioner runs) while the
+    //    designer ran exactly ONCE (no designer-by-default rerun on a plain cross submit).
     const runsRes = await fetch(`${daemon.baseUrl}/api/tasks/${taskId}/node-runs`, {
       headers: { Authorization: `Bearer ${daemon.token}` },
     })
@@ -402,11 +399,15 @@ test.describe('RFC-056 cross-clarify e2e — A1 happy path', () => {
         status: string
       }>
     }
-    const doneDesigners = runs.runs
-      .filter((r) => r.nodeId === 'designer' && r.parentNodeRunId === null && r.status === 'done')
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    expect(doneDesigners.length, 'designer reran (>= 2 done rows)').toBeGreaterThanOrEqual(2)
-    const elevatedDesigner = doneDesigners[doneDesigners.length - 1]
-    expect(elevatedDesigner?.status).toBe('done')
+    const topLevelDesigners = runs.runs.filter(
+      (r) => r.nodeId === 'designer' && r.parentNodeRunId === null,
+    )
+    expect(topLevelDesigners.length, 'designer ran exactly once (no default rerun)').toBe(1)
+    const questionerRuns = runs.runs.filter(
+      (r) => r.nodeId === 'questioner' && r.parentNodeRunId === null,
+    )
+    expect(questionerRuns.length, 'questioner reran (>= 2 top-level runs)').toBeGreaterThanOrEqual(
+      2,
+    )
   })
 })

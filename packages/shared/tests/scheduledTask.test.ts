@@ -1,0 +1,149 @@
+// RFC-159 T1 — ScheduleSpec 判别联合 + Create/Update schema 校验。
+import { describe, expect, test } from 'bun:test'
+
+import {
+  CreateScheduledTaskSchema,
+  ScheduleSpecSchema,
+  ScheduledTaskNameSchema,
+  UpdateScheduledTaskSchema,
+} from '../src/index'
+
+const VALID_LAUNCH = {
+  workflowId: 'wf1',
+  name: 'nightly audit',
+  repoUrl: 'file:///repo',
+  ref: 'main',
+}
+
+describe('ScheduleSpecSchema — four kinds', () => {
+  test('accepts each kind', () => {
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'interval', every: 6, unit: 'hours' }).success,
+    ).toBe(true)
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'daily', at: '09:00', timezone: 'America/New_York' })
+        .success,
+    ).toBe(true)
+    expect(
+      ScheduleSpecSchema.safeParse({
+        kind: 'weekly',
+        daysOfWeek: [1, 4],
+        at: '08:30',
+        timezone: 'Asia/Shanghai',
+      }).success,
+    ).toBe(true)
+    expect(
+      ScheduleSpecSchema.safeParse({
+        kind: 'monthly',
+        dayOfMonth: 15,
+        at: '23:59',
+        timezone: 'UTC',
+      }).success,
+    ).toBe(true)
+  })
+
+  test('rejects malformed HH:MM', () => {
+    for (const at of ['9:00', '24:00', '12:60', '09-00', '0900', '', '9:5'])
+      expect(ScheduleSpecSchema.safeParse({ kind: 'daily', at, timezone: 'UTC' }).success).toBe(
+        false,
+      )
+  })
+
+  test('rejects invalid IANA timezone', () => {
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'daily', at: '09:00', timezone: 'Mars/Phobos' }).success,
+    ).toBe(false)
+  })
+
+  test('weekly: rejects dayOfWeek out of 0..6; dedups + sorts', () => {
+    expect(
+      ScheduleSpecSchema.safeParse({
+        kind: 'weekly',
+        daysOfWeek: [7],
+        at: '09:00',
+        timezone: 'UTC',
+      }).success,
+    ).toBe(false)
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'weekly', daysOfWeek: [], at: '09:00', timezone: 'UTC' })
+        .success,
+    ).toBe(false)
+    const parsed = ScheduleSpecSchema.parse({
+      kind: 'weekly',
+      daysOfWeek: [3, 1, 1, 6],
+      at: '09:00',
+      timezone: 'UTC',
+    })
+    expect(parsed.kind === 'weekly' && parsed.daysOfWeek).toEqual([1, 3, 6])
+  })
+
+  test('monthly: rejects dayOfMonth outside 1..31', () => {
+    for (const dayOfMonth of [0, 32, -1])
+      expect(
+        ScheduleSpecSchema.safeParse({ kind: 'monthly', dayOfMonth, at: '09:00', timezone: 'UTC' })
+          .success,
+      ).toBe(false)
+  })
+
+  test('interval: every ∈ [1,1000], unit enum', () => {
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'interval', every: 0, unit: 'hours' }).success,
+    ).toBe(false)
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'interval', every: 1001, unit: 'hours' }).success,
+    ).toBe(false)
+    expect(
+      ScheduleSpecSchema.safeParse({ kind: 'interval', every: 5, unit: 'weeks' }).success,
+    ).toBe(false)
+  })
+
+  test('rejects unknown / missing discriminator', () => {
+    expect(ScheduleSpecSchema.safeParse({ kind: 'cron', expr: '0 9 * * *' }).success).toBe(false)
+    expect(ScheduleSpecSchema.safeParse({ every: 6, unit: 'hours' }).success).toBe(false)
+  })
+})
+
+describe('ScheduledTaskNameSchema', () => {
+  test('trims; rejects empty / whitespace-only; caps 255', () => {
+    expect(ScheduledTaskNameSchema.parse('  nightly  ')).toBe('nightly')
+    expect(ScheduledTaskNameSchema.safeParse('   ').success).toBe(false)
+    expect(ScheduledTaskNameSchema.safeParse('').success).toBe(false)
+    expect(ScheduledTaskNameSchema.safeParse('x'.repeat(256)).success).toBe(false)
+  })
+})
+
+describe('CreateScheduledTaskSchema', () => {
+  test('accepts a valid launch body + spec; enabled defaults true', () => {
+    const parsed = CreateScheduledTaskSchema.parse({
+      name: 'daily audit',
+      launchPayload: VALID_LAUNCH,
+      scheduleSpec: { kind: 'daily', at: '09:00', timezone: 'America/New_York' },
+    })
+    expect(parsed.enabled).toBe(true)
+    expect(parsed.launchPayload.workflowId).toBe('wf1')
+  })
+
+  test('rejects an invalid launch body (StartTaskSchema still enforced as a sub-field)', () => {
+    const res = CreateScheduledTaskSchema.safeParse({
+      name: 'x',
+      launchPayload: { workflowId: 'wf1', name: 'x' }, // no repo source → StartTaskSchema superRefine fails
+      scheduleSpec: { kind: 'interval', every: 6, unit: 'hours' },
+    })
+    expect(res.success).toBe(false)
+  })
+})
+
+describe('UpdateScheduledTaskSchema — strict partial', () => {
+  test('accepts partial fields', () => {
+    expect(UpdateScheduledTaskSchema.safeParse({ enabled: false }).success).toBe(true)
+    expect(
+      UpdateScheduledTaskSchema.safeParse({
+        scheduleSpec: { kind: 'interval', every: 12, unit: 'hours' },
+      }).success,
+    ).toBe(true)
+  })
+  test('rejects unknown keys (strict)', () => {
+    expect(UpdateScheduledTaskSchema.safeParse({ ownerUserId: 'u2' }).success).toBe(false)
+    expect(UpdateScheduledTaskSchema.safeParse({ nextRunAt: 123 }).success).toBe(false)
+  })
+})

@@ -11,12 +11,12 @@
 //      POST /api/clarify/:id/answers with defer:true + questionIds cap.
 //   4. Submit is disabled until ≥1 answer is filled.
 //   5. No answerable questions → empty state.
-//   6. RFC-137 (用户 2026-07-03) — the pane answers self and cross rounds UNIFORMLY: NO
+//   6. RFC-137 / RFC-162 — the pane answers self and cross rounds UNIFORMLY: NO
 //      per-question scope UI is rendered for ANY round (fresh or re-answer) and submit
-//      bodies never carry questionScopes; the server resolves unsent scopes to the
-//      'designer' default, so a cross answer's handler entry targets the designer node.
-//      Scope control lives only on the /clarify detail page (cross-clarify-scope-control
-//      tests). These locks guard against the picker being reintroduced here.
+//      bodies never carry questionScopes. RFC-162 removed the scope concept entirely, so
+//      there is no scope anywhere to send; the asker's own handler entry (self/questioner)
+//      reruns to consume the answer. These locks guard against a picker or a questionScopes
+//      body field being reintroduced here.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -41,6 +41,10 @@ beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
   )
+  // jsdom lacks scrollIntoView; QuestionFormHandle.focus() calls it. 2026-07-10 the pane
+  // auto-focuses the FIRST question on open, so EVERY renderDialog with questions now hits
+  // focus() — patch file-wide (was previously only in the keyboard-nav describe).
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 afterEach(() => {
@@ -99,7 +103,6 @@ function round(over: Partial<ClarifyRound> & { intermediaryNodeRunId: string }):
     sessionMode: null,
     designerRunTriggeredAt: null,
     abandonedAt: null,
-    questionScopes: null,
     createdAt: 0,
     answeredAt: null,
     answeredBy: null,
@@ -417,9 +420,6 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
               customText: '',
             },
           ],
-          // 即便轮上已有持久化 scope（历史 questioner 题），面板也不再展示它——D6 的
-          // 锁定语义完全在服务端；详情页 sealed 只读 chips 是它唯一的展示面。
-          questionScopes: { q1: 'questioner' },
         }),
       ],
     )
@@ -453,7 +453,6 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
               customText: '',
             },
           ],
-          questionScopes: { q1: 'designer' },
         }),
       ],
     )
@@ -476,8 +475,7 @@ describe('CentralizedAnswerDialog — RFC-136 重答', () => {
     expect([...body.questionIds].sort()).toEqual(['q1', 'q2'])
     // D7（Codex 实现门 P2）：重答按题显式声明——服务端只对声明的题放行覆盖。
     expect(body.resubmitQuestionIds).toEqual(['q1'])
-    // RFC-137：面板恒不发 questionScopes（键都不出现）——fresh 题由服务端解析为默认
-    // designer（处理节点默认=设计节点），reseal 题服务端锁定原 scope（D6）。
+    // RFC-162：scope 概念已删——面板恒不发 questionScopes（键都不出现），self/cross 同形。
     expect('questionScopes' in body).toBe(false)
     expect(body.answers.find((a) => a.questionId === 'q1')?.selectedOptionIndices).toEqual([1])
   })
@@ -563,16 +561,16 @@ describe('CentralizedAnswerDialog — submit 流程', () => {
       directive: 'continue',
       questionIds: ['q2'],
     })
-    // RFC-137: neither cross-round body carries questionScopes (server defaults to designer).
+    // RFC-162: neither cross-round body carries questionScopes (scope removed entirely).
     expect('questionScopes' in (calls['/api/clarify/nr_a/answers'] as object)).toBe(false)
     expect('questionScopes' in (calls['/api/clarify/nr_b/answers'] as object)).toBe(false)
     // Only filled answers are submitted (subset cap matches answers).
     expect((calls['/api/clarify/nr_a/answers'] as { answers: unknown[] }).answers).toHaveLength(1)
   })
 
-  // RFC-137 回归锁：把 RFC-128 P5-BC 的选择器重新引入面板（或恢复发送 questionScopes）
-  // 会让本 case 变红。scope 交互的正向覆盖在详情页测试（cross-clarify-scope-control）。
-  test('RFC-137: cross round renders NO scope picker; submit body carries NO questionScopes', async () => {
+  // RFC-162 回归锁：把 RFC-128 P5-BC 的选择器重新引入面板（或恢复发送 questionScopes）
+  // 会让本 case 变红。scope 概念已删，self/cross 在面板里完全同形。
+  test('RFC-137/RFC-162: cross round renders NO scope picker; submit body carries NO questionScopes', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ ok: true } as never)
     vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
     renderDialog(
@@ -611,6 +609,32 @@ describe('CentralizedAnswerDialog — cross-round keyboard navigation', () => {
   // it, so patch it (per the QuestionForm focus test) — otherwise focus() throws.
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  // 用户 2026-07-10 —「点开处理待指派问题弹框时，默认 focus 第一个问题，好使用快捷键答题」。
+  // 打开弹框后（groups → 各轮 detail → QuestionForm 挂载的多段异步之后）自动聚焦平铺导航序
+  // 的第一题 root（tabIndex=0），数字/Enter 热键即刻可用；且只聚焦一次（后续注册不再抢焦）。
+  test('打开弹框自动聚焦第一题（跨轮取全局第一）→ 数字热键即刻可用', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue(undefined as never)
+    renderDialog(
+      [
+        entry({ id: 'a', questionId: 'q1', originNodeRunId: 'nr_a' }),
+        entry({ id: 'b', questionId: 'q2', originNodeRunId: 'nr_a' }),
+        entry({ id: 'c', questionId: 'q3', originNodeRunId: 'nr_b' }),
+      ],
+      [
+        round({ intermediaryNodeRunId: 'nr_a', questions: [singleQ('q1'), singleQ('q2')] }),
+        round({ intermediaryNodeRunId: 'nr_b', questions: [singleQ('q3')] }),
+      ],
+    )
+    const q1 = await screen.findByTestId('clarify-question-q1')
+    // 自动聚焦经 rAF 异步落焦 → waitFor。全局第一题=第一轮的 q1（非 q2/q3）。
+    await waitFor(() => expect(document.activeElement).toBe(q1))
+    // 快捷键即刻可用：数字 1 直接选中第一个选项（无需先点击/Tab）。
+    fireEvent.keyDown(q1, { key: '1' })
+    await waitFor(() =>
+      expect((within(q1).getAllByRole('radio')[0] as HTMLInputElement).checked).toBe(true),
+    )
   })
 
   test('Enter advances focus across rounds; the LAST question is a NO-OP (submit NOT auto-focused)', async () => {
