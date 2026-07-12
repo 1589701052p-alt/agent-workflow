@@ -61,4 +61,18 @@ PR-2：T4 -> T5 -> T7 -> T8 -> T6 置 0
 
 ## 完成状态
 
-（待批准后实现填入）
+**T1-T8 全实现完成**（2026-07-12，单 PR `rfc-W003-slow-runner-test-resilience`，9 commits）：
+
+- **T1** ✅ `noopOpencodeCmd()`（`process.execPath -e process.exit(0)`，零 PATH 依赖）+ 源码锁 `rfc-w003-no-posix-env-cmd.test.ts`（grep backend `tests/` 断言 `/usr/bin/env` opencodeCmd = 0）
+- **T3-helper** ✅ `trace-poll.ts`（`waitForTraceEvent` 事件驱动轮询，deadline 超时）+ `slow-runner.ts`（`testDelay`/`testTolerance` 经 `AW_TEST_DELAY_MULTIPLIER` 缩放，默认 1）+ `rfc-w003-helpers.test.ts`（9 case）
+- **T2** ✅ lifecycle-property（flaky #1）：`/usr/bin/env 'true'` -> `noopOpencodeCmd()`（C1）+ 3 per-test 超时经 `testDelay`（C3，numRuns 平台感知）。本机 3 pass。
+- **T3** ✅ rfc098-commitpush（flaky #2）：`waitForTraceEvent` 替 `expect(n2Start.t < commit0End.t)` 墙钟断言（C2）+ `CP_COMMIT_DELAYS`/`CP_DELAY_MS_FOR_*` 经 `testDelay`（C4）。本机 3 pass。
+- **T4** ✅ C1 扫荡 11 文件（26 处）`/usr/bin/env 'true'` -> `noopOpencodeCmd()`。源码锁随扫递减至 0。
+- **T5** ✅ C2 剩余：s17 `WRITER_DELAY_MS` 经 `testDelay` + fanout-concurrency `MOCK_OPENCODE_DELAY_MS` + `toBeGreaterThan(1000)` 经 `testTolerance` + 预算经 `testDelay`。s17 本机 1 pass。
+- **T6** ✅ 源码锁 `expect(total).toBe(0)` 收尾，清理「扫荡进行中」措辞为「回归锁」。
+- **T7** ✅ C4 全量：runner（2000×2）/ runner-subagent-live-capture（400）/ canceled-fanout（1000 + 30_000 预算）/ scheduler（2000/1500 + 30_000 预算防 MULT=2 下 41%->11% 余量超时 / 250）/ rfc130（0×2 约定统一）经 `testDelay`。本机 runner 9/0、runner-subagent 3/0、canceled-fanout 1/0、scheduler 我 3 编辑测试全 pass 且 vs baseline 零回归。
+- **T8** ✅ `ci.yml` check-windows Test 步设 `env: AW_TEST_DELAY_MULTIPLIER='2'`。
+
+**门禁**（2026-07-12，rebase 到含 PR#6 upstream-sync 的 origin/main 后）：typecheck×3 全绿 / lint 全绿 / `format:check` 全绿 / 源码锁 0 / 2 目标 flaky 本机连过 / scheduler vs baseline 零回归。本机 git 依赖测试（loop / wrapper-git / retries）预存失败（temp worktree 非真 git repo，baseline 同形、非本 RFC 引入），由 CI Windows gate 验。
+
+**待验收**：CI `check-windows` 连续 2 轮 `bun test --timeout 60000` 0 flaky（plan T8 验收门槛）-> 通过后 STATE.md / plan.md RFC 索引标 Done。
