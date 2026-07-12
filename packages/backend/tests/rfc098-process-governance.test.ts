@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-098 WP-8 — process-tree governance oracle (scheduler audit S-15).
 //
 // The cooperative mock-opencode dies on first SIGTERM, so it can never
@@ -395,7 +396,7 @@ describePosix('RFC-098 WP-8 — resumeTask kills the target row’s live child b
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
 

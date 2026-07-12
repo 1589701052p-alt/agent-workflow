@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay } from './helpers/slow-runner'
 // Integration tests for the opencode runner (P-1-13b).
 //
 // Strategy: opencode is replaced with a Bun-script mock fixture that the
@@ -284,7 +285,7 @@ describe('runNode', () => {
     const result = await withEnv(
       {
         // Mock sleeps longer than the runner's timeout.
-        MOCK_OPENCODE_DELAY_MS: '2000',
+        MOCK_OPENCODE_DELAY_MS: String(testDelay(2000)),
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'too late' }),
       },
       () =>
@@ -315,7 +316,7 @@ describe('runNode', () => {
     setTimeout(() => controller.abort(), 100)
     const result = await withEnv(
       {
-        MOCK_OPENCODE_DELAY_MS: '2000',
+        MOCK_OPENCODE_DELAY_MS: String(testDelay(2000)),
         MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'unreachable' }),
       },
       () =>

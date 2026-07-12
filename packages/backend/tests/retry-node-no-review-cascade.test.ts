@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-052 regression: `retryNode` must NOT mint `retryIndex+1` placeholder
 // rows (status=failed, errorMessage='queued for retry') for downstream
 // non-process kinds: review, clarify, output, input. Those kinds don't have
@@ -147,7 +148,7 @@ describe('retryNode cascade skips non-process kinds (RFC-052)', () => {
 
     await retryNode(db, taskId, agentRunId, {
       cascade: true,
-      deps: { db, appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+      deps: { db, appHome, opencodeCmd: noopOpencodeCmd() },
     })
 
     // The fresh placeholder must exist for agent_1 (retryIndex=1, failed),
@@ -218,7 +219,7 @@ describe('retryNode cascade skips non-process kinds (RFC-052)', () => {
 
     await retryNode(db, taskId, aRunId, {
       cascade: false,
-      deps: { db, appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+      deps: { db, appHome, opencodeCmd: noopOpencodeCmd() },
     })
 
     const placeholders = (

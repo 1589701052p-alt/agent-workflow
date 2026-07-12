@@ -43,6 +43,37 @@ export function stubCmd(stubPath: string): string[] {
 }
 
 /**
+ * RFC-W003 - A cross-platform NO-OP `opencodeCmd` for placeholder deps.
+ *
+ * Many tests pass `opencodeCmd` only to satisfy a deps shape - the spawn path
+ * is never reached (agent-not-found short-circuits, empty workflow, resumeTask
+ * that reaps stale procs without spawning). The old POSIX idiom was
+ * `['/usr/bin/env', 'true']`, but `/usr/bin/env` does not exist on Windows
+ * (ENOENT) and on the opencode runtime a retryNode(cascade:true) can dispatch
+ * a background runTask that DOES reach the spawn - the ENOENT then triggers
+ * internal retries that burn the per-test timeout (the RFC-053 flake).
+ *
+ * This returns a no-op argv that exits 0 on both platforms WITHOUT writing a
+ * stub file. The opencode runtime builds argv as `[...head, 'run', ...]` and
+ * never probes `--version` (only the claude runtime does, in probe.ts), so a
+ * bare `process.exit(0)` is safe: if spawned, it exits 0 with empty stdout
+ * and the runner treats the node as completed-with-no-output.
+ *
+ * If the test ASSERTS on the spawned run's output / envelope, use
+ * `stubCmd(writeStubOpencode(tmpDir, {...}))` instead so the stub emits a
+ * valid <workflow-output> envelope. `noopOpencodeCmd` is for the "deps shape
+ * only, spawn not asserted" case.
+ */
+export function noopOpencodeCmd(): string[] {
+  // `process.execPath` is the absolute path to the bun binary running the
+  // tests - zero PATH-dependence, so it resolves even in a sanitized spawn
+  // env (the `uv_spawn 'bun' ENOENT` when relying on PATH lookup). `-e`
+  // runs the inline script; the trailing `run` arg the runtime appends is
+  // ignored. No shell, so `(` `)` need no quoting (passed as one argv element).
+  return [process.execPath, '-e', 'process.exit(0)']
+}
+
+/**
  * Write a generic stub script to disk.
  * POSIX: writes .sh with shebang + chmod 0o755
  * Windows: writes .js (Node.js script)

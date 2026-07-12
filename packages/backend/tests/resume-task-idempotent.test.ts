@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-053 PR-A T1e — resumeTask behavior + idempotency + race.
 //
 // Locks the current contract:
@@ -115,7 +116,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
     expect(after.errorSummary).toBeNull()
@@ -129,7 +130,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
   })
@@ -139,7 +140,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
   })
@@ -149,7 +150,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
   })
@@ -159,14 +160,14 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     let code: string | undefined
     try {
       await resumeTask(h.db, h.taskId, {
         db: h.db,
         appHome: h.appHome,
-        opencodeCmd: ['/usr/bin/env', 'true'],
+        opencodeCmd: noopOpencodeCmd(),
       })
     } catch (err) {
       code = (err as { code?: string }).code
@@ -181,7 +182,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
       await resumeTask(h.db, h.taskId, {
         db: h.db,
         appHome: h.appHome,
-        opencodeCmd: ['/usr/bin/env', 'true'],
+        opencodeCmd: noopOpencodeCmd(),
       })
     } catch (err) {
       code = (err as { code?: string }).code
@@ -196,7 +197,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
       await resumeTask(h.db, 'no-such-task', {
         db: h.db,
         appHome: h.appHome,
-        opencodeCmd: ['/usr/bin/env', 'true'],
+        opencodeCmd: noopOpencodeCmd(),
       })
     } catch (err) {
       code = (err as { code?: string }).code
@@ -253,7 +254,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
     const after = await resumeTask(h.db, h.taskId, {
       db: h.db,
       appHome: h.appHome,
-      opencodeCmd: ['/usr/bin/env', 'true'],
+      opencodeCmd: noopOpencodeCmd(),
     })
     expect(after.status).toBe('pending')
 
@@ -296,7 +297,7 @@ describe('RFC-053 PR-A T1e — resumeTask idempotency + race', () => {
       await resumeTask(h.db, h.taskId, {
         db: h.db,
         appHome: h.appHome,
-        opencodeCmd: ['/usr/bin/env', 'true'],
+        opencodeCmd: noopOpencodeCmd(),
       })
     } catch (err) {
       code = (err as { code?: string }).code

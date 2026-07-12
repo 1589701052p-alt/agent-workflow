@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay } from './helpers/slow-runner'
 // RFC-048 — runner integration with the subagent live capture poller.
 //
 // Drives runNode against a mock opencode child whose lifetime is padded with
@@ -197,7 +198,7 @@ describe('runner subagent live capture (RFC-048)', () => {
         MOCK_OPENCODE_EVENTS: '[]',
         // Hold the child alive long enough for the live poller to fire a
         // few times (pollMs=80 below → ~5 ticks across 400ms).
-        MOCK_OPENCODE_DELAY_MS: '400',
+        MOCK_OPENCODE_DELAY_MS: String(testDelay(400)),
         OPENCODE_TEST_HOME: h.fakeHome,
       },
       () =>

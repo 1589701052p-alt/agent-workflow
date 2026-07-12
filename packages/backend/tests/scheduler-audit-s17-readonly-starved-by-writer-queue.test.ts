@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay } from './helpers/slow-runner'
 // RFC-098 B1 REGRESSION LOCK — design/scheduler-audit-2026-06-10.md S-17 (WP-5)
 // （此文件由修复前的 CURRENT-BEHAVIOR LOCK 按原头注 FLIP 指引翻转而来。）
 //
@@ -49,7 +50,10 @@ import { runTask } from '../src/services/scheduler'
 const ulid = monotonicFactory()
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
-const WRITER_DELAY_MS = 300
+// RFC-W003: scaled via testDelay (AW_TEST_DELAY_MULTIPLIER) so a slow runner
+// (whose dispatch overhead can eat the 300ms writer-lifetime window and break
+// the overlap assertion) gets a widened window.
+const WRITER_DELAY_MS = testDelay(300)
 
 // Minimal opencode stand-in generated into the temp dir (fixtures/mock-opencode
 // has no per-agent delay knob and this file must not modify shared fixtures).

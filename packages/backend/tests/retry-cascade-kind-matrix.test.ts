@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-053 PR-A T1d — retry-cascade kind matrix.
 //
 // For every NodeKind, verify retryNode's cascade behavior when that kind is
@@ -220,7 +221,7 @@ describe('RFC-053 PR-A T1d — retry cascade kind matrix', () => {
 
       await retryNode(h.db, taskId, agentRunId, {
         cascade: true,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const placeholders = (
@@ -240,7 +241,7 @@ describe('RFC-053 PR-A T1d — retry cascade kind matrix', () => {
 
       await retryNode(h.db, taskId, agentRunId, {
         cascade: true,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const placeholders = (
@@ -263,7 +264,7 @@ describe('RFC-053 PR-A T1d — retry cascade kind matrix', () => {
 
     await retryNode(h.db, taskId, reviewRow.id, {
       cascade: false,
-      deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+      deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
     })
 
     const all = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
@@ -286,7 +287,7 @@ describe('RFC-053 PR-A T1d — retry cascade kind matrix', () => {
 
       await retryNode(h.db, taskId, wrapRow.id, {
         cascade: true,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const all = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
@@ -311,7 +312,7 @@ describe('RFC-053 PR-A T1d — retry cascade kind matrix', () => {
 
       await retryNode(h.db, taskId, wrapRow.id, {
         cascade: false,
-        deps: { db: h.db, appHome: h.appHome, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db: h.db, appHome: h.appHome, opencodeCmd: noopOpencodeCmd() },
       })
 
       const wrapRows = (

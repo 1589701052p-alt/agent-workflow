@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-108 PR-C T6 (AR-15) + T7 (AR-17) — resume worktree-missing 410 pre-flight
 // and cross-node-run all-or-nothing rollback.
 //
@@ -30,7 +31,7 @@ import { getTask, resumeTask } from '../src/services/task'
 import { gitStashSnapshot, runGit, snapshotRefName } from '../src/util/git'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
-const DEPS_CMD = ['/usr/bin/env', 'true']
+const DEPS_CMD = noopOpencodeCmd()
 
 interface Harness {
   db: DbClient

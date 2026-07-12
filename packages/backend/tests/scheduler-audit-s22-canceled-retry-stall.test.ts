@@ -1,4 +1,5 @@
 import { rimrafDir } from './helpers/cleanup'
+import { noopOpencodeCmd } from './helpers/stub-runtime'
 // RFC-095 SEMANTICS LOCK — design/scheduler-audit-2026-06-10.md S-22 (WP-2)
 // design/RFC-095-scope-outcome-exhaustive/design.md §1 / §5-2 / §5-5
 //
@@ -301,7 +302,7 @@ describe('S-22（DB 面）— retryNode 对 canceled 任务放行，复活后任
     await expect(
       retryNode(db, taskId, runA, {
         cascade: true,
-        deps: { db, appHome: APP_HOME, opencodeCmd: ['/usr/bin/env', 'true'] },
+        deps: { db, appHome: APP_HOME, opencodeCmd: noopOpencodeCmd() },
       }),
     ).rejects.toThrow(/task-still-running|is running/)
   })
