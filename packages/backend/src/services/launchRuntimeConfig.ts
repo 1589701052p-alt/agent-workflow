@@ -8,13 +8,18 @@
 // concurrency cap, and — pre-RFC-108 — no hard-timeout floor (Codex impl gate
 // P2). Hoisting it here lets all routes share one resolver.
 
+import type { Language } from '@agent-workflow/shared'
 import { loadConfig } from '@/config'
 
 /** RFC-075: read the auto commit&push runtime config from settings. */
-export function resolveCommitPushConfig(
-  configPath: string,
-):
-  | { model?: string; runtime?: string; maxRepairRetries?: number; diffMaxBytes?: number }
+export function resolveCommitPushConfig(configPath: string):
+  | {
+      model?: string
+      runtime?: string
+      maxRepairRetries?: number
+      diffMaxBytes?: number
+      lang?: Language
+    }
   | undefined {
   try {
     const cfg = loadConfig(configPath)
@@ -23,6 +28,7 @@ export function resolveCommitPushConfig(
       runtime?: string
       maxRepairRetries?: number
       diffMaxBytes?: number
+      lang?: Language
     } = {}
     if (cfg.commitPushModel !== undefined) out.model = cfg.commitPushModel
     // RFC-117: commit agent runtime profile (wins over the deprecated model).
@@ -30,6 +36,8 @@ export function resolveCommitPushConfig(
     if (cfg.commitPushMaxRepairRetries !== undefined)
       out.maxRepairRetries = cfg.commitPushMaxRepairRetries
     if (cfg.commitPushDiffMaxBytes !== undefined) out.diffMaxBytes = cfg.commitPushDiffMaxBytes
+    // RFC-157: commit-message output language (undefined ≡ en-US at spawn time).
+    if (cfg.commitPushLang !== undefined) out.lang = cfg.commitPushLang
     return Object.keys(out).length > 0 ? out : undefined
   } catch {
     return undefined
@@ -55,6 +63,7 @@ export function resolveLaunchRuntimeConfig(configPath: string): {
     runtime?: string
     maxRepairRetries?: number
     diffMaxBytes?: number
+    lang?: Language
   }
   maxConcurrentNodes?: number
   defaultPerNodeTimeoutMs?: number

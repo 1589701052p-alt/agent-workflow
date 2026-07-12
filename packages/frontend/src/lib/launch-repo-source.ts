@@ -1,25 +1,18 @@
-// RFC-024 — pure helpers for the launcher's two-mode Repo source picker.
+// RFC-024 — pure helpers for the launcher's Repo source picker (RFC-165:
+// URL-only; the local-path mode is retired).
 //
 // Keeping these out of the route component so the body / formdata shape is
 // trivially unit-testable without spinning up the route harness.
 
 import { canonicalRepoKey, parseGitUrl, type CachedRepo } from '@agent-workflow/shared'
 
-export type RepoSource =
-  | {
-      kind: 'path'
-      repoPath: string
-      baseBranch: string
-      /**
-       * RFC-068 — opt-in `git fetch --all --prune --tags` against the user's
-       * local repo before the worktree is materialized. Never `pull` /
-       * `merge` — only refreshes remote-tracking refs so the user can pick
-       * `origin/<branch>` as a base ref. Default false to preserve legacy
-       * (no-fetch) behavior. UI persists last value to localStorage.
-       */
-      fetchBeforeLaunch?: boolean
-    }
-  | { kind: 'url'; repoUrl: string; ref: string }
+/**
+ * RFC-165: URL-only — path mode retired from the wire. The `kind`
+ * discriminant survives (a one-armed union) so downstream `kind === 'url'`
+ * checks keep compiling; local repos ride `file:///abs/path` URLs through the
+ * same cached-mirror pipeline.
+ */
+export type RepoSource = { kind: 'url'; repoUrl: string; ref: string }
 
 export interface LaunchCommonPayload {
   workflowId: string
@@ -91,25 +84,6 @@ export function buildLaunchBody(
     common.gitUserName.length > 0 &&
     typeof common.gitUserEmail === 'string' &&
     common.gitUserEmail.length > 0
-  if (source.kind === 'path') {
-    const out: Record<string, unknown> = {
-      workflowId: common.workflowId,
-      name: common.name,
-      repoPath: source.repoPath,
-      baseBranch: source.baseBranch,
-      inputs: common.inputs,
-    }
-    // RFC-068: only set when explicitly true so legacy bodies stay byte-
-    // identical (`undefined` field would survive JSON serialization
-    // anyway, but explicit gate keeps the wire format clean).
-    if (source.fetchBeforeLaunch === true) out.fetchBeforeLaunch = true
-    if (hasGitIdentity) {
-      out.gitUserName = common.gitUserName
-      out.gitUserEmail = common.gitUserEmail
-    }
-    stampLaunchExtras(out, common)
-    return out
-  }
   const out: Record<string, unknown> = {
     workflowId: common.workflowId,
     name: common.name,
@@ -123,34 +97,6 @@ export function buildLaunchBody(
   }
   stampLaunchExtras(out, common)
   return out
-}
-
-/**
- * Same shape as `buildLaunchBody`, but stamps it into the existing multipart
- * envelope used by RFC-020 uploads. Wrapping in this helper keeps the
- * launcher's "uploads + url" combo encoded consistently. RFC-107: the backend
- * now accepts the url + uploads combo (the multipart route resolves the URL
- * into the repo cache before materializing the worktree), so this is a fully
- * supported launch path. The url body carries `repoUrl` + optional `ref`.
- */
-export function buildLaunchFormDataV2(
-  source: RepoSource,
-  common: LaunchCommonPayload,
-  uploads: Record<string, File[]>,
-): FormData {
-  const inputsOut: Record<string, string> = { ...common.inputs }
-  for (const key of Object.keys(uploads)) {
-    if (!(key in inputsOut)) inputsOut[key] = ''
-  }
-  const body = buildLaunchBody(source, { ...common, inputs: inputsOut })
-  const fd = new FormData()
-  fd.set('payload', new Blob([JSON.stringify(body)], { type: 'application/json' }))
-  for (const [key, list] of Object.entries(uploads)) {
-    for (const f of list) {
-      fd.append(`files[${key}][]`, f, f.name)
-    }
-  }
-  return fd
 }
 
 /**
@@ -168,11 +114,9 @@ export function validateRepoUrl(input: string): 'empty' | 'invalid' | null {
 
 /**
  * RFC-110 — resolve the local `repoPath` the launch-form pickers (FilesPicker /
- * GitPicker) should enumerate against:
- *   - path mode → `source.repoPath` verbatim (may be '' — path mode handles that).
- *   - url  mode → canonicalize `source.repoUrl` and find the cached repo with the
- *                 SAME canonical key; return its `localPath`. No match / unparseable
- *                 URL → '' (the picker falls back to a text input in url mode).
+ * GitPicker) should enumerate against: canonicalize `source.repoUrl` and find
+ * the cached repo with the SAME canonical key; return its `localPath`. No
+ * match / unparseable URL → '' (the picker falls back to a text input).
  *
  * Pure: no hooks, no side effects. Matching reuses the backend cache-key
  * canonicalization (`canonicalRepoKey`), so a hit here means the backend would
@@ -182,7 +126,6 @@ export function validateRepoUrl(input: string): 'empty' | 'invalid' | null {
  * separate cache dirs).
  */
 export function resolveUrlRepoPath(source: RepoSource, cached: CachedRepo[]): string {
-  if (source.kind === 'path') return source.repoPath
   const key = canonicalRepoKey(source.repoUrl)
   if (key === null) return ''
   const hit = cached.find((c) => canonicalRepoKey(c.url) === key)
@@ -190,12 +133,51 @@ export function resolveUrlRepoPath(source: RepoSource, cached: CachedRepo[]): st
 }
 
 /**
- * RFC-066 PR-C — default `RepoSource` for a newly-added row. Defaults to
- * path mode with empty values so the user gets the same blank form they
- * already know from the single-repo launcher.
+ * RFC-066 PR-C — default `RepoSource` for a newly-added row: an empty URL
+ * row, the same blank form the single-repo launcher renders.
  */
 export function defaultRepoSource(): RepoSource {
-  return { kind: 'path', repoPath: '', baseBranch: '' }
+  return { kind: 'url', repoUrl: '', ref: '' }
+}
+
+/**
+ * RFC-159 (edit-config) — inverse of `buildLaunchBody` / `buildLaunchBodyMultiRepo`:
+ * reconstruct the launcher's `RepoSource[]` from an already-built (or persisted)
+ * StartTask launch body so the schedule edit-config form can pre-fill the repo
+ * picker.
+ *
+ * The body is read defensively (opaque `Record<string, unknown>`) because it may
+ * arrive straight off the wire (a scheduled task's stored `launchPayload`). Rules,
+ * mirroring the forward builders:
+ *   - `repos: [...]` → one source per entry.
+ *   - `repoUrl`      → single url source (`ref` defaults to '').
+ *   - nothing usable → a single default empty URL row (same as a fresh form).
+ */
+export function bodyToRepoSources(body: Record<string, unknown>): RepoSource[] {
+  const repos = body.repos
+  if (Array.isArray(repos) && repos.length > 0) {
+    return repos.map((r) =>
+      repoEntryToSource((typeof r === 'object' && r !== null ? r : {}) as Record<string, unknown>),
+    )
+  }
+  if (typeof body.repoUrl === 'string' && body.repoUrl.length > 0) {
+    return [
+      { kind: 'url', repoUrl: body.repoUrl, ref: typeof body.ref === 'string' ? body.ref : '' },
+    ]
+  }
+  // RFC-165: a legacy path-mode payload (only reachable on a schedule the
+  // boot healer disabled) has no wire representation anymore — hand back an
+  // empty URL row so the edit form renders blank for repair.
+  return [defaultRepoSource()]
+}
+
+/** Map one `StartTask.repos[i]` entry back to a `RepoSource` (url-only; a
+ *  legacy path row degrades to an empty URL row for repair). */
+function repoEntryToSource(r: Record<string, unknown>): RepoSource {
+  if (typeof r.repoUrl === 'string' && r.repoUrl.length > 0) {
+    return { kind: 'url', repoUrl: r.repoUrl, ref: typeof r.ref === 'string' ? r.ref : '' }
+  }
+  return defaultRepoSource()
 }
 
 /**
@@ -236,17 +218,10 @@ export function computePreviewDirNames(repos: RepoSource[]): string[] {
 
 /**
  * Compute the basename a `RepoSource` will land under inside the parent
- * multi-repo worktree. Mirrors `path.basename` for path mode; for URL mode,
- * pulls the trailing path segment of the repo URL (strips `.git` suffix
- * the way `git clone` does).
+ * multi-repo worktree: the trailing path segment of the repo URL (strips
+ * `.git` suffix the way `git clone` does).
  */
 function basenameForRepoSource(src: RepoSource): string {
-  if (src.kind === 'path') {
-    if (src.repoPath === '') return ''
-    const parts = src.repoPath.split('/').filter((p) => p.length > 0)
-    return parts.length === 0 ? '' : parts[parts.length - 1]!
-  }
-  // url
   const u = src.repoUrl.trim()
   if (u === '') return ''
   // Strip query / fragment / trailing slashes.
@@ -261,8 +236,8 @@ function basenameForRepoSource(src: RepoSource): string {
  * RFC-066 PR-C — compose the JSON body for a multi-repo POST /api/tasks.
  * Emits the v2 `repos: [...]` shape; legacy single-repo callers (length 1)
  * should keep using `buildLaunchBody` to stay byte-baseline against
- * pre-RFC-066 fixtures. RFC-067 git identity + RFC-068 fetchBeforeLaunch
- * are handled the same way as the single-repo helper.
+ * pre-RFC-066 fixtures. RFC-067 git identity is handled the same way as the
+ * single-repo helper.
  */
 export function buildLaunchBodyMultiRepo(
   repos: RepoSource[],
@@ -273,24 +248,16 @@ export function buildLaunchBodyMultiRepo(
     common.gitUserName.length > 0 &&
     typeof common.gitUserEmail === 'string' &&
     common.gitUserEmail.length > 0
-  // RFC-068: same top-level flag covers every path-mode entry. The body
-  // includes it whenever ANY path-mode row opted in — the backend ignores
-  // it for URL-mode entries automatically.
-  const anyFetchBeforeLaunch = repos.some((r) => r.kind === 'path' && r.fetchBeforeLaunch === true)
   const out: Record<string, unknown> = {
     workflowId: common.workflowId,
     name: common.name,
     inputs: common.inputs,
     repos: repos.map((r) => {
-      if (r.kind === 'path') {
-        return { repoPath: r.repoPath, baseBranch: r.baseBranch }
-      }
       const entry: Record<string, unknown> = { repoUrl: r.repoUrl }
       if (r.ref.trim().length > 0) entry.ref = r.ref.trim()
       return entry
     }),
   }
-  if (anyFetchBeforeLaunch) out.fetchBeforeLaunch = true
   if (hasGitIdentity) {
     out.gitUserName = common.gitUserName
     out.gitUserEmail = common.gitUserEmail

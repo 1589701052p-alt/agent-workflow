@@ -18,7 +18,13 @@
 
 import type { DbClient } from '@/db/client'
 import type { Logger } from '@/util/log'
-import type { Agent, InventorySnapshot, Mcp, Plugin } from '@agent-workflow/shared'
+import type {
+  Agent,
+  InventorySnapshot,
+  Mcp,
+  Plugin,
+  RuntimeConfigDirProfile,
+} from '@agent-workflow/shared'
 import type { LivePollOptions, LivePollerHandle } from '@/services/subagentLiveCapture'
 // Type-only (erased at runtime): runtimeRegistry value-imports runtime/index,
 // so a VALUE import here would close a module-init cycle. RuntimeProfile is the
@@ -181,8 +187,11 @@ export interface SessionCaptureContext {
   log: Logger
   /** Subprocess cwd (worktree) — claude's `/`→`-` slug is the projects subdir. */
   worktreePath: string
-  /** Per-run config dir root (`<runRoot>/.claude` is claude's CLAUDE_CONFIG_DIR). */
+  /** Per-run config dir root (claude's CLAUDE_CONFIG_DIR = `<runRoot>/<configDirName>`). */
   runRoot: string
+  /** RFC-154: frozen config-dir LEAF name (claude transcript lives under it).
+   *  Omitted → the protocol default leaf. opencode ignores (SQLite capture). */
+  configDirName?: string
   /** opencode: partId-level dedupe from the live poller (skip already-written rows). */
   alreadyInsertedPartIds?: Map<string, Set<string>>
   /** opencode: override SQLite path (tests). */
@@ -257,19 +266,27 @@ export interface BusinessNodeSpawnContext {
    * runner (async DB reads stay out of drivers — RFC-143 §4.6C).
    */
   resolvedParamsByAgent: ReadonlyMap<string, RuntimeProfile>
-  /** Skills for this agent (claude injects into CLAUDE_CONFIG_DIR/skills;
-   *  opencode ignores — the runner's prepareSkills already populated runDir). */
+  /** Skills for this agent — each driver stages them into ITS config dir
+   *  (`<runRoot>/<configDir.name>/skills/`) inside buildBusinessSpawn (RFC-154;
+   *  was a runtime-blind runner preamble that staged `.opencode` even for claude). */
   skills: readonly ResolvedSkill[]
   /** RFC-026 clarify-inline rerun: resume the prior session. */
   resumeSessionId?: string
   /** Subprocess cwd = task worktree. */
   worktreePath: string
   /**
-   * Per-run root (`<appHome>/runs/<taskId>/<nodeRunId>`). opencode derives
-   * OPENCODE_CONFIG_DIR=<runRoot>/.opencode + inventory out under it; claude
-   * uses it as the attempt dir holding `.claude/` + `system.md`.
+   * Per-run root (`<appHome>/runs/<taskId>/<nodeRunId>`). The config dir is
+   * `<runRoot>/<configDir.name>`; inventory out + claude's `system.md` stay
+   * directly under runRoot (NOT inside the config dir — leaf renames must not
+   * move them, RFC-154 §8).
    */
   runRoot: string
+  /**
+   * RFC-154: the frozen config-dir injection profile — the env var NAME the
+   * binary reads its config dir from + the leaf dir name under runRoot. The
+   * runner always supplies it (frozen value or protocol default).
+   */
+  configDir: RuntimeConfigDirProfile
   /** RFC-067 per-task git identity (both non-empty to inject). */
   gitUserName?: string | null
   gitUserEmail?: string | null

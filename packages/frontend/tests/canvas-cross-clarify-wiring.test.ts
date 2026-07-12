@@ -105,8 +105,18 @@ describe('RFC-056 cross-clarify canvas wiring', () => {
     const ZH_TS = resolve(FRONTEND_SRC, 'i18n', 'zh-CN.ts')
     const en = readFileSync(EN_TS, 'utf8')
     const zh = readFileSync(ZH_TS, 'utf8')
-    expect(en).toContain("paletteLabel: '⚡ cross-clarify'")
-    expect(zh).toContain("paletteLabel: '⚡ 跨代理反问'")
+    // RFC-146 T4 moved the glyph out of every locale string into the
+    // PALETTE_DESCRIPTORS table (single icon column, cannot drift per
+    // locale); buildPalette prepends it. Lock BOTH halves: the table
+    // carries ⚡ for clarify-cross-agent, and the i18n values are now
+    // glyph-free (an accidental re-embedding would double the icon).
+    expect(en).toContain("paletteLabel: 'cross-clarify'")
+    expect(zh).toContain("paletteLabel: '跨代理反问'")
+    const palette = readFileSync(
+      resolve(FRONTEND_SRC, 'components', 'canvas', 'nodePalette.ts'),
+      'utf8',
+    )
+    expect(palette).toMatch(/'clarify-cross-agent':\s*\{[^}]*glyph:\s*'⚡'/)
   })
 
   test('styles.css declares .canvas-node--clarify-cross-agent matching the clarify family palette', () => {

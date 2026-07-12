@@ -20,7 +20,6 @@
 //   - both directive wordings + both heading pairs, and that neither variant
 //     leaks into the other's rounds;
 //   - emit only when block is non-empty;
-//   - mutual exclusion with cross-clarify (never two prior-output blocks);
 //   - suppression on inline-session resume (RFC-119 D5, kept by RFC-141);
 //   - placement after review/clarify feedback, before the trailing protocol.
 //
@@ -123,28 +122,6 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
     expect(none).not.toContain(PRIOR_OUTPUT_BLOCK_TITLE)
   })
 
-  test('mutual exclusion with cross-clarify: xcc owns prior output, generalized suppressed (no duplicate)', () => {
-    const out = renderUserPrompt({
-      promptTemplate: 'Body.',
-      inputs: {},
-      meta: META,
-      agentOutputs: ['design'],
-      crossClarifyContext: {
-        block: 'external feedback body',
-        iteration: '1',
-        sourcesCsv: 'auditor',
-        priorOutputBlock: '### design\n\nXCC_DRAFT',
-      },
-      priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
-    })
-    // cross-clarify's block renders...
-    expect(out).toContain('XCC_DRAFT')
-    // ...and the generalized one does NOT (suppressed to avoid two prior-output blocks).
-    expect(out).not.toContain('GEN_DRAFT')
-    // exactly one Prior Output heading.
-    expect(out.split(PRIOR_OUTPUT_BLOCK_TITLE).length - 1).toBe(1)
-  })
-
   test('suppressed on inline session resume (clarifyContext.mode=inline)', () => {
     const out = renderUserPrompt({
       promptTemplate: 'Body.',
@@ -153,8 +130,6 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
       agentOutputs: ['design'],
       clarifyContext: {
         mode: 'inline',
-        answersBlock: 'Q1: yes',
-        directive: 'continue',
       },
       priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
     })
@@ -171,7 +146,7 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
       inputs: {},
       meta: META,
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
     })
     expect(out).toContain(ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE)
@@ -187,7 +162,7 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
     expect(out).not.toContain('You MUST end your reply with a `<workflow-output>` block')
   })
 
-  test('RFC-141 golden lock: same input, hasClarifyChannel flip swaps the variant pair exactly', () => {
+  test('RFC-141 golden lock: same input, mandatory-directive flip swaps the variant pair exactly', () => {
     const base = {
       promptTemplate: 'Body.',
       inputs: {},
@@ -196,7 +171,10 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
       priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
     }
     const output = renderUserPrompt(base)
-    const askback = renderUserPrompt({ ...base, hasClarifyChannel: true })
+    const askback = renderUserPrompt({
+      ...base,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+    })
     // output round: update pair only
     expect(output).toContain(UPDATE_DIRECTIVE_TEXT)
     expect(output).not.toContain(ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE)
@@ -232,7 +210,7 @@ describe('RFC-119 — renderUserPrompt priorOutputUpdate emit', () => {
       inputs: {},
       meta: META,
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       clarifyContext: { flatBlock: '## Clarify Q&A\n- Q1 → yes' },
       priorOutputUpdate: { block: '### design\n\nGEN_DRAFT' },
     })

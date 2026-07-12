@@ -9,6 +9,7 @@ import type { Hono } from 'hono'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRunEvents, nodeRuns, tasks, workflows } from '../src/db/schema'
@@ -22,6 +23,8 @@ interface Harness {
   db: DbClient
   app: Hono
   repoPath: string
+  /** RFC-165: v2 HTTP bodies are URL-only; file:// is the local-repo form. */
+  repoUrl: string
   appHome: string
   cleanup: () => void
 }
@@ -51,6 +54,7 @@ async function buildHarness(): Promise<Harness> {
     db,
     app,
     repoPath,
+    repoUrl: pathToFileURL(repoPath).href,
     appHome,
     cleanup: () => {
       rimrafDir(appHome)
@@ -101,8 +105,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: wfId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -119,8 +123,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: '01HFAKE',
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -153,8 +157,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: wfId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -171,7 +175,10 @@ describe('task HTTP routes', () => {
     expect(list.length).toBe(0)
   })
 
-  test('POST with non-git repo path creates a task with status=failed', async () => {
+  test('POST with a non-git file:// source fails the clone up front (no task row)', async () => {
+    // RFC-165: the path-mode "create a failed task row" semantics left with
+    // repoPath. URL sources resolve through the repo cache BEFORE any task
+    // row exists, so a dir that isn't a git repo dies at clone time.
     const wfId = await seedWorkflow(h.db, EMPTY_DEF)
     const notRepo = mkdtempSync(join(tmpdir(), 'aw-notrepo-'))
     try {
@@ -180,15 +187,14 @@ describe('task HTTP routes', () => {
         body: JSON.stringify({
           workflowId: wfId,
           name: 'fixture-task',
-          repoPath: notRepo,
-          baseBranch: 'main',
+          repoUrl: pathToFileURL(notRepo).href,
           inputs: {},
         }),
       })
-      expect(res.status).toBe(201)
-      const task = (await res.json()) as { status: string; errorSummary: string | null }
-      expect(task.status).toBe('failed')
-      expect(task.errorSummary).toContain('worktree creation failed')
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { code: string }).code).toBe('repo-clone-failed')
+      const list = (await (await req(h.app, '/api/tasks')).json()) as Array<unknown>
+      expect(list.length).toBe(0)
     } finally {
       rimrafDir(notRepo)
     }
@@ -296,8 +302,7 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: '',
         name: 'fixture-task',
-        repoPath: '',
-        baseBranch: '',
+        repoUrl: '',
         inputs: {},
       }),
     })
@@ -371,8 +376,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: wfId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -399,8 +404,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: wfId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -432,8 +437,8 @@ describe('task HTTP routes', () => {
       body: JSON.stringify({
         workflowId: wfId,
         name: 'fixture-task',
-        repoPath: h.repoPath,
-        baseBranch: 'main',
+        repoUrl: h.repoUrl,
+        ref: 'main',
         inputs: {},
       }),
     })

@@ -1,15 +1,16 @@
 // Agents list page. Each row links to the detail editor.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link, createRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { Agent } from '@agent-workflow/shared'
 import { api } from '@/api/client'
-import { useUserLookup } from '@/hooks/useUserLookup'
+import { useResourceList } from '@/hooks/useResourceList'
 import { ConfirmButton } from '@/components/ConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingState } from '@/components/LoadingState'
+import { ResourceNameCell } from '@/components/ResourceNameCell'
 import { RUNTIMES_QUERY_KEY } from '@/components/RuntimeList'
 import { StatusChip } from '@/components/StatusChip'
 import { Route as RootRoute } from './__root'
@@ -22,19 +23,12 @@ export const Route = createRoute({
 
 function AgentsPage() {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const { data, isLoading, error } = useQuery<Agent[]>({
+  // RFC-151 PR-3 — shared list shell: query + delete mutation + owner lookup.
+  const { data, isLoading, error, del, owners } = useResourceList<Agent>({
     queryKey: ['agents'],
-    queryFn: ({ signal }) => api.get('/api/agents', undefined, signal),
+    endpoint: '/api/agents',
+    deleteBy: 'name',
   })
-
-  const del = useMutation({
-    mutationFn: (name: string) => api.delete(`/api/agents/${encodeURIComponent(name)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
-  })
-
-  // RFC-099 — resolve owner ids to display names for the list badge.
-  const owners = useUserLookup((data ?? []).map((r) => r.ownerUserId))
 
   // RFC-115: show each agent's runtime; agents that didn't pick one fall back to
   // the global default runtime (config.defaultRuntime → the registry row flagged
@@ -50,7 +44,6 @@ function AgentsPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('agents.title')}</h1>
-          <p className="page__hint">{t('agents.hint')}</p>
         </div>
         <Link to="/agents/new" className="btn btn--primary">
           {t('agents.newButton')}
@@ -79,19 +72,14 @@ function AgentsPage() {
           <tbody>
             {data.map((a) => (
               <tr key={a.id}>
-                <td className="data-table__nowrap">
-                  <Link to="/agents/$name" params={{ name: a.name }} className="data-table__link">
-                    {a.name}
-                  </Link>
-                  {a.visibility === 'private' && (
-                    <span className="chip chip--tight">{t('acl.privateChip')}</span>
-                  )}
-                  {a.ownerUserId != null && owners.get(a.ownerUserId) !== undefined && (
-                    <span className="muted data-table__owner" title={t('acl.ownerBadge')}>
-                      {owners.get(a.ownerUserId)?.displayName}
-                    </span>
-                  )}
-                </td>
+                <ResourceNameCell
+                  to="/agents/$name"
+                  params={{ name: a.name }}
+                  name={a.name}
+                  visibility={a.visibility}
+                  ownerUserId={a.ownerUserId}
+                  owners={owners}
+                />
                 <td
                   className="data-table__muted data-table__truncate"
                   title={a.description || undefined}
@@ -120,13 +108,23 @@ function AgentsPage() {
                   )}
                 </td>
                 <td className="data-table__actions">
+                  {a.builtin !== true && (
+                    <Link
+                      to="/tasks/new"
+                      search={{ kind: 'agent', agent: a.name }}
+                      className="btn btn--sm"
+                      data-testid={`agent-row-launch-${a.name}`}
+                    >
+                      {t('taskWizard.launchEntry')}
+                    </Link>
+                  )}
                   <Link to="/agents/$name" params={{ name: a.name }} className="btn btn--sm">
                     {t('common.open')}
                   </Link>
                   <ConfirmButton
                     label={t('common.delete')}
-                    onConfirm={() => del.mutateAsync(a.name)}
-                    danger
+                    onConfirm={() => del.mutateAsync(a)}
+                    variant="danger"
                     disabled={del.isPending}
                     size="sm"
                   />

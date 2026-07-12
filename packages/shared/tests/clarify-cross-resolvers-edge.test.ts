@@ -30,22 +30,16 @@
 //     deterministic edge-id scheme `e_{q}_{cc}_clarify` / `_to_questioner`
 //     (distinct from the frontend ulid-based crossClarifyDragHelper). A silent
 //     rename of the id template would break idempotent re-wiring. (clarify.ts:718-735)
-//   * buildExternalFeedbackBlock — designer-side fan-in: Answers list renders
-//     per-question in QUESTION order, interleaving custom-only / multi+note /
-//     unanswered synthesis, and silently drops orphan answers whose questionId
-//     is absent from src.questions. (clarify.ts:445-468)
 //
 // If any of these go red the cross-clarify routing / prompt assembly has
 // drifted — investigate before relaxing.
 
 import { describe, expect, test } from 'bun:test'
 
-import type { ClarifyAnswer, ClarifyQuestion } from '../src/schemas/clarify'
 import type { WorkflowDefinition, WorkflowEdge } from '../src/schemas/workflow'
 import {
   agentHasExternalFeedbackChannel,
   buildCrossClarifyAutoEdges,
-  buildExternalFeedbackBlock,
   findCrossClarifyNodeForQuestioner,
   findCrossClarifyNodesPointingToDesigner,
   findDesignerNodeForCrossClarify,
@@ -54,28 +48,6 @@ import {
 } from '../src/clarify'
 
 // --- local harness (replicated from clarify-cross-rfc056.test.ts) -----------
-
-function mkQ(id: string, title: string, kind: 'single' | 'multi' = 'single'): ClarifyQuestion {
-  return {
-    id,
-    title,
-    kind,
-    recommended: false,
-    options: [
-      { label: 'A', description: '', recommended: false, recommendationReason: '' },
-      { label: 'B', description: '', recommended: false, recommendationReason: '' },
-    ],
-  }
-}
-
-function mkA(qid: string, labels: string[] = [], custom = ''): ClarifyAnswer {
-  return {
-    questionId: qid,
-    selectedOptionIndices: [],
-    selectedOptionLabels: labels,
-    customText: custom,
-  }
-}
 
 function edge(
   id: string,
@@ -327,57 +299,5 @@ describe('GAP5 agentHasExternalFeedbackChannel + buildCrossClarifyAutoEdges', ()
         target: { nodeId: 'q1', portName: '__clarify_response__' },
       },
     ])
-  })
-})
-
-// --- GAP 6: buildExternalFeedbackBlock multi-question mixed-answer synthesis -
-
-describe('GAP6 buildExternalFeedbackBlock — per-question Answers in question order; orphan dropped', () => {
-  const out = buildExternalFeedbackBlock([
-    {
-      sourceQuestionerNodeId: 'aud',
-      crossClarifyNodeId: 'cc1',
-      iteration: 2,
-      questions: [
-        mkQ('q1', 'Q-one', 'single'),
-        mkQ('q2', 'Q-two', 'multi'),
-        mkQ('q3', 'Q-three', 'single'),
-      ],
-      answers: [
-        mkA('q1', [], 'freeform'),
-        mkA('q2', ['A', 'B'], 'note'),
-        // orphan answer for a non-existent question id — must be dropped.
-        mkA('qX', ['ghost'], ''),
-      ],
-    },
-  ])
-
-  test('Answers list emits per-question, in question order, with mixed synthesis', () => {
-    const lines = out.split('\n')
-    const q1Line = lines.findIndex((l) =>
-      l.includes('- Q1 (Q-one): User chose custom answer: "freeform"'),
-    )
-    const q2Line = lines.findIndex((l) =>
-      l.includes('- Q2 (Q-two): User selected: "A", "B" with additional note: "note"'),
-    )
-    const q3Line = lines.findIndex((l) =>
-      l.includes('- Q3 (Q-three): User did not answer this question.'),
-    )
-    expect(q1Line).toBeGreaterThan(-1)
-    expect(q2Line).toBeGreaterThan(-1)
-    expect(q3Line).toBeGreaterThan(-1)
-    // Question order, not answer-array order.
-    expect(q1Line).toBeLessThan(q2Line)
-    expect(q2Line).toBeLessThan(q3Line)
-  })
-
-  test('orphan answer (qX) is silently dropped — "ghost" never appears', () => {
-    expect(out).not.toContain('ghost')
-  })
-
-  test('question-detail headings shifted to #### (no bare ### Q heading leaks)', () => {
-    expect(out).toContain('#### Q1: Q-one')
-    expect(out).toContain('#### Q2: Q-two')
-    expect(out).not.toMatch(/^### Q/m)
   })
 })

@@ -1,7 +1,7 @@
 // Code-based TanStack Router tree. M1 keeps it small — file-based routing
 // is overkill until the workflow editor (M2) adds nested layouts.
 
-import { createRouter } from '@tanstack/react-router'
+import { createRoute, createRouter, redirect } from '@tanstack/react-router'
 import { Route as accountRoute } from '@/routes/account'
 import { Route as agentsRoute } from '@/routes/agents'
 import { Route as agentDetailRoute } from '@/routes/agents.detail'
@@ -21,22 +21,54 @@ import { Route as skillsRoute } from '@/routes/skills'
 import { Route as skillDetailRoute } from '@/routes/skills.detail'
 import { Route as skillNewRoute } from '@/routes/skills.new'
 import { Route as tasksRoute } from '@/routes/tasks'
+import { TaskWizardRoute as taskWizardRoute } from '@/routes/tasks.new'
+import { Route as scheduledRoute } from '@/routes/scheduled'
+import { Route as scheduledDetailRoute } from '@/routes/scheduled.$id'
 import { Route as taskDetailRoute } from '@/routes/tasks.detail'
 import { Route as taskPreviewRoute } from '@/routes/tasks.preview'
 import { Route as reviewsRoute } from '@/routes/reviews'
 import { Route as reviewDetailRoute } from '@/routes/reviews.detail'
 import { Route as clarifyRoute } from '@/routes/clarify'
 import { Route as clarifyDetailRoute } from '@/routes/clarify.detail'
-import { Route as workflowsRoute } from '@/routes/workflows'
 import {
-  EditRoute as workflowEditRoute,
-  NewRoute as workflowNewRoute,
-} from '@/routes/workflows.edit'
-import { LaunchRoute as workflowLaunchRoute } from '@/routes/workflows.launch'
+  NewRedirectRoute as workflowNewRedirectRoute,
+  Route as workflowsRoute,
+} from '@/routes/workflows'
+import { Route as workgroupsRoute } from '@/routes/workgroups'
+import { Route as workgroupDetailRoute } from '@/routes/workgroups.detail'
+import { EditRoute as workflowEditRoute } from '@/routes/workflows.edit'
 import { ReposRoute as reposRoute } from '@/routes/repos'
 import { Route as memoryRoute } from '@/routes/memory'
 import { Route as memoryDistillJobDetailRoute } from '@/routes/memory.distill-jobs.$jobId'
 import { Route as fusionDetailRoute } from '@/routes/fusions.detail'
+
+// RFC-165 (T14): both legacy launcher pages are retired — their URLs redirect
+// into the /tasks/new wizard with the object pre-picked (deep links land on
+// Step 2; `?editScheduled` carries through so old bookmarks keep working).
+const workflowLaunchRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/workflows/$id/launch',
+  beforeLoad: ({ params, search }) => {
+    const editScheduled = (search as { editScheduled?: string }).editScheduled
+    throw redirect({
+      to: '/tasks/new',
+      search:
+        editScheduled !== undefined ? { editScheduled } : { kind: 'workflow', workflow: params.id },
+    })
+  },
+})
+
+const workgroupLaunchRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/workgroups/launch',
+  beforeLoad: ({ search }) => {
+    const name = (search as { name?: string }).name
+    throw redirect({
+      to: '/tasks/new',
+      search: name !== undefined && name !== '' ? { kind: 'workgroup', workgroup: name } : {},
+    })
+  },
+})
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -56,14 +88,27 @@ const routeTree = rootRoute.addChildren([
   pluginNewRoute,
   pluginDetailRoute,
   pluginsRoute,
-  workflowNewRoute,
-  workflowLaunchRoute,
+  // Workflow creation is a quick-create dialog on the list page; the retired
+  // '/workflows/new' literal only redirects there, and must precede
+  // '/workflows/$id' so "new" never resolves as a workflow id.
+  workflowNewRedirectRoute,
+  workflowLaunchRedirect,
   workflowEditRoute,
   workflowsRoute,
+  // RFC-164: creation is a list-page dialog — list + detail + launch routes.
+  // '/workgroups/launch' literal must precede '/workgroups/$name' so "launch"
+  // never resolves as a workgroup name.
+  workgroupLaunchRedirect,
+  workgroupDetailRoute,
+  workgroupsRoute,
   // RFC-105: '/tasks/$id/preview' (longer literal) before '/tasks/$id'.
   taskPreviewRoute,
   taskDetailRoute,
   tasksRoute,
+  taskWizardRoute,
+  // RFC-159: '/scheduled/$id' literal must precede '/scheduled'.
+  scheduledDetailRoute,
+  scheduledRoute,
   // '/reviews/$nodeRunId' must come before '/reviews' so the literal wins.
   reviewDetailRoute,
   reviewsRoute,

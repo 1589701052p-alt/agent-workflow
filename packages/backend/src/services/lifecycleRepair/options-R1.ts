@@ -93,6 +93,7 @@ const R1_APPROVE_RUN: RepairOptionDef = {
   descriptionKey: 'diagnose.repair.R1.approveRun.desc',
   risk: 'low',
   destructive: false,
+  revivesExecution: true, // RFC-165 F13-r4: refused for workgroup tasks
   async preflight(rc): Promise<PreflightResult> {
     const st = await loadR1State(rc)
     if (st === null) {

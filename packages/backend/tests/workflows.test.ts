@@ -259,6 +259,61 @@ describe('workflow HTTP routes', () => {
     expect(after.version).toBe(2)
   })
 
+  // 2026-07-10 naming unification: workflow names follow the workgroup slug
+  // rules (WORKFLOW_NAME_RE alias). CREATE is guarded by the strict schema;
+  // PUT validates ONLY a changed name, so stored legacy free-form names keep
+  // auto-saving (grandfather decision — 放行存量，只卡新名).
+  test('POST with a free-form name → 422 workflow-invalid (strict create schema)', async () => {
+    const res = await req(app, '/api/workflows', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'My Workflow',
+        description: '',
+        definition: sampleDefinition(),
+      }),
+    })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe('workflow-invalid')
+  })
+
+  test('PUT: unchanged legacy name saves; rename validates against the slug rules', async () => {
+    const { db: hdb, app: happ } = buildHarness()
+    // Route-create with a valid slug, then service-rename to a legacy
+    // free-form value — simulates a row stored before the unification.
+    const post = await req(happ, '/api/workflows', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'legacy-seed',
+        description: '',
+        definition: sampleDefinition(),
+      }),
+    })
+    const created = (await post.json()) as { id: string }
+    await updateWorkflow(hdb, created.id, { name: 'Legacy Name With Spaces' })
+
+    // Auto-save shape: echoes the stored legacy name → must keep working.
+    const same = await req(happ, `/api/workflows/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'Legacy Name With Spaces', description: 'touched' }),
+    })
+    expect(same.status).toBe(200)
+
+    // An actual rename must satisfy the unified rules.
+    const bad = await req(happ, `/api/workflows/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'Still Bad Name' }),
+    })
+    expect(bad.status).toBe(422)
+    expect(((await bad.json()) as { code: string }).code).toBe('workflow-name-invalid')
+
+    const good = await req(happ, `/api/workflows/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'legacy-renamed' }),
+    })
+    expect(good.status).toBe(200)
+    expect(((await good.json()) as { name: string }).name).toBe('legacy-renamed')
+  })
+
   test('GET unknown id returns 404 with workflow-not-found', async () => {
     const res = await req(app, '/api/workflows/01HFAKEFAKEFAKEFAKEFAKE')
     expect(res.status).toBe(404)

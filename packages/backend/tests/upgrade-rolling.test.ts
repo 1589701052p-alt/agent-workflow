@@ -227,7 +227,7 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
   })
   afterEach(() => h?.cleanup())
 
-  test('HEAD journal has 78 entries (sanity — locks the freeze target indices)', () => {
+  test('HEAD journal has 89 entries (sanity — locks the freeze target indices)', () => {
     // If a future migration is added, raise FREEZE_TARGETS' upper index
     // accordingly or this assertion will block the cascade. RFC-058 PR-B T11
     // bumped to 31 with migration 0031_rfc058_clarify_rounds_unify; RFC-059 T2
@@ -278,7 +278,18 @@ describe('RFC-054 W1-6 — rolling upgrade from old home reaches HEAD + runs toy
     // RFC-144 T5 bumped to 76 with 0076_rfc144_abandon_superseded_merge_state.
     // RFC-145 T2 bumped to 77 with 0077_rfc145_failure_code.
     // RFC-153 bumped to 78 with 0078_rfc153_drop_runtime_builtin.
-    expect(HEAD_TOTAL_MIGRATIONS).toBe(78)
+    // RFC-154 T1 bumped to 79 with 0079_rfc154_runtime_config_dir.
+    // RFC-159 T3 bumped to 80 with 0080_rfc159_scheduled_tasks.
+    // RFC-162 bumped to 81 with 0081_rfc162_clarify_unify.
+    // RFC-164 T2 bumped to 82 with 0082_rfc164_workgroups.
+    // RFC-164 T7 bumped to 83 with 0083_rfc164_workgroup_engine.
+    // RFC-164 T13 bumped to 84 with 0084_rfc164_workgroup_tasks.
+    // RFC-165 T3 bumped to 85 with 0085_rfc165_task_space.
+    // RFC-166 bumped to 86 with 0086_rfc166_agent_inputs.
+    // RFC-165 T9 bumped to 87 with 0087_rfc165_scheduled_launch_kind.
+    // RFC-167 T2 bumped to 88 with 0088_rfc167_dynamic_workflow_spaces.
+    // RFC-167 pivot dropped that table with 0089_rfc167_drop_dynamic_workflow_spaces → 89.
+    expect(HEAD_TOTAL_MIGRATIONS).toBe(89)
   })
 
   for (const target of FREEZE_TARGETS) {

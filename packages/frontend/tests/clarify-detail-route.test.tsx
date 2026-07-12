@@ -96,7 +96,6 @@ function mkSession(overrides: LegacySessionOverrides = {}): ClarifyRound {
     sessionMode: null,
     designerRunTriggeredAt: null,
     abandonedAt: null,
-    questionScopes: null,
     ...rest,
   }
 }

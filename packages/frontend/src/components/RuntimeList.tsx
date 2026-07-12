@@ -16,6 +16,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  configDirEnvProblem,
+  configDirNameProblem,
+  DEFAULT_CONFIG_DIR_PROFILE,
+} from '@agent-workflow/shared'
 import { api } from '@/api/client'
 import { Dialog } from '@/components/Dialog'
 import { Field, NumberInput, TextInput } from '@/components/Form'
@@ -57,6 +62,9 @@ interface RuntimeView {
   temperature: number | null
   steps: number | null
   maxSteps: number | null
+  // RFC-154: config-dir injection overrides (null = protocol default).
+  configDirEnv: string | null
+  configDirName: string | null
   lastProbe: SmokeResult | null
   createdAt: number
   updatedAt: number
@@ -274,6 +282,23 @@ function RuntimeFormDialog(props: {
   const [maxSteps, setMaxSteps] = useState<number | undefined>(
     props.existing?.maxSteps ?? undefined,
   )
+  // RFC-154: config-dir injection overrides (custom forks may rename the env var
+  // / leaf dir they read their config dir through). Empty = protocol default.
+  const [configDirEnv, setConfigDirEnv] = useState(props.existing?.configDirEnv ?? '')
+  const [configDirName, setConfigDirName] = useState(props.existing?.configDirName ?? '')
+  // Inline form gate (Codex impl-gate P3) — same shared predicates the backend
+  // validators throw from, so the two layers can't drift. Empty = unset = valid.
+  const envProblem = configDirEnv.trim() === '' ? null : configDirEnvProblem(configDirEnv.trim())
+  const nameProblem =
+    configDirName.trim() === '' ? null : configDirNameProblem(configDirName.trim())
+  const configDirEnvError =
+    envProblem === 'invalid-name'
+      ? t('runtimes.configDirEnvInvalid')
+      : envProblem === 'reserved'
+        ? t('runtimes.configDirEnvReserved')
+        : undefined
+  const configDirNameError =
+    nameProblem === 'invalid-leaf' ? t('runtimes.configDirNameInvalid') : undefined
   const isOpencode = protocol === 'opencode'
   // Codex P3: the claude spawn path consumes ONLY `model` — variant / temperature
   // / steps / maxSteps are all opencode-only, so null them out for claude (else a
@@ -284,6 +309,9 @@ function RuntimeFormDialog(props: {
     temperature: isOpencode ? (temperature ?? null) : null,
     steps: isOpencode ? (steps ?? null) : null,
     maxSteps: isOpencode ? (maxSteps ?? null) : null,
+    // RFC-154: empty → null (unset = protocol default).
+    configDirEnv: configDirEnv.trim() === '' ? null : configDirEnv.trim(),
+    configDirName: configDirName.trim() === '' ? null : configDirName.trim(),
   })
 
   const test = useMutation({
@@ -342,7 +370,14 @@ function RuntimeFormDialog(props: {
           <button
             type="button"
             className="btn btn--primary"
-            disabled={save.isPending || (!isEdit && name.trim() === '')}
+            disabled={
+              save.isPending ||
+              (!isEdit && name.trim() === '') ||
+              // RFC-154: invalid config-dir overrides block Save (inline errors
+              // explain why); the backend validators are the second line.
+              configDirEnvError !== undefined ||
+              configDirNameError !== undefined
+            }
             onClick={() => save.mutate()}
           >
             {t('common.save')}
@@ -373,6 +408,35 @@ function RuntimeFormDialog(props: {
           data-testid="runtime-binary"
         />
       </Field>
+      {/* RFC-154: config-dir injection overrides — a custom fork may have renamed
+          the env var / default leaf dir it discovers its config dir through.
+          Placeholders show the selected protocol's defaults; empty = default. */}
+      <div className="form-grid form-grid--cols-2">
+        <Field
+          label={t('runtimes.fieldConfigDirEnv')}
+          hint={t('runtimes.fieldConfigDirEnvHint')}
+          error={configDirEnvError}
+        >
+          <TextInput
+            value={configDirEnv}
+            onChange={setConfigDirEnv}
+            placeholder={DEFAULT_CONFIG_DIR_PROFILE[protocol].env}
+            data-testid="runtime-config-dir-env"
+          />
+        </Field>
+        <Field
+          label={t('runtimes.fieldConfigDirName')}
+          hint={t('runtimes.fieldConfigDirNameHint')}
+          error={configDirNameError}
+        >
+          <TextInput
+            value={configDirName}
+            onChange={setConfigDirName}
+            placeholder={DEFAULT_CONFIG_DIR_PROFILE[protocol].name}
+            data-testid="runtime-config-dir-name"
+          />
+        </Field>
+      </div>
       {/* RFC-113: the runtime's execution profile. variant/temperature/steps are
           opencode-only (claude has none) — shown only for the opencode protocol. */}
       {/* RFC-114: editing an existing runtime lists ITS binary's models

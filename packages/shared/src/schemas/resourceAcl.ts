@@ -1,6 +1,7 @@
 // RFC-099 — resource-level ownership ACL schemas.
 //
-// Five resource types (agent / skill / mcp / plugin / workflow) carry a single
+// Six resource types (agent / skill / mcp / plugin / workflow / workgroup)
+// carry a single
 // owner + a per-user grant list + a 'public' switch. Granted users can view
 // and use; owner and admins can modify / delete / transfer / manage grants.
 // Non-granted non-admin users must not be able to observe the resource at all
@@ -15,7 +16,14 @@
 import { z } from 'zod'
 import { UserPublicSchema } from './user'
 
-export const ACL_RESOURCE_TYPES = ['agent', 'skill', 'mcp', 'plugin', 'workflow'] as const
+export const ACL_RESOURCE_TYPES = [
+  'agent',
+  'skill',
+  'mcp',
+  'plugin',
+  'workflow',
+  'workgroup', // RFC-164 — sixth resource type
+] as const
 
 export const AclResourceTypeSchema = z.enum(ACL_RESOURCE_TYPES)
 export type AclResourceType = z.infer<typeof AclResourceTypeSchema>

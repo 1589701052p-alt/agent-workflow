@@ -21,8 +21,9 @@
 // the end-to-end spawn behavior it exists to fix, and (3) that every env built
 // from `...process.env` for a `Bun.spawn` child actually calls it.
 
+import { rimrafDir } from './helpers/cleanup'
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { normalizePathKey } from '@/util/platform'
@@ -117,7 +118,7 @@ describe('Windows GUI-launch PATH-casing spawn behavior', () => {
       expect(green.threw).toBe(false)
       expect(green.code).toBe(0)
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      rimrafDir(dir)
     }
   })
 })

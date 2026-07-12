@@ -108,10 +108,24 @@ describe('reviews.detail 接入（源代码层兜底）', () => {
     const src = readFileSync(resolve(__dirname, '../src/routes/reviews.detail.tsx'), 'utf-8')
     expect(src).toContain("from '@/components/review/ReviewDecisionInfo'")
     expect(src).toContain('<ReviewDecisionInfo')
-    // 历史只读视图的数据源接入（decisionReason / decidedAt 双视图切换）。
-    expect(src).toContain('historicalDetail.data?.decisionReason')
-    expect(src).toContain('historicalDetail.data?.decidedAt')
-    // RFC-099 旧行为回归锁：不得再以 `deciderId !== 'system'` 整体隐藏决策行。
-    expect(src).not.toContain("deciderId !== 'system'")
+    // 历史只读视图的数据源接入（RFC-149：decisionReason / decidedAt 等逐字段
+    // 三元收敛进 pickViewedVersion，历史 payload 仍是双视图切换的数据源）。
+    expect(src).toMatch(/pickViewedVersion\(view,\s*historicalDetail\.data,/)
+    expect(src).toContain('decisionReason={viewed.decisionReason}')
+    expect(src).toContain('decidedAt={viewed.decidedAt}')
+    // RFC-099 旧行为回归锁：不得再以「决策人是 system」为条件整体隐藏决策行
+    //（RFC-149 后哨兵判定统一走 shared 的 isSystemDecision，本路由不得出现
+    // 任何 'system' 字面量比较）。
+    expect(src).not.toMatch(/[!=]==\s*'system'/)
+  })
+
+  test("组件内 system 行判定走 shared isSystemDecision（不再手写 === 'system'）", () => {
+    const src = readFileSync(
+      resolve(__dirname, '../src/components/review/ReviewDecisionInfo.tsx'),
+      'utf-8',
+    )
+    // RFC-149（design §4）：哨兵拼写的单一事实源在 shared/schemas/review.ts。
+    expect(src).toMatch(/isSystemDecision\(props\.decidedBy\)/)
+    expect(src).not.toMatch(/[!=]==\s*'system'/)
   })
 })

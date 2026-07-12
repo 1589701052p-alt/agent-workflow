@@ -13,6 +13,8 @@ import {
 } from '@tanstack/react-router'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { useRef, useState } from 'react'
 import { api, ApiError } from '@/api/client'
 import { TaskQuestionList, type TaskQuestionEntry } from '../src/components/tasks/TaskQuestionList'
@@ -167,16 +169,21 @@ describe('TaskQuestionList board', () => {
     )
   })
 
-  // RFC-138 — 看板改派给提问节点 ⇒ 后端 collapse（designer 卡删除）。响应 action 驱动一行
-  // 知会文案（tq-collapse-notice），否则卡片凭空消失会被误读成丢数据。
-  test('RFC-138: reassign to the asking node → collapse notice shows after success', async () => {
+  // RFC-162: retired — collapse (and its `tq-collapse-notice` knowledge text) plus the
+  // 'collapsed-to-questioner' / 'collapsed-to-designer' reassign actions were DELETED. Reassign
+  // 归一 no longer MOVES the asker's card: it ADDS / REMOVES a designer handler (action is now
+  // added-designer / removed-designer / moved-manual) and the board simply invalidates +
+  // re-renders — NO notice. The old RFC-138 / RFC-140 collapse-notice cases are gone; the
+  // surviving 「改派下拉 → POST /reassign {targetNodeId}」behaviour is locked below instead,
+  // together with a regression lock that the deleted notice never reappears.
+  test('改派下拉 → POST /reassign {targetNodeId}；改派后不再出现 collapse 知会文案（RFC-162）', async () => {
     const post = vi
       .spyOn(api, 'post')
-      .mockResolvedValue({ ok: true, action: 'collapsed-to-questioner' } as never)
-    // invalidate 后 refetch：collapse 只删 designer 行，该题的 questioner 卡仍在（真实形态）。
+      .mockResolvedValue({ ok: true, action: 'removed-designer' } as never)
+    // reassign 成功 → invalidate → refetch：返回更新后的题池（该 designer 卡回退成单卡）。
     const get = vi.spyOn(api, 'get').mockResolvedValue([
       entry({
-        id: 'e2',
+        id: 'e1',
         phase: 'pending',
         sourceKind: 'cross',
         roleKind: 'questioner',
@@ -214,50 +221,8 @@ describe('TaskQuestionList board', () => {
         targetNodeId: 'asker',
       }),
     )
-    await waitFor(() => expect(screen.getByTestId('tq-collapse-notice')).toBeTruthy())
-    void get
-  })
-
-  // RFC-140 W1 — 对称塌缩：questioner 卡改派到该轮设计节点 ⇒ 后端 collapsed-to-designer
-  // （questioner 卡删除、echo 回执补给提问节点）。方向化知会文案区别于 RFC-138。
-  test('RFC-140: reassign the questioner card to the designer → directional collapse notice', async () => {
-    const post = vi
-      .spyOn(api, 'post')
-      .mockResolvedValue({ ok: true, action: 'collapsed-to-designer' } as never)
-    const get = vi.spyOn(api, 'get').mockResolvedValue([] as never)
-    await wrap(
-      [
-        entry({
-          id: 'e1',
-          phase: 'pending',
-          sourceKind: 'cross',
-          roleKind: 'questioner',
-          sourceNodeId: 'asker',
-          defaultTargetNodeId: 'asker',
-          effectiveTargetNodeId: 'asker',
-        }),
-      ],
-      [
-        { id: 'asker', label: 'asker' },
-        { id: 'designer', label: 'designer' },
-      ],
-    )
-    const card = screen.getByTestId('tq-card-e1')
-    fireEvent.click(within(card).getAllByRole('combobox')[0]!)
-    const opt = Array.from(document.querySelectorAll('li[role="option"]')).find((li) =>
-      (li.textContent ?? '').includes('designer'),
-    )
-    expect(opt).toBeDefined()
-    fireEvent.mouseDown(opt!)
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/e1/reassign', {
-        targetNodeId: 'designer',
-      }),
-    )
-    const notice = await waitFor(() => screen.getByTestId('tq-collapse-notice'))
-    // Directional copy (test env renders en-US): the RFC-140 designer-collapse text, NOT the
-    // RFC-138 questioner-collapse one.
-    expect(notice.textContent).toContain('designer node only')
+    // RFC-162: collapse UI deleted — no knowledge notice ever renders after a reassign.
+    expect(screen.queryByTestId('tq-collapse-notice')).toBeNull()
     void get
   })
 
@@ -301,14 +266,16 @@ describe('TaskQuestionList board', () => {
   // (Reverses RFC-120's "下拉只在 pending designer 卡" lock — staged & self/questioner now
   // show it; Select trigger 是 role="combobox"，components/Select.tsx。)
   test('改派下拉对任意角色开放于未下发态(pending/staged)；已下发/终态只读', async () => {
+    // RFC-163: 未下发条目按 (origin, questionId) 收拢成一张卡——这里每条代表一个**独立问题**
+    // （各配独立 questionId），断言的是逐卡改派可用性，非分组行为（分组见 grouping describe）。
     await wrap([
-      entry({ id: 'p-self', phase: 'pending', roleKind: 'self' }),
-      entry({ id: 'p-q', phase: 'pending', roleKind: 'questioner' }),
-      entry({ id: 'st-d', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'st-self', phase: 'staged', roleKind: 'self' }),
-      entry({ id: 'pr', phase: 'processing', roleKind: 'designer' }),
-      entry({ id: 'ac', phase: 'awaiting_confirm', roleKind: 'questioner' }),
-      entry({ id: 'dn', phase: 'done', roleKind: 'designer' }),
+      entry({ id: 'p-self', questionId: 'q-ps', phase: 'pending', roleKind: 'self' }),
+      entry({ id: 'p-q', questionId: 'q-pq', phase: 'pending', roleKind: 'questioner' }),
+      entry({ id: 'st-d', questionId: 'q-std', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'st-self', questionId: 'q-sts', phase: 'staged', roleKind: 'self' }),
+      entry({ id: 'pr', questionId: 'q-pr', phase: 'processing', roleKind: 'designer' }),
+      entry({ id: 'ac', questionId: 'q-ac', phase: 'awaiting_confirm', roleKind: 'questioner' }),
+      entry({ id: 'dn', questionId: 'q-dn', phase: 'done', roleKind: 'designer' }),
     ])
     // 未下发态(pending/staged) × 任意角色 → 改派下拉(combobox)在场。
     for (const id of ['p-self', 'p-q', 'st-d', 'st-self']) {
@@ -361,11 +328,18 @@ describe('TaskQuestionList board', () => {
   // HANDLER node (effectiveTargetNodeId = override ?? default), NOT the asking source node.
   test('D13: node filter chips group by HANDLER (effective target) + click narrows the board', async () => {
     await wrap([
-      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
-      entry({ id: 'a2', effectiveTargetNodeId: 'nodeA', phase: 'processing' }),
-      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
+      // RFC-163: 各条代表独立问题（独立 questionId）——本测锁 filter chip 维度，非分组。
+      entry({ id: 'a1', questionId: 'q-a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
+      entry({ id: 'a2', questionId: 'q-a2', effectiveTargetNodeId: 'nodeA', phase: 'processing' }),
+      entry({ id: 'b1', questionId: 'q-b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
       // RFC-128: a fully-done node STILL gets a chip (the filter lists ALL handler nodes).
-      entry({ id: 'c1', effectiveTargetNodeId: 'nodeC', phase: 'done', roleKind: 'designer' }),
+      entry({
+        id: 'c1',
+        questionId: 'q-c1',
+        effectiveTargetNodeId: 'nodeC',
+        phase: 'done',
+        roleKind: 'designer',
+      }),
     ])
     // RFC-128: per-node count chips count ALL phases (incl. done): nodeA=2, nodeB=1, nodeC=1.
     expect(screen.getByTestId('tq-node-filter-nodeA').textContent).toContain('2')
@@ -481,10 +455,11 @@ describe('TaskQuestionList batch-dispatch（全下、无逐卡勾选）', () => 
 
   test('任何相位的卡片都不再渲染勾选控件（tq-select-* / checkbox 全删）', async () => {
     await wrap([
-      entry({ id: 's1', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'p1', phase: 'pending' }),
-      entry({ id: 'c1', phase: 'awaiting_confirm' }),
-      entry({ id: 'd1', phase: 'done', roleKind: 'designer' }),
+      // RFC-163: 独立 questionId——本测锁「无勾选控件」，非分组。
+      entry({ id: 's1', questionId: 'q-s1', phase: 'staged', roleKind: 'designer' }),
+      entry({ id: 'p1', questionId: 'q-p1', phase: 'pending' }),
+      entry({ id: 'c1', questionId: 'q-c1', phase: 'awaiting_confirm' }),
+      entry({ id: 'd1', questionId: 'q-d1', phase: 'done', roleKind: 'designer' }),
     ])
     for (const id of ['s1', 'p1', 'c1', 'd1']) {
       expect(within(screen.getByTestId(`tq-card-${id}`)).queryByRole('checkbox')).toBeNull()
@@ -495,9 +470,29 @@ describe('TaskQuestionList batch-dispatch（全下、无逐卡勾选）', () => 
   test('有节点 filter 时发该 filter 视图中的全部 staged（不含视图外的）', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
     await wrap([
-      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'a2', effectiveTargetNodeId: 'nodeA', phase: 'staged', roleKind: 'designer' }),
-      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'staged', roleKind: 'designer' }),
+      // RFC-163: 三条独立问题（独立 questionId）——本测锁「filter 视图范围的批量下发」；
+      // 组内跨节点整组下发另见 grouping describe（P1 保全组）。
+      entry({
+        id: 'a1',
+        questionId: 'q-a1',
+        effectiveTargetNodeId: 'nodeA',
+        phase: 'staged',
+        roleKind: 'designer',
+      }),
+      entry({
+        id: 'a2',
+        questionId: 'q-a2',
+        effectiveTargetNodeId: 'nodeA',
+        phase: 'staged',
+        roleKind: 'designer',
+      }),
+      entry({
+        id: 'b1',
+        questionId: 'q-b1',
+        effectiveTargetNodeId: 'nodeB',
+        phase: 'staged',
+        roleKind: 'designer',
+      }),
     ])
     // 过滤到 nodeA → 发 nodeA 视图的全部 staged（a1+a2），不含 b1。
     fireEvent.click(screen.getByTestId('tq-node-filter-nodeA'))
@@ -546,8 +541,9 @@ describe('TaskQuestionList batch-dispatch（全下、无逐卡勾选）', () => 
 describe('TaskQuestionList focusTargetNode (D13 canvas-badge jump)', () => {
   test('a fresh focusTargetNode.key filters the board to that handler node — incl. the same node twice', async () => {
     await wrapFocus([
-      entry({ id: 'a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
-      entry({ id: 'b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
+      // RFC-163: 两条独立问题（独立 questionId）——本测锁画布 badge 聚焦，非分组。
+      entry({ id: 'a1', questionId: 'q-a1', effectiveTargetNodeId: 'nodeA', phase: 'pending' }),
+      entry({ id: 'b1', questionId: 'q-b1', effectiveTargetNodeId: 'nodeB', phase: 'pending' }),
     ])
     // Initially unfiltered: both cards visible.
     expect(screen.getByTestId('tq-card-a1')).toBeTruthy()
@@ -607,7 +603,6 @@ async function wrapDeferred(entries: TaskQuestionEntry[]) {
       sessionMode: null,
       designerRunTriggeredAt: null,
       abandonedAt: null,
-      questionScopes: null,
       createdAt: 0,
       answeredAt: null,
       answeredBy: null,
@@ -869,5 +864,106 @@ describe('TaskQuestionList 复制功能移除 (2026-07-02)', () => {
     }
     // 「+ 新增问题」入口保留。
     expect(screen.getByTestId('tq-add-question')).toBeTruthy()
+  })
+})
+
+// RFC-163（用户 2026-07-10「下发前一问一卡、下发后各处理节点拆开」）— 分组卡组件锁。
+// 改派后同一问题的 asker + 未下发 designer 收拢成一张卡（handler 行 +1、卡数不变），组级 stage
+// 让整组一起进待下发，批量下发展开整组 id（含 off-filter 兄弟——Codex 设计门 P1 保全组），下发
+// 后各自拆卡独立确认。任何 refactor 破坏这些立即变红。
+describe('TaskQuestionList RFC-163 分组卡（下发前一问一卡）', () => {
+  test('asker + 未下发 designer（改派后）→ 一张卡、两行 handler、卡数不变', async () => {
+    await wrap([
+      entry({ id: 's', roleKind: 'self', phase: 'pending', sealed: true }),
+      entry({
+        id: 'd',
+        roleKind: 'designer',
+        effectiveTargetNodeId: 'fixer',
+        phase: 'pending',
+        sealed: true,
+      }),
+    ])
+    // 一张卡（rep = asker），designer 无独立卡。
+    const card = screen.getByTestId('tq-card-s')
+    expect(screen.queryByTestId('tq-card-d')).toBeNull()
+    expect(card.classList.contains('task-questions__card--grouped')).toBe(true)
+    // 卡内两行 handler：提问节点 + 增派修订，各显各的节点。
+    const rows = within(card).getByTestId('tq-handlers-s')
+    expect(within(rows).getByTestId('tq-handler-s').textContent).toContain('designer')
+    expect(within(rows).getByTestId('tq-handler-d').textContent).toContain('fixer')
+    // 卡级改派 Select 在场（锚定 asker）。
+    expect(within(card).queryByRole('combobox')).toBeTruthy()
+  })
+
+  test('组级 stage：分组卡「加入待下发」→ 对每个 handler 各 POST 一次 /stage', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
+    await wrap([
+      entry({ id: 's', roleKind: 'self', phase: 'pending', sealed: true }),
+      entry({
+        id: 'd',
+        roleKind: 'designer',
+        effectiveTargetNodeId: 'fixer',
+        phase: 'pending',
+        sealed: true,
+      }),
+    ])
+    fireEvent.click(screen.getByTestId('tq-stage-s'))
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/s/stage', { staged: true })
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/d/stage', { staged: true })
+    })
+  })
+
+  test('批量下发展开整组：staged 组的 entryIds 含 asker+designer（filter 到 asker 节点也不裁掉 off-filter designer——P1 保全组）', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue(undefined as never)
+    await wrap([
+      entry({ id: 's', roleKind: 'self', phase: 'staged', staged: true, sealed: true }),
+      entry({
+        id: 'd',
+        roleKind: 'designer',
+        effectiveTargetNodeId: 'fixer',
+        phase: 'staged',
+        staged: true,
+        sealed: true,
+      }),
+    ])
+    // filter 到 asker 的节点（designer 的 fixer 不在 filter 上）→ 组按任一 handler 命中、整组保留。
+    fireEvent.click(screen.getByTestId('tq-node-filter-designer'))
+    expect(screen.getByTestId('tq-card-s')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('tq-batch-dispatch'))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/tasks/task-1/questions/dispatch', {
+        entryIds: ['s', 'd'],
+      }),
+    )
+  })
+
+  test('下发后拆开：processing/awaiting_confirm 的 asker 与 designer 各自单卡、各带独立确认', async () => {
+    await wrap([
+      entry({ id: 's', roleKind: 'self', phase: 'awaiting_confirm', answerSummary: 'ans' }),
+      entry({
+        id: 'd',
+        roleKind: 'designer',
+        effectiveTargetNodeId: 'fixer',
+        phase: 'awaiting_confirm',
+      }),
+    ])
+    const cardS = screen.getByTestId('tq-card-s')
+    const cardD = screen.getByTestId('tq-card-d')
+    expect(cardS.classList.contains('task-questions__card--grouped')).toBe(false)
+    expect(cardD.classList.contains('task-questions__card--grouped')).toBe(false)
+    // 各自有确认按钮（ConfirmButton 渲染为 button）。
+    expect(within(cardS).getByRole('button', { name: /确认|Confirm/i })).toBeTruthy()
+    expect(within(cardD).getByRole('button', { name: /确认|Confirm/i })).toBeTruthy()
+  })
+
+  test('源码锁：未下发列渲染必须走 groupBoardEntries（不得回退 per-entry 直渲染）', () => {
+    const src = readFileSync(
+      resolve(__dirname, '..', 'src', 'components', 'tasks', 'TaskQuestionList.tsx'),
+      'utf8',
+    )
+    expect(src).toContain('groupBoardEntries')
+    // 旧 per-entry 渲染的签名式样不得复活（列直接按 entry 过滤再逐条 Card）。
+    expect(src).not.toContain('entries.filter((e) => e.phase === phase)')
   })
 })

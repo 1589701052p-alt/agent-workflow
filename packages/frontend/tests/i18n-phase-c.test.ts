@@ -93,29 +93,34 @@ describe('Phase C bundles', () => {
   // agent-description fallback collapsed to the English word "agent". Pin
   // the localized values so a future re-import / merge doesn't silently
   // revert them.
-  test('sidebar palette zh-CN values are Chinese with leading kind-icon glyphs', () => {
+  // RFC-146 T4: the leading glyphs moved out of the locale strings into the
+  // PALETTE_DESCRIPTORS table (buildPalette prepends them — the rendered
+  // rows still lead with icons; palette-icon-coverage.test.ts locks that).
+  // These locks now pin the CLEAN text values so an accidental re-embedding
+  // (which would double the icon) fails here.
+  test('sidebar palette zh-CN values are Chinese, glyph-free (icons live in the descriptor table)', () => {
     setLanguage('zh-CN')
-    expect(i18n.t('editor.paletteWrapperGitLabel')).toBe('⎈ Git 包装器')
-    expect(i18n.t('editor.paletteWrapperLoopLabel')).toBe('⟳ 循环包装器')
-    expect(i18n.t('editor.paletteWrapperFanoutLabel')).toBe('⫶ 分片包装器')
-    expect(i18n.t('editor.paletteInputLabel')).toBe('↳ 输入')
-    expect(i18n.t('editor.paletteOutputLabel')).toBe('⤴ 输出')
-    expect(i18n.t('editor.paletteReviewLabel')).toBe('⚖ 评审')
-    expect(i18n.t('editor.paletteClarifyLabel')).toBe('⚡ 反问')
-    expect(i18n.t('crossClarify.canvas.paletteLabel')).toBe('⚡ 跨代理反问')
+    expect(i18n.t('editor.paletteWrapperGitLabel')).toBe('Git 包装器')
+    expect(i18n.t('editor.paletteWrapperLoopLabel')).toBe('循环包装器')
+    expect(i18n.t('editor.paletteWrapperFanoutLabel')).toBe('分片包装器')
+    expect(i18n.t('editor.paletteInputLabel')).toBe('输入')
+    expect(i18n.t('editor.paletteOutputLabel')).toBe('输出')
+    expect(i18n.t('editor.paletteReviewLabel')).toBe('评审')
+    expect(i18n.t('editor.paletteClarifyLabel')).toBe('反问')
+    expect(i18n.t('crossClarify.canvas.paletteLabel')).toBe('跨代理反问')
     expect(i18n.t('editor.paletteAgentFallbackDesc')).toBe('代理节点')
   })
 
-  test('sidebar palette en-US values carry icons and stay lowercase', () => {
+  test('sidebar palette en-US values stay lowercase and glyph-free', () => {
     setLanguage('en-US')
-    expect(i18n.t('editor.paletteWrapperGitLabel')).toBe('⎈ git wrapper')
-    expect(i18n.t('editor.paletteWrapperLoopLabel')).toBe('⟳ loop wrapper')
-    expect(i18n.t('editor.paletteWrapperFanoutLabel')).toBe('⫶ fanout wrapper')
-    expect(i18n.t('editor.paletteInputLabel')).toBe('↳ input')
-    expect(i18n.t('editor.paletteOutputLabel')).toBe('⤴ output')
-    expect(i18n.t('editor.paletteReviewLabel')).toBe('⚖ review')
-    expect(i18n.t('editor.paletteClarifyLabel')).toBe('⚡ clarify')
-    expect(i18n.t('crossClarify.canvas.paletteLabel')).toBe('⚡ cross-clarify')
+    expect(i18n.t('editor.paletteWrapperGitLabel')).toBe('git wrapper')
+    expect(i18n.t('editor.paletteWrapperLoopLabel')).toBe('loop wrapper')
+    expect(i18n.t('editor.paletteWrapperFanoutLabel')).toBe('fanout wrapper')
+    expect(i18n.t('editor.paletteInputLabel')).toBe('input')
+    expect(i18n.t('editor.paletteOutputLabel')).toBe('output')
+    expect(i18n.t('editor.paletteReviewLabel')).toBe('review')
+    expect(i18n.t('editor.paletteClarifyLabel')).toBe('clarify')
+    expect(i18n.t('crossClarify.canvas.paletteLabel')).toBe('cross-clarify')
   })
 
   // Locks in the second follow-up: agent / review / clarify / cross-clarify

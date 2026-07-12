@@ -24,6 +24,42 @@ export const AgentOutputKindsMapSchema = z.record(z.string(), AgentOutputKindSch
 export type AgentOutputKindsMap = z.infer<typeof AgentOutputKindsMapSchema>
 
 /**
+ * RFC-166 — declarative INPUT ports (symmetrical to `outputs`, but kind is
+ * inlined here rather than via a sidecar map — inputs is a new field with no
+ * legacy `string[]` shape to preserve). OPTIONAL / additive: an agent that
+ * declares no inputs (the default `[]`) behaves byte-for-byte as before — the
+ * runner still binds inputs implicitly via `promptTemplate`'s `{{token}}`
+ * (validator prompt-template rule unchanged). Declared inputs are consumed
+ * ONLY by the capability card (leader roster / RFC-167 orchestrator) — they
+ * do NOT enter the spawn path. `kind` reuses the registered-kind grammar
+ * (string | markdown | signal | path<ext> | list<T>).
+ */
+export const AgentInputPortSchema = z.object({
+  name: z.string().min(1, 'input port name is required').max(128, 'input port name too long'),
+  kind: AgentOutputKindSchema.default('string'),
+  required: z.boolean().optional(),
+  description: z.string().max(2048).optional(),
+})
+export type AgentInputPort = z.infer<typeof AgentInputPortSchema>
+
+/**
+ * RFC-166 — the declared-input-ports array. Port `name` is an identity key:
+ * the capability card renders one row per name and the RFC-167 orchestrator
+ * matches upstream→downstream by name, so duplicate names make the contract
+ * ambiguous. Reject repeats at the schema boundary (mirrors the workgroup
+ * member displayName uniqueness refine). serializeInputs re-parses through
+ * this same schema so the persistence path rejects dupes too; the READ path
+ * (parseInputsColumn) stays lenient by design.
+ */
+export const AgentInputPortsSchema = z.array(AgentInputPortSchema).superRefine((ports, ctx) => {
+  const names = ports.map((p) => p.name)
+  if (new Set(names).size !== names.length) {
+    ctx.addIssue({ code: 'custom', message: 'input port name must be unique' })
+  }
+})
+export type AgentInputPorts = z.infer<typeof AgentInputPortsSchema>
+
+/**
  * RFC-060 PR-B — agent role flag. Default `'normal'` for all agents that
  * existed before RFC-060; `'aggregator'` marks an agent designed to sit at
  * the convergence point of a wrapper-fanout (runs once per wrapper, sees
@@ -80,6 +116,12 @@ export const AgentSchema = z.object({
   builtin: z.boolean().optional(),
   outputs: z.array(z.string()),
   outputKinds: AgentOutputKindsMapSchema.optional(),
+  /** RFC-166 — declarative input ports. OPTIONAL on the DTO (same as
+   *  outputKinds/role, RFC-060 precedent): existing fixtures/built-in agents
+   *  need not spell it. rowToAgent always populates `[]` so real responses
+   *  carry a value; consumers read `agent.inputs ?? []`. Duplicate port names
+   *  are rejected (AgentInputPortsSchema — name is an identity key). */
+  inputs: AgentInputPortsSchema.optional(),
   /**
    * RFC-060 PR-B — wrapper-fanout output rename sidecar. Only meaningful
    * when `role === 'aggregator'`; absent otherwise.
@@ -157,6 +199,10 @@ export const CreateAgentSchema = z.object({
   description: z.string().default(''),
   outputs: z.array(z.string()).default([]),
   outputKinds: AgentOutputKindsMapSchema.optional(),
+  /** RFC-166 — declarative input ports; OPTIONAL on create bodies (server
+   *  fills []). Duplicate port names rejected (AgentInputPortsSchema); existing
+   *  callers/fixtures need not spell it. */
+  inputs: AgentInputPortsSchema.optional(),
   /** RFC-060 PR-B — wrapper-fanout output rename sidecar (aggregator only). */
   outputWrapperPortNames: AgentOutputWrapperPortNamesSchema.optional(),
   /** RFC-060 PR-B — agent role flag; optional, treat absent as 'normal'. */

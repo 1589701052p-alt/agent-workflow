@@ -11,10 +11,16 @@
 // has loaded the session, then the hook lazily upgrades to the live
 // subscription. This way the hook never opens a WS before we know which
 // task to subscribe to.
+//
+// RFC-152 — thin wrapper over the useWsInvalidation rules table. When this
+// mounts next to useTaskSync on the same task, the shared-socket layer (D5)
+// keeps a single physical connection. The onDraftUpdated callback rides the
+// rule's side-effect slot.
 
-import { useQueryClient } from '@tanstack/react-query'
+import type { QueryKey } from '@tanstack/react-query'
 import type { TaskWsMessage } from '@agent-workflow/shared'
-import { useWebSocket } from './useWebSocket'
+import { WS_PATHS } from '@agent-workflow/shared'
+import { useWsInvalidation, type WsInvalidationRules } from './useWsInvalidation'
 
 export interface UseClarifyWsOpts {
   /** Task id of the currently-loaded clarify round, or null while pending. */
@@ -30,39 +36,40 @@ export interface UseClarifyWsOpts {
   }) => void
 }
 
-export function useClarifyWs({
-  taskId,
-  intermediaryNodeRunId,
-  onDraftUpdated,
-}: UseClarifyWsOpts): void {
-  const qc = useQueryClient()
-  useWebSocket({
-    path: taskId === null ? '' : `/ws/tasks/${encodeURIComponent(taskId)}`,
-    enabled: taskId !== null,
-    onMessage: (raw) => {
-      const msg = raw as TaskWsMessage
-      // RFC-099 (D14): collaborative draft frames — refetch the focused round
-      // (brings the latest draftAnswers + per-question attribution) and let
-      // the page show "X just edited question N".
-      if (msg.type === 'clarify.draft.updated') {
-        if (intermediaryNodeRunId !== null && msg.nodeRunId === intermediaryNodeRunId) {
-          void qc.invalidateQueries({ queryKey: ['clarify', 'detail', intermediaryNodeRunId] })
-          onDraftUpdated?.({ questionId: msg.questionId, editor: msg.editor })
-        }
-        return
-      }
-      const isSelfClarify = msg.type === 'clarify.created' || msg.type === 'clarify.answered'
-      const isCrossClarify =
-        msg.type === 'cross-clarify.created' ||
-        msg.type === 'cross-clarify.answered' ||
-        msg.type === 'cross-clarify.rejected'
-      if (!isSelfClarify && !isCrossClarify) return
-      // Refetch the focused round detail if it's the one currently viewed.
-      if (intermediaryNodeRunId !== null) {
-        void qc.invalidateQueries({ queryKey: ['clarify', 'detail', intermediaryNodeRunId] })
-      }
-      void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
-      void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
-    },
-  })
+/** Refetch the focused round detail (if any) + the list + the badge count. */
+function clarifySurface(ctx: UseClarifyWsOpts): QueryKey[] {
+  const keys: QueryKey[] = []
+  if (ctx.intermediaryNodeRunId !== null) {
+    keys.push(['clarify', 'detail', ctx.intermediaryNodeRunId])
+  }
+  keys.push(['clarify', 'list'], ['clarify', 'pending-count'])
+  return keys
+}
+
+// RFC-056 — cross-clarify events invalidate the same surface as the
+// self-clarify pair (mixed list + focused detail + badge).
+const RULES: WsInvalidationRules<TaskWsMessage, UseClarifyWsOpts> = {
+  // RFC-099 (D14): collaborative draft frames — refetch the focused round
+  // (brings the latest draftAnswers + per-question attribution) and let
+  // the page show "X just edited question N".
+  'clarify.draft.updated': (msg, ctx) => {
+    if (ctx.intermediaryNodeRunId === null || msg.nodeRunId !== ctx.intermediaryNodeRunId) {
+      return
+    }
+    ctx.onDraftUpdated?.({ questionId: msg.questionId, editor: msg.editor })
+    return [['clarify', 'detail', ctx.intermediaryNodeRunId]]
+  },
+  'clarify.created': (_msg, ctx) => clarifySurface(ctx),
+  'clarify.answered': (_msg, ctx) => clarifySurface(ctx),
+  'cross-clarify.created': (_msg, ctx) => clarifySurface(ctx),
+  'cross-clarify.answered': (_msg, ctx) => clarifySurface(ctx),
+  'cross-clarify.rejected': (_msg, ctx) => clarifySurface(ctx),
+}
+
+export function useClarifyWs(opts: UseClarifyWsOpts): void {
+  useWsInvalidation<TaskWsMessage, UseClarifyWsOpts>(
+    opts.taskId === null ? null : WS_PATHS.task(opts.taskId),
+    RULES,
+    opts,
+  )
 }

@@ -30,7 +30,7 @@ import { tasks } from '../src/db/schema'
 import { eq } from 'drizzle-orm'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
-import { startTask } from '../src/services/task'
+import { startTaskWithLocalRepo } from '../src/services/task'
 import { isWindows, stubCmd } from './helpers/stub-runtime'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -215,7 +215,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
 
   test('AC-1: both omitted → DB columns NULL, no env injected', async () => {
     const h = await setup()
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'no-identity-task',
@@ -244,7 +244,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
 
   test('AC-2: both set → DB columns persist, env has 4-tuple on every spawn', async () => {
     const h = await setup()
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'bot-identity-task',
@@ -274,7 +274,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
 
   test('AC-3: leading/trailing whitespace trimmed before persistence + env', async () => {
     const h = await setup()
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'trim-task',
@@ -301,7 +301,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
     const h = await setup()
     patchEnv('GIT_AUTHOR_NAME', 'daemonbot')
     patchEnv('GIT_AUTHOR_EMAIL', 'daemon@bot.test')
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'override-task',
@@ -330,7 +330,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
     const h = await setup()
     patchEnv('GIT_AUTHOR_NAME', 'daemonbot')
     patchEnv('GIT_AUTHOR_EMAIL', 'daemon@bot.test')
-    await startTask(
+    await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'no-task-identity',
@@ -358,7 +358,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
     // Reuse the same DB / capture dir / repo for the second task: simulates a
     // single daemon driving multiple tasks concurrently. Different capture
     // dirs per task would cheat the isolation check.
-    const taskA = await startTask(
+    const taskA = await startTaskWithLocalRepo(
       {
         workflowId: hA.wfId,
         name: 'task-A',
@@ -375,7 +375,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
         awaitScheduler: true,
       },
     )
-    const taskB = await startTask(
+    const taskB = await startTaskWithLocalRepo(
       {
         workflowId: hA.wfId,
         name: 'task-B',
@@ -411,7 +411,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
     // future internal call, a hand-crafted multipart payload), neither half
     // of a partial identity lands in the DB and no env is injected.
     const h = await setup()
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'half-name-task',
@@ -439,7 +439,7 @@ describe('RFC-067 — startTask + runner Git identity wiring', () => {
 
   test('AC-8: half-identity (only email, schema bypass) → service defensively nullifies BOTH', async () => {
     const h = await setup()
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'half-email-task',

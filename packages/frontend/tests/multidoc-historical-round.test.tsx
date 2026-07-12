@@ -253,7 +253,11 @@ describe('MultiDocReviewView — historical round (?round=)', () => {
   test('历史轮：成员导航 + 冻结评论 + 只读横幅 + 决策信息块；写入口全禁', async () => {
     wrap(<MultiDocReviewView nodeRunId="run" historicalRoundKey="g1" />)
     // 导航列表来自该轮 members，而非当前轮 documents。
-    expect(await screen.findByText('Hist A v1')).toBeTruthy()
+    // 'Hist A v1' 同时是首篇正文的 markdown 标题：异步 Prose 渲染落地后会出现第二个
+    // 同文案节点（<h1>），单数 findByText 会以“multiple elements”炸掉（时序 flaky，
+    // 2026-07-10 复跑 4 次 2 红确认）。改用 *AllBy* 并锚定导航 title span 断言意图。
+    const histATitles = await screen.findAllByText('Hist A v1')
+    expect(histATitles.some((el) => el.className.includes('review-multidoc__doc-title'))).toBe(true)
     expect(screen.getByText('Hist B v1')).toBeTruthy()
     expect(screen.queryByText('Case A v2')).toBeNull()
     // 只读横幅 + 回到当前轮。

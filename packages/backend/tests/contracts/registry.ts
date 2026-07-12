@@ -125,6 +125,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'PUT', path: '/api/agents/:name' },
   { method: 'DELETE', path: '/api/agents/:name' },
   { method: 'POST', path: '/api/agents/:name/rename' },
+  // RFC-165 §4: single-agent launch (service-level entry; tasks:launch gate).
+  { method: 'POST', path: '/api/agents/:name/tasks' },
   {
     method: 'GET',
     path: '/api/agents/:name/closure',
@@ -227,9 +229,30 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/workflows/:id/export' },
   { method: 'POST', path: '/api/workflows/import' },
 
+  // ---- workgroups (RFC-164) ----
+  {
+    method: 'GET',
+    path: '/api/workgroups',
+    happy: { schema: z.array(z.any()) },
+  },
+  { method: 'GET', path: '/api/workgroups/:name' },
+  { method: 'POST', path: '/api/workgroups' },
+  { method: 'PUT', path: '/api/workgroups/:name' },
+  { method: 'DELETE', path: '/api/workgroups/:name' },
+  { method: 'POST', path: '/api/workgroups/:name/rename' },
+  { method: 'POST', path: '/api/workgroups/:name/tasks' },
+  { method: 'GET', path: '/api/workgroup-tasks/pending-count' },
+  { method: 'GET', path: '/api/workgroup-tasks/:taskId/room' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/messages' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/assignments/:id/cancel' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/assignments/:id/deliver' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/confirm' },
+  { method: 'PUT', path: '/api/workgroup-tasks/:taskId/config' },
+  // RFC-167 — dynamic-workflow confirm gate + one-shot save-as
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/dw-confirm' },
+  { method: 'POST', path: '/api/workgroup-tasks/:taskId/dw-save-as-workflow' },
+
   // ---- repos (path / refs / file system) ----
-  { method: 'GET', path: '/api/repos/recent' },
-  { method: 'POST', path: '/api/repos/recent' },
   { method: 'GET', path: '/api/repos/files' },
   { method: 'GET', path: '/api/repos/refs' },
 
@@ -271,6 +294,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/alerts/:alertId/repair-options' },
   { method: 'POST', path: '/api/tasks/:id/alerts/:alertId/repair' },
   { method: 'GET', path: '/api/tasks/:id/diff' },
+  // ---- scheduled tasks (RFC-159) ----
+  { method: 'GET', path: '/api/scheduled-tasks' },
+  { method: 'GET', path: '/api/scheduled-tasks/:id' },
+  { method: 'POST', path: '/api/scheduled-tasks' },
+  { method: 'PUT', path: '/api/scheduled-tasks/:id' },
+  { method: 'DELETE', path: '/api/scheduled-tasks/:id' },
+  { method: 'POST', path: '/api/scheduled-tasks/:id/run-now' },
   { method: 'GET', path: '/api/tasks/:id/structural-diff' },
   { method: 'GET', path: '/api/tasks/:id/call-targets' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
@@ -367,6 +397,9 @@ export const ENDPOINTS: EndpointSpec[] = [
     happy: { schema: z.object({}).passthrough() },
   },
   { method: 'PUT', path: '/api/config' },
+
+  // ---- daemon effective binding (settings:read; Network tab readout) ----
+  { method: 'GET', path: '/api/daemon' },
 
   // ---- plantuml proxy (RFC-105 WP-B; any logged-in user) ----
   // No endpoint configured in the contract harness → 200 { unconfigured: true }.

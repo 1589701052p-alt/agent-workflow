@@ -2,8 +2,17 @@
 // turns a palette item into a fresh WorkflowNode (used by P-2-05).
 // Lives outside the React tree so the sidebar and the canvas can both
 // reach it without a context provider.
+//
+// RFC-146 T4: everything kind-specific in this module — palette section,
+// leading glyph, i18n label/description keys, node-id prefix, fresh-node
+// default fields — lives in ONE `PALETTE_DESCRIPTORS` table
+// (`satisfies Record<NodeKind, …>`, so a new NodeKind fails to compile until
+// it declares its palette presence). deserialize / makeNode / buildPalette
+// are projections of that table; the canvas chip glyphs (`NODE_GLYPHS`) come
+// from the same rows instead of per-component hardcodes.
 
-import type { Agent, WorkflowNode } from '@agent-workflow/shared'
+import type { Agent, NodeKind, WorkflowNode } from '@agent-workflow/shared'
+import { NODE_KIND } from '@agent-workflow/shared'
 import { ulid } from 'ulid'
 
 // RFC-060 PR-E: agent-multi removed from the palette — fan-out is now done
@@ -22,6 +31,143 @@ export type PaletteItem =
 /** mime carried in HTML5 dataTransfer. Custom to avoid colliding with files. */
 export const PALETTE_MIME = 'application/x-agent-workflow-node'
 
+/** Sidebar section a kind's palette entry renders under. */
+export type PaletteSectionKey = 'agents' | 'wrappers' | 'io' | 'human'
+
+interface PaletteDescriptor {
+  section: PaletteSectionKey
+  /** Leading kind icon — palette rows AND canvas chips (2026-05-24
+   *  chip-alignment fix made these one column; RFC-146 made them one table). */
+  glyph: string
+  /** i18n keys for the sidebar entry. null for agent-single: its rows are
+   *  one-per-registered-agent with user-supplied name/description. */
+  labelKey: string | null
+  descKey: string | null
+  /** Node-id prefix for fresh drops (`<prefix>_<ulid tail>`). */
+  idPrefix: string
+  /** Kind-specific default fields for a fresh node (id/kind/position are
+   *  stamped by makeNode). */
+  makeDefaults: (ctx: { existingIds: Set<string> }) => Record<string, unknown>
+}
+
+export const PALETTE_DESCRIPTORS = {
+  'agent-single': {
+    section: 'agents',
+    glyph: '⚙',
+    labelKey: null,
+    descKey: null,
+    idPrefix: 'agent',
+    // agentName is stamped from the PaletteItem in makeNode.
+    makeDefaults: () => ({}),
+  },
+  input: {
+    section: 'io',
+    glyph: '↳',
+    labelKey: 'editor.paletteInputLabel',
+    descKey: 'editor.paletteInputDesc',
+    idPrefix: 'in',
+    // Use a unique default key so duplicate input nodes don't collide
+    // with rule 4 (input-key-duplicate).
+    makeDefaults: ({ existingIds }) => ({ inputKey: uniqueInputKey(existingIds) }),
+  },
+  output: {
+    section: 'io',
+    glyph: '⤴',
+    labelKey: 'editor.paletteOutputLabel',
+    descKey: 'editor.paletteOutputDesc',
+    idPrefix: 'out',
+    makeDefaults: () => ({ ports: [] }),
+  },
+  'wrapper-git': {
+    section: 'wrappers',
+    glyph: '⎈',
+    labelKey: 'editor.paletteWrapperGitLabel',
+    descKey: 'editor.paletteWrapperGitDesc',
+    idPrefix: 'wrap_git',
+    makeDefaults: () => ({ nodeIds: [] }),
+  },
+  'wrapper-loop': {
+    section: 'wrappers',
+    glyph: '⟳',
+    labelKey: 'editor.paletteWrapperLoopLabel',
+    descKey: 'editor.paletteWrapperLoopDesc',
+    idPrefix: 'wrap_loop',
+    makeDefaults: () => ({
+      nodeIds: [],
+      maxIterations: 3,
+      exitCondition: { kind: 'port-empty' },
+    }),
+  },
+  'wrapper-fanout': {
+    section: 'wrappers',
+    glyph: '⫶',
+    labelKey: 'editor.paletteWrapperFanoutLabel',
+    descKey: 'editor.paletteWrapperFanoutDesc',
+    idPrefix: 'wrap_fan',
+    // RFC-060 — fresh wrapper-fanout. Author must wire the shardSource
+    // upstream + populate inner subgraph before launch (validator rules
+    // `wrapper-empty` + `wrapper-fanout-shard-source-missing` catch the
+    // unfinished case). Default shape ships a single shardSource input
+    // pre-named `docs` with `list<path<md>>` kind — that's the most
+    // common case (markdown documents per shard). Users free to change.
+    makeDefaults: () => ({
+      nodeIds: [],
+      inputs: [{ name: 'docs', kind: 'list<path<md>>', isShardSource: true }],
+    }),
+  },
+  review: {
+    section: 'human',
+    glyph: '⚖',
+    labelKey: 'editor.paletteReviewLabel',
+    descKey: 'editor.paletteReviewDesc',
+    idPrefix: 'rev',
+    // inputSource is unset on drop — the user wires it up in
+    // NodeInspector. Validator catches the missing-inputSource case
+    // before Launch.
+    makeDefaults: () => ({
+      inputSource: { nodeId: '', portName: '' },
+      title: '',
+      description: '',
+      rerunnableOnReject: [],
+      rerunnableOnIterate: [],
+      rollbackFilesOnReject: true,
+      rollbackFilesOnIterate: false,
+    }),
+  },
+  clarify: {
+    section: 'human',
+    glyph: '⚡',
+    labelKey: 'editor.paletteClarifyLabel',
+    descKey: 'editor.paletteClarifyDesc',
+    idPrefix: 'clarify',
+    // RFC-023 — a fresh clarify node has no wiring; the asking agent gets
+    // linked via reverse-drag (clarifyDragHelper.applyClarifyReverseDrag).
+    // The validator's `clarify-input-source-missing` / `clarify-questions-port-missing`
+    // rules catch the user dropping one and never wiring it.
+    makeDefaults: () => ({ title: '', description: '' }),
+  },
+  'clarify-cross-agent': {
+    section: 'human',
+    glyph: '⚡',
+    // RFC-056 cross-clarify node — questioner reverse-drag + manual
+    // to_designer wire. i18n labels live under `crossClarify.canvas.*`.
+    labelKey: 'crossClarify.canvas.paletteLabel',
+    descKey: 'crossClarify.canvas.paletteHint',
+    idPrefix: 'cross_clarify',
+    // RFC-056 — fresh cross-clarify node has no wiring; user reverse-drags
+    // questioner side (auto 2 edges) + manually drags to_designer →
+    // designer. Validator rules `cross-clarify-input-source-missing` and
+    // `cross-clarify-manual-edge-missing` cover the gap.
+    makeDefaults: () => ({ title: '', description: '' }),
+  },
+} as const satisfies Record<NodeKind, PaletteDescriptor>
+
+/** Canvas chip / palette leading icon per kind — one projection of the
+ *  descriptor table (node components import this instead of hardcoding). */
+export const NODE_GLYPHS: Record<NodeKind, string> = Object.fromEntries(
+  NODE_KIND.map((k) => [k, PALETTE_DESCRIPTORS[k].glyph]),
+) as Record<NodeKind, string>
+
 export function serialize(item: PaletteItem): string {
   return JSON.stringify(item)
 }
@@ -31,30 +177,23 @@ export function deserialize(raw: string): PaletteItem | null {
     const v = JSON.parse(raw) as unknown
     if (typeof v !== 'object' || v === null) return null
     const rec = v as Record<string, unknown>
-    if (typeof rec.kind !== 'string') return null
-    switch (rec.kind) {
-      case 'agent-single':
-        return typeof rec.agentName === 'string'
-          ? ({ kind: rec.kind, agentName: rec.agentName } as PaletteItem)
-          : null
-      case 'input':
-      case 'output':
-      case 'wrapper-git':
-      case 'wrapper-loop':
-      case 'wrapper-fanout':
-      case 'review':
-      case 'clarify':
-      case 'clarify-cross-agent':
-        return { kind: rec.kind } as PaletteItem
-      default:
-        return null
+    // Object.hasOwn (not `in`): dataTransfer payloads are untrusted text —
+    // `'constructor' in PALETTE_DESCRIPTORS` is true via the prototype
+    // chain, and indexing the table with such a key hands makeNode a
+    // non-descriptor value (editor crash). RFC-146 impl-gate fix.
+    if (typeof rec.kind !== 'string' || !Object.hasOwn(PALETTE_DESCRIPTORS, rec.kind)) return null
+    if (rec.kind === 'agent-single') {
+      return typeof rec.agentName === 'string'
+        ? ({ kind: rec.kind, agentName: rec.agentName } as PaletteItem)
+        : null
     }
+    return { kind: rec.kind } as PaletteItem
   } catch {
     return null
   }
 }
 
-/** Default field values for new nodes, keyed by kind. */
+/** Default field values for new nodes, keyed by kind (descriptor table). */
 export function makeNode(
   item: PaletteItem,
   position: { x: number; y: number },
@@ -62,117 +201,26 @@ export function makeNode(
 ): WorkflowNode {
   const id = nextId(item.kind, ctx.existingIds)
   const pos = { x: Math.round(position.x), y: Math.round(position.y) }
-  switch (item.kind) {
-    case 'agent-single': {
-      const node: WorkflowNode = {
-        id,
-        kind: item.kind,
-        position: pos,
-      }
-      ;(node as Record<string, unknown>).agentName = item.agentName
-      return node
-    }
-    case 'input':
-      return {
-        id,
-        kind: 'input',
-        position: pos,
-        // Use a unique default key so duplicate input nodes don't collide
-        // with rule 4 (input-key-duplicate).
-        inputKey: uniqueInputKey(ctx.existingIds),
-      } as WorkflowNode
-    case 'output':
-      return { id, kind: 'output', position: pos, ports: [] } as WorkflowNode
-    case 'wrapper-git':
-      return { id, kind: 'wrapper-git', position: pos, nodeIds: [] } as WorkflowNode
-    case 'wrapper-loop':
-      return {
-        id,
-        kind: 'wrapper-loop',
-        position: pos,
-        nodeIds: [],
-        maxIterations: 3,
-        exitCondition: { kind: 'port-empty' },
-      } as WorkflowNode
-    case 'wrapper-fanout':
-      // RFC-060 — fresh wrapper-fanout. Author must wire the shardSource
-      // upstream + populate inner subgraph before launch (validator rules
-      // `wrapper-empty` + `wrapper-fanout-shard-source-missing` catch the
-      // unfinished case). Default shape ships a single shardSource input
-      // pre-named `docs` with `list<path<md>>` kind — that's the most
-      // common case (markdown documents per shard). Users free to change.
-      return {
-        id,
-        kind: 'wrapper-fanout',
-        position: pos,
-        nodeIds: [],
-        inputs: [{ name: 'docs', kind: 'list<path<md>>', isShardSource: true }],
-      } as unknown as WorkflowNode
-    case 'review':
-      return {
-        id,
-        kind: 'review',
-        position: pos,
-        // inputSource is unset on drop — the user wires it up in
-        // NodeInspector. Validator catches the missing-inputSource case
-        // before Launch.
-        inputSource: { nodeId: '', portName: '' },
-        title: '',
-        description: '',
-        rerunnableOnReject: [],
-        rerunnableOnIterate: [],
-        rollbackFilesOnReject: true,
-        rollbackFilesOnIterate: false,
-      } as unknown as WorkflowNode
-    case 'clarify':
-      // RFC-023 — a fresh clarify node has no wiring; the asking agent gets
-      // linked via reverse-drag (clarifyDragHelper.applyClarifyReverseDrag).
-      // The validator's `clarify-input-source-missing` / `clarify-questions-port-missing`
-      // rules catch the user dropping one and never wiring it.
-      return {
-        id,
-        kind: 'clarify',
-        position: pos,
-        title: '',
-        description: '',
-      } as unknown as WorkflowNode
-    case 'clarify-cross-agent':
-      // RFC-056 — fresh cross-clarify node has no wiring; user reverse-drags
-      // questioner side (auto 2 edges) + manually drags to_designer →
-      // designer. Validator rules `cross-clarify-input-source-missing` and
-      // `cross-clarify-manual-edge-missing` cover the gap.
-      return {
-        id,
-        kind: 'clarify-cross-agent',
-        position: pos,
-        title: '',
-        description: '',
-      } as unknown as WorkflowNode
+  const node: Record<string, unknown> = {
+    id,
+    kind: item.kind,
+    position: pos,
+    ...PALETTE_DESCRIPTORS[item.kind].makeDefaults({ existingIds: ctx.existingIds }),
   }
+  if (item.kind === 'agent-single') node.agentName = item.agentName
+  return node as unknown as WorkflowNode
 }
 
 function nextId(kind: PaletteItem['kind'], existing: Set<string>): string {
   // Short stable prefix per kind + ULID tail so multi drops don't collide
   // even within the same millisecond.
-  const prefix = SHORT[kind]
+  const prefix = PALETTE_DESCRIPTORS[kind].idPrefix
   const candidate = `${prefix}_${ulid().slice(-6).toLowerCase()}`
   if (!existing.has(candidate)) return candidate
   // Extremely unlikely collision; suffix-bump.
   let i = 2
   while (existing.has(`${candidate}-${i}`)) i++
   return `${candidate}-${i}`
-}
-
-const SHORT: Record<PaletteItem['kind'], string> = {
-  'agent-single': 'agent',
-  input: 'in',
-  output: 'out',
-  'wrapper-git': 'wrap_git',
-  'wrapper-loop': 'wrap_loop',
-  'wrapper-fanout': 'wrap_fan',
-  review: 'rev',
-  clarify: 'clarify',
-  'clarify-cross-agent': 'cross_clarify',
 }
 
 function uniqueInputKey(existing: Set<string>): string {
@@ -201,79 +249,48 @@ export interface PaletteSection {
  */
 export type PaletteTranslator = (key: string) => string
 
+const SECTION_ORDER: Array<{ key: PaletteSectionKey; labelKey: string }> = [
+  { key: 'agents', labelKey: 'editor.paletteAgents' },
+  // RFC-060 PR-E: removed the "agent-multi fanout" palette section —
+  // fan-out is now done via wrapper-fanout (a Wrappers entry). Drop a
+  // wrapper-fanout, then drag the agent-single nodes you want into it.
+  { key: 'wrappers', labelKey: 'editor.paletteWrappers' },
+  { key: 'io', labelKey: 'editor.paletteIo' },
+  { key: 'human', labelKey: 'editor.paletteHuman' },
+]
+
 export function buildPalette(agents: Agent[], t: PaletteTranslator): PaletteSection[] {
-  return [
-    {
-      label: t('editor.paletteAgents'),
-      items: agents.map((a) => ({
-        item: { kind: 'agent-single', agentName: a.name } as PaletteItem,
-        // Prefix with the agent kind icon so each row in the palette starts
-        // with a glyph that mirrors the canvas chip (⚙ for agent). This
-        // keeps the leading-icon column consistent across Agents / Wrappers
-        // / IO / Human sections — see 2026-05-24 chip-alignment fix.
-        label: `⚙ ${a.name}`,
-        description: a.description || t('editor.paletteAgentFallbackDesc'),
-      })),
-    },
-    // RFC-060 PR-E: removed the "agent-multi fanout" palette section —
-    // fan-out is now done via wrapper-fanout (a Wrappers entry). Drop a
-    // wrapper-fanout, then drag the agent-single nodes you want into it.
-    {
-      label: t('editor.paletteWrappers'),
-      items: [
-        {
-          item: { kind: 'wrapper-git' } as PaletteItem,
-          label: t('editor.paletteWrapperGitLabel'),
-          description: t('editor.paletteWrapperGitDesc'),
-        },
-        {
-          item: { kind: 'wrapper-loop' } as PaletteItem,
-          label: t('editor.paletteWrapperLoopLabel'),
-          description: t('editor.paletteWrapperLoopDesc'),
-        },
-        {
-          item: { kind: 'wrapper-fanout' } as PaletteItem,
-          label: t('editor.paletteWrapperFanoutLabel'),
-          description: t('editor.paletteWrapperFanoutDesc'),
-        },
-      ],
-    },
-    {
-      label: t('editor.paletteIo'),
-      items: [
-        {
-          item: { kind: 'input' } as PaletteItem,
-          label: t('editor.paletteInputLabel'),
-          description: t('editor.paletteInputDesc'),
-        },
-        {
-          item: { kind: 'output' } as PaletteItem,
-          label: t('editor.paletteOutputLabel'),
-          description: t('editor.paletteOutputDesc'),
-        },
-      ],
-    },
-    {
-      label: t('editor.paletteHuman'),
-      items: [
-        {
-          item: { kind: 'review' } as PaletteItem,
-          label: t('editor.paletteReviewLabel'),
-          description: t('editor.paletteReviewDesc'),
-        },
-        {
-          item: { kind: 'clarify' } as PaletteItem,
-          label: t('editor.paletteClarifyLabel'),
-          description: t('editor.paletteClarifyDesc'),
-        },
-        {
-          // RFC-056 cross-clarify node — questioner reverse-drag + manual
-          // to_designer wire. i18n labels live under `crossClarify.canvas.*`.
-          item: { kind: 'clarify-cross-agent' } as PaletteItem,
-          label: t('crossClarify.canvas.paletteLabel'),
-          description: t('crossClarify.canvas.paletteHint'),
-        },
-      ],
-    },
-  ]
+  return SECTION_ORDER.map(({ key, labelKey }) => {
+    if (key === 'agents') {
+      return {
+        label: t(labelKey),
+        items: agents.map((a) => ({
+          item: { kind: 'agent-single', agentName: a.name } as PaletteItem,
+          // Prefix with the agent kind icon so each row in the palette starts
+          // with a glyph that mirrors the canvas chip (⚙ for agent). This
+          // keeps the leading-icon column consistent across Agents / Wrappers
+          // / IO / Human sections — see 2026-05-24 chip-alignment fix.
+          label: `${PALETTE_DESCRIPTORS['agent-single'].glyph} ${a.name}`,
+          description: a.description || t('editor.paletteAgentFallbackDesc'),
+        })),
+      }
+    }
+    return {
+      label: t(labelKey),
+      // NODE_KIND declaration order fixes the within-section order
+      // (wrappers: git → loop → fanout; io: input → output;
+      //  human: review → clarify → cross), matching the historical layout.
+      items: NODE_KIND.filter((k) => PALETTE_DESCRIPTORS[k].section === key).map((k) => {
+        const d = PALETTE_DESCRIPTORS[k]
+        return {
+          item: { kind: k } as PaletteItem,
+          // Glyph lives in the descriptor table (code), not in every locale
+          // string — RFC-146 stripped the embedded icons from the i18n
+          // values so the icon column can't drift per locale.
+          label: `${d.glyph} ${t(d.labelKey ?? '')}`,
+          description: t(d.descKey ?? ''),
+        }
+      }),
+    }
+  })
 }

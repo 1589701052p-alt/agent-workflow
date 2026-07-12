@@ -10,6 +10,7 @@
 // (textarea + table) and renders an action footer.
 
 import type { BatchImportRow, BatchImportSnapshot } from '@agent-workflow/shared'
+import { WS_PATHS } from '@agent-workflow/shared'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -107,9 +108,11 @@ export function BatchImportDialog({
     [qc],
   )
 
+  // RFC-152 — the subscription path comes from the shared WS_PATHS constant
+  // (double-ended single source; the backend registry's pathRe is
+  // interlock-tested against it).
   useWebSocket({
-    path:
-      activeBatchId !== null && open ? `/ws/repo-imports/${encodeURIComponent(activeBatchId)}` : '',
+    path: activeBatchId !== null && open ? WS_PATHS.repoImport(activeBatchId) : '',
     onMessage: onWsMessage,
     enabled: activeBatchId !== null && open,
   })

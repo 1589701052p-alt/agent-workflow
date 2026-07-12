@@ -402,7 +402,7 @@ describe('RFC-119 — end-to-end: canceled prior outputs render into the prompt'
       inputs: {},
       meta: { repoPath: '', baseBranch: '', taskId },
       agentOutputs: ['docpath'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       clarifyContext: { flatBlock: '## Clarify Q&A\n- Q1 → yes' },
       priorOutputUpdate: { block },
     })

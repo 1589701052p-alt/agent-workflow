@@ -19,6 +19,7 @@ import type {
   ClarifyNode,
   EnvelopeFollowupReason,
   FailureCode,
+  Language,
   Mcp,
   MergeState,
   MergeStateOrNull,
@@ -32,6 +33,7 @@ import type {
 import {
   FANOUT_DONE_PORT_NAME,
   FOLLOWUP_POLICY,
+  channelEdgeDataflowSkip,
   NODE_KIND,
   NODE_KIND_BEHAVIORS,
   WorkflowDefinitionSchema,
@@ -171,6 +173,15 @@ import {
   undoPriorShardDeltaInIso,
 } from '@/services/nodeIsolation'
 import { buildMergeAgent, mergeResolveNodeId } from '@/services/mergeAgent'
+import {
+  runWorkgroupEngine,
+  type WorkgroupEngineHooks,
+  type WorkgroupHostRunRequest,
+  type WorkgroupHostRunResult,
+} from '@/services/workgroupRunner'
+import { runDynamicWorkflowGenerate } from '@/services/dynamicWorkflowRunner'
+import { DW_ORCHESTRATOR_NODE_ID } from '@/services/orchestratorAgent'
+import { deriveWorkgroupDispatchFromConfig, type WorkgroupDispatch } from '@agent-workflow/shared'
 import { Semaphore } from '@/util/semaphore'
 import { TASK_CHANNEL, taskBroadcaster } from '@/ws/broadcaster'
 
@@ -231,6 +242,8 @@ export interface RunTaskOptions {
   commitPushMaxRepairRetries?: number
   /** RFC-075: diff byte cap for the commit-message prompt; falls back to DEFAULT_COMMIT_PUSH_DIFF_MAX_BYTES. */
   commitPushDiffMaxBytes?: number
+  /** RFC-157: commit-message output language (initial + repair); undefined ≡ en-US. */
+  commitPushLang?: Language
   /**
    * RFC-111 D1/D15 + RFC-112: global default runtime NAME (from
    * config.defaultRuntime). At the agent-dispatch site each node's runtime is
@@ -383,7 +396,8 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
   // construction, and runOneNode's fall-through guard catches kinds the
   // dispatch switch doesn't actually handle yet.)
   for (const node of definition.nodes) {
-    if (!(node.kind in NODE_KIND_BEHAVIORS)) {
+    // Object.hasOwn (not `in`) — inherited keys must not pass the whitelist.
+    if (!Object.hasOwn(NODE_KIND_BEHAVIORS, node.kind)) {
       await failTask(
         db,
         taskId,
@@ -480,11 +494,54 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
     // its conflict in the preserved resolve-iso (flips 'merged' + releases
     // downstream; still-unresolved stays parked). No-op on a fresh run.
     await replayConflictHumanResolutions(state, log)
-    result = await runScope(state, {
-      scopeIds: topLevelIds,
-      iteration: 0,
-      log,
-    })
+    // RFC-164: workgroup tasks are driven by the round engine, NEVER by the
+    // DAG frontier (design §4). The host snapshot's nodes exist only as mint
+    // anchors + clarify wiring; runScope/deriveFrontier must not see them.
+    // RFC-167: dynamic_workflow workgroups are the exception — their dispatch
+    // follows dw.phase (deriveWorkgroupDispatchFromConfig, the shared single
+    // oracle): the GENERATE engine until the human-confirmed DAG is swapped
+    // into the snapshot (phase 'executing'), after which runScope executes it
+    // like any ordinary workflow task.
+    const wgDispatch: WorkgroupDispatch | null =
+      task.workgroupId !== null ? deriveWorkgroupDispatchFromConfig(task.workgroupConfigJson) : null
+    if (
+      wgDispatch === 'dw-execute' &&
+      definition.nodes.some((n) => n.id === DW_ORCHESTRATOR_NODE_ID)
+    ) {
+      // Fail-fast invariant (design §3): phase='executing' promises the
+      // snapshot is the confirmed generated DAG. Running the generation host
+      // snapshot through runScope would dispatch the orchestrator node as a
+      // regular agent — refuse loudly instead.
+      await failTask(
+        db,
+        taskId,
+        'dw-phase-invariant',
+        `task is phase='executing' but its snapshot still contains the generation host node`,
+      )
+      return
+    }
+    result =
+      task.workgroupId !== null && wgDispatch !== 'dw-execute'
+        ? wgDispatch === 'dw-generate'
+          ? await runDynamicWorkflowGenerate({
+              db,
+              taskId,
+              log,
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              hooks: buildWorkgroupHooks(state),
+            })
+          : await runWorkgroupEngine({
+              db,
+              taskId,
+              log,
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              hooks: buildWorkgroupHooks(state),
+            })
+        : await runScope(state, {
+            scopeIds: topLevelIds,
+            iteration: 0,
+            log,
+          })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.error('runTask: scope threw — failing task', { taskId, error: message })
@@ -577,6 +634,221 @@ async function runTaskInner(opts: RunTaskOptions): Promise<void> {
     log.info('task done', { taskId })
   } else {
     log.warn('done write lost to a concurrent transition — respecting winner', { taskId })
+  }
+}
+
+// -----------------------------------------------------------------------------
+// RFC-164 — workgroup engine integration. The engine (workgroupRunner.ts) owns
+// orchestration; this hook owns the MECHANICS of one host-node run, copied
+// from the fanout-shard dispatch path (iso worktree + frozen runtime +
+// runNode + merge-back + clarify session). Kept here so workgroupRunner never
+// imports scheduler.ts (module-cycle ban — binary-build incident memory).
+// -----------------------------------------------------------------------------
+
+export function buildWorkgroupHooks(state: SchedulerState): WorkgroupEngineHooks {
+  const { db, taskId, task, opts, log, definition } = state
+  async function runHostNode(req: WorkgroupHostRunRequest): Promise<WorkgroupHostRunResult> {
+    const injection = await prepareNodeRunInjection(db, opts.appHome, req.agent, log)
+    if (injection.kind === 'failed') {
+      await setNodeRunStatus({
+        db,
+        nodeRunId: req.nodeRunId,
+        to: 'failed',
+        allowedFrom: ['pending'],
+        reason: 'wg-injection-failed',
+        extra: { finishedAt: Date.now(), errorMessage: injection.message },
+      })
+      broadcastNodeStatus(taskId, req.nodeRunId, req.nodeId, 'failed')
+      return { status: 'failed', outputs: {}, errorMessage: injection.message }
+    }
+
+    const releaseGlobal = await state.globalSem.acquire()
+    let iso: IsoHandle
+    try {
+      iso = await state.writeSem.run(() =>
+        createNodeIso({
+          appHome: opts.appHome,
+          taskId,
+          nodeRunId: req.nodeRunId,
+          canonRepos: state.repos,
+          log,
+        }),
+      )
+      if (!iso.passthrough) await persistIsoBase(db, req.nodeRunId, task.repoCount, iso)
+    } catch (err) {
+      releaseGlobal()
+      const message = err instanceof Error ? err.message : String(err)
+      log.warn('workgroup host-node iso setup failed', { nodeRunId: req.nodeRunId, message })
+      return { status: 'failed', outputs: {}, errorMessage: `iso-setup-failed: ${message}` }
+    }
+    try {
+      const frozen = await resolveFrozenRuntime(
+        db,
+        req.nodeRunId,
+        req.agent.runtime,
+        opts.defaultRuntime,
+      )
+      const result = await runNode({
+        taskId,
+        nodeRunId: req.nodeRunId,
+        nodeId: req.nodeId,
+        agent: req.agent,
+        runtime: frozen.protocol,
+        runtimeBinary: frozen.binary,
+        runtimeParams: frozen.params,
+        runtimeConfigDir: frozen.configDir,
+        inputs: {},
+        worktreePath: iso.repos[0]?.isoWorktreePath ?? task.worktreePath,
+        gitUserName: task.gitUserName,
+        gitUserEmail: task.gitUserEmail,
+        templateMeta: {
+          repoPath: iso.repos[0]?.isoWorktreePath ?? task.repoPath,
+          baseBranch: task.baseBranch,
+          taskId,
+          nodeId: req.nodeId,
+          repos: iso.repos.map((r) => ({
+            repoPath: r.repoPath,
+            worktreePath: r.isoWorktreePath,
+            worktreeDirName: r.worktreeDirName,
+            baseBranch: r.baseBranch,
+          })),
+        },
+        promptTemplate: req.promptTemplate,
+        ...(req.workgroupProtocolBlock !== undefined
+          ? { workgroupProtocolBlock: req.workgroupProtocolBlock }
+          : {}),
+        ...(opts.defaultPerNodeTimeoutMs !== undefined
+          ? { timeoutMs: opts.defaultPerNodeTimeoutMs }
+          : {}),
+        // Voluntary ask-back: the channel is wired (host snapshot) but never
+        // mandatory — workgroup members produce wg_result unless they choose
+        // to ask a human (design §5 / RFC-148 'suppressed').
+        clarifyChannel: { kind: 'self', directive: 'suppressed', injectStopNotice: false },
+        skills: injection.resolvedSkills,
+        dependents: injection.dependents,
+        mcps: injection.mcps,
+        plugins: injection.plugins,
+        appHome: opts.appHome,
+        ...(opts.opencodeCmd ? { opencodeCmd: opts.opencodeCmd } : {}),
+        db,
+        log,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        ...(opts.subagentLiveCapture !== undefined
+          ? { subagentLiveCapture: opts.subagentLiveCapture }
+          : {}),
+      })
+      broadcastNodeStatus(taskId, req.nodeRunId, req.nodeId, result.status)
+      if (result.status === 'canceled') {
+        return {
+          status: 'canceled',
+          outputs: {},
+          ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
+        }
+      }
+      if (result.clarify !== undefined) {
+        const clarifyNodeId = findClarifyNodeForAgent(definition, req.nodeId)
+        if (clarifyNodeId === undefined) {
+          return { status: 'failed', outputs: {}, errorMessage: 'clarify-no-channel' }
+        }
+        const currentRunRow = (
+          await db.select().from(nodeRuns).where(eq(nodeRuns.id, req.nodeRunId)).limit(1)
+        )[0]
+        await createClarifySession({
+          db,
+          taskId,
+          sourceAgentNodeId: req.nodeId,
+          sourceAgentNodeRunId: req.nodeRunId,
+          sourceShardKey: currentRunRow?.shardKey ?? null,
+          clarifyNodeId,
+          iterationIndex: 0,
+          questions: result.clarify.questions,
+          ...(result.clarify.truncationWarnings.length > 0
+            ? { truncationWarnings: result.clarify.truncationWarnings }
+            : {}),
+        })
+        return {
+          status: 'awaiting',
+          outputs: {},
+          clarifyQuestionCount: result.clarify.questions.length,
+        }
+      }
+      if (result.status !== 'done') {
+        return {
+          status: 'failed',
+          outputs: {},
+          errorMessage: result.errorMessage ?? `run-${result.status}`,
+        }
+      }
+      if (!iso.passthrough && req.discardWrites === true) {
+        // RFC-167 (Codex impl-gate P1): the orchestrator GENERATION run must
+        // never mutate the canonical worktree — validation and the human
+        // confirm gate happen AFTER this run, so even a syntactically perfect
+        // (let alone malformed or later-rejected) attempt's worktree writes
+        // are dropped wholesale. The iso row closes as 'abandoned' (this
+        // generation's delta never reaches canonical — exactly the abandon
+        // semantics), so runTask-entry replays can never materialize it;
+        // discardNodeIso in the finally removes the worktree itself.
+        await tryTransitionMergeState({
+          db,
+          nodeRunId: req.nodeRunId,
+          event: { kind: 'abandon', reason: 'discard-writes' },
+        })
+        return { status: 'done', outputs: result.outputs }
+      }
+      if (!iso.passthrough) {
+        const nodeTrees = await snapshotNodeIsoFinal(iso, log)
+        await persistIsoNodeTree(db, req.nodeRunId, task.repoCount, nodeTrees)
+        const merge = await state.writeSem.run(async () => {
+          const mergeRes = await mergeBackNodeIso(iso, nodeTrees, log)
+          if (mergeRes.clean) return { kind: 'merged' as const }
+          const res = await resolveMergeConflicts(state, {
+            conflicts: mergeRes.conflicts,
+            containerPath: iso.containerPath,
+            conflictNodeRunId: req.nodeRunId,
+            nodeId: req.nodeId,
+            iteration: 0,
+          })
+          return res.allResolved
+            ? { kind: 'merged' as const }
+            : { kind: 'conflict-human' as const, detail: res.detail }
+        })
+        if (merge.kind === 'merged') {
+          await transitionMergeState({
+            db,
+            nodeRunId: req.nodeRunId,
+            event: { kind: 'mark-merged', via: 'live' },
+          })
+        } else {
+          await transitionMergeState({
+            db,
+            nodeRunId: req.nodeRunId,
+            event: { kind: 'park-conflict-human', via: 'live' },
+          })
+          return {
+            status: 'failed',
+            outputs: {},
+            errorMessage: `merge-back-conflict (merge agent could not resolve): ${merge.detail}`,
+          }
+        }
+      }
+      return { status: 'done', outputs: result.outputs }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.error('workgroup host-node run threw', { nodeRunId: req.nodeRunId, message })
+      return { status: 'failed', outputs: {}, errorMessage: message }
+    } finally {
+      try {
+        await discardNodeIso(iso, log)
+      } catch {
+        /* best-effort */
+      }
+      releaseGlobal()
+    }
+  }
+  return {
+    runHostNode,
+    broadcastNodeStatus: (nodeRunId, nodeId, status) =>
+      broadcastNodeStatus(taskId, nodeRunId, nodeId, status as NodeStatus),
   }
 }
 
@@ -1090,6 +1362,7 @@ async function maybeRunCommitPush(
             steps: rt.steps,
             maxSteps: rt.maxSteps,
           },
+          configDir: rt.configDir, // RFC-154: frozen with the rest of the snapshot
         })
         const result = await runNode({
           taskId: task.id,
@@ -1099,6 +1372,7 @@ async function maybeRunCommitPush(
           runtime: frozen.protocol,
           runtimeBinary: frozen.binary,
           runtimeParams: frozen.params,
+          runtimeConfigDir: frozen.configDir, // RFC-154: frozen config-dir profile
           inputs: {},
           worktreePath: repo.worktreePath,
           promptTemplate: prompt,
@@ -1164,6 +1438,8 @@ async function maybeRunCommitPush(
               baseRef,
               stat: mctx.stat,
               diffTruncated: mctx.diffTruncated,
+              // RFC-157: undefined ≡ en-US. Initial + repair share one language.
+              lang: state.opts.commitPushLang ?? 'en-US',
             }),
             mctx,
           ),
@@ -1175,6 +1451,7 @@ async function maybeRunCommitPush(
               currentMessage: rctx.currentMessage,
               stat: rctx.stat,
               priorAttempts: rctx.priorAttempts,
+              lang: state.opts.commitPushLang ?? 'en-US',
             }),
             rctx,
           ),
@@ -1892,6 +2169,7 @@ async function resolveMergeConflicts(
         steps: rt.steps,
         maxSteps: rt.maxSteps,
       },
+      configDir: rt.configDir, // RFC-154: frozen with the rest of the snapshot
     })
     // DIRECT runNode — bypasses globalSem on purpose (§7 deadlock avoidance).
     await runNode({
@@ -1902,6 +2180,7 @@ async function resolveMergeConflicts(
       runtime: frozen.protocol,
       runtimeBinary: frozen.binary,
       runtimeParams: frozen.params,
+      runtimeConfigDir: frozen.configDir, // RFC-154: frozen config-dir profile
       inputs: {},
       worktreePath: cwd,
       promptTemplate: prompt,
@@ -2237,7 +2516,9 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
   // clarify-cross-agent node instead of (or as well as) a RFC-023 clarify
   // node. When at least one cross-clarify target exists we instruct the
   // runner to disable the 5-question cap on the envelope parser.
-  const clarifyMode: 'self' | 'cross' =
+  // RFC-165: renamed from `clarifyMode` — that name now belongs to the clarify
+  // NODE field ('optional'); this local is the channel wiring FAMILY.
+  const channelKind: 'self' | 'cross' =
     findCrossClarifyNodeForQuestioner(definition, node.id) !== undefined ? 'cross' : 'self'
   // RFC-132 (PR-C): the designer's External Feedback is no longer a separate context — its questions
   // ride the unified flat clarify queue (buildClarifyQueueContext), which selects by effective target
@@ -2594,7 +2875,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // lookup above returns undefined for the cross node (it is not a
         // `clarify` kind), so without this the questioner would silently stay
         // isolated even when the user picked inline in the editor. Resolve the
-        // cross node via the SAME helper `clarifyMode` itself uses
+        // cross node via the SAME helper `channelKind` itself uses
         // (findCrossClarifyNodeForQuestioner) rather than reusing
         // clarifyNodeForGate: a questioner can wire BOTH a self-clarify and a
         // cross-clarify `__clarify__` edge, and findClarifyNodeForAgent returns
@@ -2602,7 +2883,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // points at the self clarify node and the cross node's
         // sessionModeForQuestioner would be silently ignored. (Codex review #3.)
         const crossQuestionerNodeId =
-          clarifyMode === 'cross'
+          channelKind === 'cross'
             ? findCrossClarifyNodeForQuestioner(definition, node.id)
             : undefined
         const crossQuestionerNode = crossQuestionerNodeId
@@ -2703,9 +2984,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
                 remaining: computeRemaining(definition, node.id, clarifyGeneration),
                 // Inline session resume still suppresses input re-injection + swaps the trailing
                 // reminder; the flat block itself is round-agnostic (RFC-131 aging keeps it small).
-                ...(resumeDecision.inlineMode
-                  ? { mode: 'inline' as const, currentRoundOnly: true }
-                  : {}),
+                ...(resumeDecision.inlineMode ? { mode: 'inline' as const } : {}),
               }
         // effectiveHasClarifyChannel is the "mandatory ask-back is ACTIVE" signal
         // threaded to the runner + renderUserPrompt (RFC-100). It is TRUE only
@@ -2752,6 +3031,14 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
         // <workflow-clarify> is REJECTED (no session) under an explicit stop, while review reruns
         // (reviewActive && !isClarifyRerun) keep emitting clarify.
         const clarifyStopped = hasClarifyChannel && nodeStopOverride
+        // RFC-165 (F12): the wired SELF-clarify node may declare
+        // clarifyMode:'optional' — the channel is offered, never enforced.
+        // Precedence stopped > optional > mandatory/suppressed; every rerun
+        // (initial / retry / post-answer) recomputes from the same static
+        // node field, so answering a round can never re-escalate the node to
+        // mandatory. Cross channels carry no clarifyMode (undefined ⇒ off).
+        const clarifyOptional =
+          hasClarifyChannel && clarifyNodeObjForGate?.clarifyMode === 'optional'
         // RFC-122 (H2 fix), RFC-132 (PR-C): inject the standalone STOP CLARIFYING trailer whenever the
         // node is stopped. The flat block NEVER carries a per-question directive trailer (§5), so —
         // unlike the round-grouped path — the trailer's ONLY source is this notice. `contextDirective:
@@ -2889,6 +3176,7 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           runtime: frozenRuntime.protocol,
           runtimeBinary: frozenRuntime.binary,
           runtimeParams: frozenRuntime.params,
+          runtimeConfigDir: frozenRuntime.configDir, // RFC-154: frozen config-dir profile
           inputs: upstreamInputs,
           // RFC-130 D16: the opencode cwd + ALL path-bearing template tokens point
           // at the ISOLATED worktree, not the canonical one — otherwise the agent
@@ -2925,37 +3213,53 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
           // clarifyContext.flatBlock.
           ...(clarifyContext !== undefined ? { clarifyContext } : {}),
           ...(priorOutputUpdate !== undefined ? { priorOutputUpdate } : {}),
-          ...(clarifyMode === 'cross' ? { clarifyMode: 'cross' as const } : {}),
           ...(effectiveResumeSessionId !== undefined
             ? { resumeSessionId: effectiveResumeSessionId }
             : {}),
-          // RFC-122: a same-session follow-up is bypassed when the STOP toggle
-          // flipped this attempt's clarify-vs-output mode (clarifyModeFlip) — the
-          // resumed session never emitted the now-needed protocol, so the runner
-          // takes the FULL renderUserPrompt path instead (clarifyStopNotice + the
-          // complete output protocol, or the mandatory ask-back block).
-          ...(followupDecision.followup && !clarifyModeFlip
+          // RFC-148: the followup quartet is ONE PromptMode value now. The
+          // followup arm carries the session id (unrepresentable without one
+          // — decideEnvelopeFollowup only fires when the prior attempt
+          // captured a session). RFC-122: a same-session follow-up is
+          // bypassed when the STOP toggle flipped this attempt's
+          // clarify-vs-output mode (clarifyModeFlip) — the resumed session
+          // never emitted the now-needed protocol, so the runner takes the
+          // FULL renderUserPrompt path instead.
+          ...(followupDecision.followup &&
+          !clarifyModeFlip &&
+          effectiveResumeSessionId !== undefined
             ? {
-                envelopeFollowup: true as const,
-                envelopeFollowupReason: followupDecision.reason,
-                ...(followupClarifyDirective !== undefined
-                  ? { envelopeFollowupClarifyDirective: followupClarifyDirective }
-                  : {}),
-                // RFC-049: thread the structured failures through to the
-                // runner so it can render the per-kind repair block via
-                // composePerKindRepairBlocks. Empty array (degraded mode)
-                // is fine — the followup still fires; the runner just
-                // omits the per-port section.
-                ...(followupDecision.reason === 'port-validation'
-                  ? { envelopeFollowupPortValidations: followupDecision.failures }
-                  : {}),
+                promptMode: {
+                  kind: 'followup' as const,
+                  resumeSessionId: effectiveResumeSessionId,
+                  reason: followupDecision.reason,
+                  ...(followupClarifyDirective !== undefined
+                    ? { clarifyDirective: followupClarifyDirective }
+                    : {}),
+                  // RFC-049: thread the structured failures through so the
+                  // runner renders the per-kind repair block. Empty array
+                  // (degraded mode) is fine — the followup still fires.
+                  ...(followupDecision.reason === 'port-validation'
+                    ? { portValidations: followupDecision.failures }
+                    : {}),
+                },
               }
             : {}),
-          hasClarifyChannel: effectiveHasClarifyChannel,
-          ...(clarifyStopped ? { clarifyStopped: true as const } : {}),
-          // RFC-122: inject STOP CLARIFYING on a first-run / pre-clarify retry
-          // override (when no answersBlock carries it). Omitted otherwise.
-          ...(clarifyStopNotice ? { clarifyStopNotice: true as const } : {}),
+          // RFC-148: the clarify quartet is ONE ClarifyChannel value now —
+          // wiring family (parser cap) × this-run directive (enforcement)
+          // × stop-notice injection.
+          clarifyChannel: !hasClarifyChannel
+            ? { kind: 'none' as const }
+            : {
+                kind: channelKind,
+                directive: clarifyStopped
+                  ? ('stopped' as const)
+                  : clarifyOptional
+                    ? ('optional' as const)
+                    : effectiveHasClarifyChannel
+                      ? ('mandatory' as const)
+                      : ('suppressed' as const),
+                injectStopNotice: clarifyStopNotice,
+              },
           skills: resolvedSkills,
           dependents,
           mcps,
@@ -4406,6 +4710,7 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       runtime: shardRuntime.protocol,
       runtimeBinary: shardRuntime.binary,
       runtimeParams: shardRuntime.params,
+      runtimeConfigDir: shardRuntime.configDir, // RFC-154: frozen config-dir profile
       inputs,
       // RFC-130 D16: cwd + path tokens → the shard's isolated worktree.
       worktreePath: shardIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
@@ -4429,7 +4734,8 @@ async function dispatchFanoutShard(args: DispatchShardArgs): Promise<DispatchSha
       },
       ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
-      hasClarifyChannel: false, // PR-D2: per-shard clarify
+      // PR-D2: per-shard clarify stays off — RFC-148 ADT form.
+      clarifyChannel: { kind: 'none' as const },
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
       mcps: injection.mcps,
@@ -4782,6 +5088,7 @@ async function dispatchFanoutAggregator(
       runtime: aggRuntime.protocol,
       runtimeBinary: aggRuntime.binary,
       runtimeParams: aggRuntime.params,
+      runtimeConfigDir: aggRuntime.configDir, // RFC-154: frozen config-dir profile
       inputs: aggInputs,
       worktreePath: aggIso.repos[0]?.isoWorktreePath ?? task.worktreePath,
       // RFC-067: per-task Git identity threaded through fanout aggregator dispatch.
@@ -4805,7 +5112,7 @@ async function dispatchFanoutAggregator(
       ...(nodeTimeoutMs !== undefined ? { timeoutMs: nodeTimeoutMs } : {}),
       // RFC-119 multi-process: prior aggregated output on re-run (see above).
       ...(aggPriorOutputUpdate !== undefined ? { priorOutputUpdate: aggPriorOutputUpdate } : {}),
-      hasClarifyChannel: false, // PR-D2
+      clarifyChannel: { kind: 'none' as const }, // PR-D2
       skills: injection.resolvedSkills,
       dependents: injection.dependents,
       mcps: injection.mcps,
@@ -6188,31 +6495,15 @@ function buildScopeUpstreams(
   for (const e of edges) {
     if (!ids.has(e.target.nodeId)) continue
     if (!ids.has(e.source.nodeId)) continue
-    // RFC-023: agent.__clarify__ → clarify.questions is a channel edge
-    // (clarify node is dispatched by the runner via createClarifySession,
-    // not by the scheduler's dataflow walk); skip to prevent agent→clarify
-    // → agent cycles. RFC-056 cross-clarify TARGETS are NOT skipped here:
-    // a cross-clarify node legitimately waits for its questioner to
-    // complete before runtime activates it (see 2026-05-22 bug: skipping
-    // this edge made cross-clarify a no-upstream leaf, dispatcher
-    // re-fired it every scheduler tick, accumulating orphan pending rows).
-    if (e.source.portName === '__clarify__') {
-      const tgtKind = kindById.get(e.target.nodeId)
-      if (tgtKind === 'clarify') continue
-      // tgtKind === 'clarify-cross-agent' → fall through, KEEP edge as
-      // dataflow dep so cross-clarify waits for questioner.
-    }
-    // Other channel edges (RFC-023 answer / RFC-056 back-channels) stay
-    // skipped — they're injected via prompt context, not consumed as
+    // RFC-147: channel-edge dataflow semantics come from the shared
+    // system-channel-port registry. The nuanced rule lives there —
+    // agent.__clarify__ → clarify is dispatched out-of-band (skip to
+    // prevent agent→clarify→agent cycles) while a cross-clarify TARGET
+    // keeps the edge as a real dependency (2026-05-22 bug: skipping it
+    // made cross-clarify a no-upstream leaf the dispatcher re-fired every
+    // tick); answer / back-channel ports are prompt-injected, never
     // dataflow inputs.
-    if (
-      e.target.portName === '__clarify_response__' ||
-      e.target.portName === '__external_feedback__' ||
-      e.source.portName === 'to_designer' ||
-      e.source.portName === 'to_questioner'
-    ) {
-      continue
-    }
+    if (channelEdgeDataflowSkip(e, (id) => kindById.get(id))) continue
     const list = m.get(e.target.nodeId) ?? []
     if (!list.includes(e.source.nodeId)) list.push(e.source.nodeId)
     m.set(e.target.nodeId, list)

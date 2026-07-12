@@ -223,8 +223,8 @@ describe('RFC-104 — route guards refuse mutating a built-in (even as admin)', 
       body: JSON.stringify({
         name: 'manual-launch-attempt',
         workflowId: id,
-        repoPath: '/tmp/whatever',
-        baseBranch: 'main',
+        repoUrl: 'file:///tmp/whatever',
+        ref: 'main',
         inputs: {},
       }),
     })
@@ -275,8 +275,8 @@ describe('RFC-104 — route guards refuse mutating a built-in (even as admin)', 
       JSON.stringify({
         name: 'mp',
         workflowId: id,
-        repoPath: '/tmp/x',
-        baseBranch: 'main',
+        repoUrl: 'file:///tmp/x',
+        ref: 'main',
         inputs: {},
       }),
     )
@@ -435,8 +435,13 @@ describe('RFC-104 — seed self-heal & the ≤1-built-in-per-name guarantee', ()
 describe('RFC-104 — source-level guard anchors (regression: do not delete the guards)', () => {
   test('launch + resume/retry + YAML import + ACL guards are present in source', () => {
     const tasksSrc = readFileSync(resolve(SRC, 'routes', 'tasks.ts'), 'utf-8')
-    expect(tasksSrc).toContain("assertNotBuiltin('workflow', wf)") // JSON launch
-    expect(tasksSrc).toContain("assertNotBuiltin('workflow', workflow)") // multipart launch
+    // RFC-159 T2: the JSON + multipart launch gates were unified into the shared
+    // assertWorkflowLaunchable (services/taskLaunchGate.ts) — it holds the built-in
+    // guard; both launch paths call it. Guard NOT deleted, just deduped.
+    const gateSrc = readFileSync(resolve(SRC, 'services', 'taskLaunchGate.ts'), 'utf-8')
+    expect(gateSrc).toContain("assertNotBuiltin('workflow', wf)")
+    const launchGateCalls = (tasksSrc.match(/assertWorkflowLaunchable\(/g) ?? []).length
+    expect(launchGateCalls).toBeGreaterThanOrEqual(2) // JSON + multipart launch
     expect(tasksSrc).toContain('assertTaskWorkflowNotBuiltin') // resume + retry routes
     const yaml = readFileSync(resolve(SRC, 'services', 'workflow.yaml.ts'), 'utf-8')
     expect(yaml).toContain("assertNotBuiltin('workflow', existing)")

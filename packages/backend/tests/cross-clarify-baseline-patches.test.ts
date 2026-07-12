@@ -23,6 +23,8 @@ import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { nodeRuns, taskQuestions, tasks, workflows } from '../src/db/schema'
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -34,6 +36,27 @@ import type {
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The designer rerun (patch-23 retry index, patch-22 cascade caller hook,
+// patch-25 dispatched_at consumed marker) is now minted by an explicit reassign of the answered
+// round's questioner card to the graph designer node + a dispatch of that designer entry.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 async function seedTriad(
   db: DbClient,
@@ -150,15 +173,16 @@ describe('RFC-058 baseline T4 — patch-2026-05-23 designer retry index', () => 
       loopIter: 0,
       questions: [makeQuestion()],
     })
-    // RFC-132: the designer rerun comes out of answering the awaiting round via the
-    // unified dispatch (res.dispatch.reruns) — the legacy direct rerun trigger is gone.
-    const res = await autoDispatchClarifyRound({
+    // RFC-162: the designer rerun comes from reassigning the answered round to the graph
+    // designer node + dispatching that designer entry (the legacy scope/direct trigger is gone).
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
       actor,
     })
-    const designerRerun = res.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    const disp = await reassignThenDispatchDesigner(db, taskId, crossClarifyNodeRunId)
+    const designerRerun = disp.reruns.find((r) => r.targetNodeId === 'designer')
     expect(designerRerun).toBeDefined()
     const newRun = (
       await db.select().from(nodeRuns).where(eq(nodeRuns.id, designerRerun!.nodeRunId))
@@ -269,13 +293,16 @@ describe('RFC-058 baseline T4 — patch-2026-05-22 cascade BFS smoke', () => {
       loopIter: 0,
       questions: [makeQuestion()],
     })
-    const res = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
       actor,
     })
-    expect(res.dispatch.reruns.find((r) => r.targetNodeId === 'designer')?.nodeRunId).toBeTruthy()
+    // RFC-162: reassign the answered round to the designer + dispatch it → the mint returns the
+    // designer rerun nodeRunId the cascade caller hooks into.
+    const disp = await reassignThenDispatchDesigner(db, taskId, crossClarifyNodeRunId)
+    expect(disp.reruns.find((r) => r.targetNodeId === 'designer')?.nodeRunId).toBeTruthy()
   })
 })
 
@@ -312,16 +339,18 @@ describe('RFC-058 baseline T4 — patch-2026-05-25 questioner cascade visibility
       loopIter: 0,
       questions: [makeQuestion()],
     })
-    const res = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
       ifMatchIteration: 0,
       actor,
     })
-    // RFC-132: the unified path does not stamp designerRunTriggeredAt (legacy bookkeeping);
-    // the "consumed" marker is dispatched_at on the round's designer entries.
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    // RFC-162: reassign the answered round to the designer + dispatch it. The unified path does
+    // not stamp designerRunTriggeredAt (legacy bookkeeping); the "consumed" marker is
+    // dispatched_at on the round's designer entries.
+    const disp = await reassignThenDispatchDesigner(db, taskId, crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
     const designerEntries = (
       await db
         .select()

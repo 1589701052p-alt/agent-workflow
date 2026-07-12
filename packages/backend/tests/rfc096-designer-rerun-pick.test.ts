@@ -36,7 +36,8 @@ import { monotonicFactory } from 'ulid'
 import type { ClarifyQuestion, WorkflowDefinition, WorkflowNode } from '@agent-workflow/shared'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
 import { clarifyRounds, crossClarifySessions, nodeRuns, tasks, workflows } from '../src/db/schema'
-import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 
 const ulid = monotonicFactory()
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
@@ -138,9 +139,12 @@ async function seedRun(
   return id
 }
 
-/** An awaiting cross round on CC (dual-written round + legacy session, the
- *  createCrossClarifySession shape) whose answer auto-dispatches the designer. */
-async function seedAwaitingCrossRound(
+/** An ANSWERED cross round on CC (dual-written round + legacy session, the
+ *  createCrossClarifySession shape). RFC-162: reconcile emits ONE questioner entry; a designer
+ *  handler is added by an explicit reassign (see the test), then dispatched. Seeding the round
+ *  `answered` lets the reassign-added designer pass the dispatch seal gate
+ *  (assertRequestedEntriesSealed treats an answered round as sealed). */
+async function seedAnsweredCrossRound(
   db: DbClient,
   taskId: string,
   questionerRunId: string,
@@ -153,9 +157,11 @@ async function seedAwaitingCrossRound(
     loopIter: 0,
     iteration: 0,
     questionsJson: JSON.stringify([mkQuestion('q1')]),
-    answersJson: '[]',
+    answersJson: JSON.stringify([
+      { questionId: 'q1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
+    ]),
     directive: 'continue' as const,
-    status: 'awaiting_human' as const,
+    status: 'answered' as const,
   }
   await db.insert(clarifyRounds).values({
     ...common,
@@ -211,21 +217,22 @@ describe('RFC-096 designer-rerun anchor — freshest-row pick via the unified di
     })
 
     const questionerRunId = await seedRun(db, taskId, Q, { status: 'awaiting_human' })
-    const crossNodeRunId = await seedAwaitingCrossRound(db, taskId, questionerRunId)
+    await seedAnsweredCrossRound(db, taskId, questionerRunId)
 
-    // Live driver: answering the round auto-dispatches the designer entry →
-    // buildFrontierMintPlan anchors the mint on pickFreshestRun(designer rows).
-    const res = await autoDispatchClarifyRound({
-      db,
-      originNodeRunId: crossNodeRunId,
-      answers: [
-        { questionId: 'q1', selectedOptionIndices: [0], selectedOptionLabels: [], customText: '' },
-      ],
-      scopes: { q1: 'designer' },
-      actor: { userId: 'u1', role: 'owner' },
-    })
+    // RFC-162 live driver: a cross round reconciles to ONE questioner entry (designer-by-default
+    // deleted). Reassign it UPSTREAM to D to ADD a `designer` handler (default target D), then
+    // dispatch that handler through the SAME dispatchTaskQuestions the board's 批量下发 uses —
+    // buildFrontierMintPlan anchors the designer mint on pickFreshestRun(designer rows).
+    const actor = { userId: 'u1', role: 'owner' as const }
+    const questioner = (await listTaskQuestions(db, taskId)).find(
+      (e) => e.roleKind === 'questioner',
+    )!
+    await reassignTaskQuestion(db, questioner.id, D, actor)
+    const designer = (await listTaskQuestions(db, taskId)).find((e) => e.roleKind === 'designer')!
 
-    const designerRerunId = res.dispatch.reruns.find((r) => r.targetNodeId === D)?.nodeRunId
+    const res = await dispatchTaskQuestions(db, taskId, [designer.id], actor)
+
+    const designerRerunId = res.reruns.find((r) => r.targetNodeId === D)?.nodeRunId
     expect(designerRerunId).toBeDefined()
     const rerun = await loadRun(db, designerRerunId!)
     expect(rerun?.nodeId).toBe(D)

@@ -17,7 +17,7 @@
 //     id < anchor (the pre-clarify original run) are below the window.
 
 import { describe, expect, test } from 'bun:test'
-import { resolveHandlerRun, type RunLineageView } from '../src/task-questions'
+import { deriveQuestionPhase, resolveHandlerRun, type RunLineageView } from '../src/task-questions'
 
 const R = (id: string, over: Partial<RunLineageView> = {}): RunLineageView => ({
   id,
@@ -126,5 +126,41 @@ describe('resolveHandlerRun', () => {
         runs: [R('r1', { nodeId: 'other' }), R('r2', { iteration: 1 })],
       }),
     ).toBeNull()
+  })
+})
+
+// Regression for live incident 01KWDKBS9K22KB6HH4KNR3XMX6 (2026-07-09), reproduced
+// at the unit level from the real node_run topology: agent_m7p3n1 @ iteration 0 has
+//   K7QVYJQH64  initial         done  no-output   (asked round 0)
+//   BJRF4C5G59  clarify-answer  done  no-output   (answered round 0, asked round 1)  ← anchor
+//   AVY61AJPFK  clarify-answer  done  +output     (answered round 1, produced output)
+// Five self questions bound to BJRF4C5G59. Its lineage window is [BJRF4C5G59,
+// AVY61AJPFK): the later clarify-answer run is the UPPER BOUND (a
+// NEW_CLARIFY_TRIGGER_CAUSE), so the output-producing run never enters — the handler
+// is forever the done-no-output BJRF4C5G59. The board must still show those questions
+// as 已处理待确认 (the answer WAS processed), not 处理中 forever.
+describe('multi-round clarify strand (incident 01KWDKBS9K…): done-no-output handler → awaiting_confirm', () => {
+  const runs: RunLineageView[] = [
+    R('01_initial', { rerunCause: 'initial', status: 'done', hasOutput: false }),
+    R('02_answered_r0', { rerunCause: 'clarify-answer', status: 'done', hasOutput: false }), // anchor
+    R('03_answered_r1', { rerunCause: 'clarify-answer', status: 'done', hasOutput: true }), // upper bound
+  ]
+
+  test('the window caps at the follow-up round, keeping the done-no-output handler', () => {
+    const handler = resolveHandlerRun({ ...base, triggerRunId: '02_answered_r0', runs })
+    // NOT 03_answered_r1 — that later clarify-answer run is the window upper bound.
+    expect(handler).toEqual({ status: 'done', startedAt: 1, hasOutput: false })
+  })
+
+  test('phase of a round-0 question is 已处理待确认, not stranded at 处理中', () => {
+    const handler = resolveHandlerRun({ ...base, triggerRunId: '02_answered_r0', runs })
+    const phase = deriveQuestionPhase({
+      roundStatus: 'answered',
+      confirmation: 'open',
+      isStaged: false,
+      dispatchedInFlight: false,
+      handlerRun: handler,
+    })
+    expect(phase).toBe('awaiting_confirm')
   })
 })

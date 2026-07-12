@@ -20,6 +20,7 @@
 
 import { z } from 'zod'
 import { ResourceVisibilitySchema } from './resourceAcl'
+import { WORKGROUP_NAME_RE } from './workgroup'
 
 /** Currently-written schema version. New writes always set this value. */
 export const WORKFLOW_SCHEMA_VERSION = 4
@@ -218,8 +219,25 @@ export type Workflow = z.infer<typeof WorkflowSchema>
 
 // --- request payloads ---
 
+/**
+ * 2026-07-10 naming unification: workflow names follow the SAME rules as
+ * workgroup names (slug charset, ≤128) — one regex, aliased so the two can
+ * never drift. Unlike workgroups the name is still NOT the identity (the ULID
+ * id is; duplicates stay legal and systemResources' builtin discrimination
+ * relies on that), so the rules only apply where a NEW name enters the
+ * system: create, an actual rename, and YAML import. Stored legacy free-form
+ * names are grandfathered — UpdateWorkflowSchema stays permissive and the
+ * route/service layers validate only CHANGED names against WorkflowNameSchema.
+ */
+export const WORKFLOW_NAME_RE = WORKGROUP_NAME_RE
+export const WorkflowNameSchema = z
+  .string()
+  .min(1, 'name is required')
+  .max(128, 'name too long')
+  .regex(WORKFLOW_NAME_RE, 'name must start with [a-z0-9] and contain only [a-z0-9_-]')
+
 export const CreateWorkflowSchema = z.object({
-  name: z.string().min(1).max(256),
+  name: WorkflowNameSchema,
   description: z.string().default(''),
   definition: WorkflowDefinitionSchema,
 })
@@ -227,6 +245,9 @@ export type CreateWorkflow = z.infer<typeof CreateWorkflowSchema>
 
 export const UpdateWorkflowSchema = z
   .object({
+    // Permissive on purpose (grandfather): auto-save PUTs echo the stored
+    // name, which may predate the slug rules. The rename gate lives in the
+    // PUT route (validates only when the name differs from the stored one).
     name: z.string().min(1).max(256).optional(),
     description: z.string().optional(),
     definition: WorkflowDefinitionSchema.optional(),
@@ -313,6 +334,15 @@ export const ClarifyNodeSchema = z
      * resolved to `'isolated'` (preserves RFC-023 behavior byte-for-byte).
      */
     sessionMode: ClarifySessionModeSchema.optional(),
+    /**
+     * RFC-165 (F12): 'optional' relaxes the clarify channel from "must ask
+     * first" to a dual-envelope directive — the agent may EITHER emit
+     * clarify questions OR finish directly with its normal output; every
+     * rerun of the same node (initial / retry / post-answer) stays optional.
+     * `undefined` keeps the pre-RFC-165 mandatory/suppressed semantics
+     * byte-for-byte (additive-field precedent: sessionMode above).
+     */
+    clarifyMode: z.enum(['optional']).optional(),
   })
   .passthrough()
 export type ClarifyNode = z.infer<typeof ClarifyNodeSchema>

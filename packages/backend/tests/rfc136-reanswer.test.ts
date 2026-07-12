@@ -19,7 +19,11 @@ import { clarifyRounds, nodeRuns, taskQuestions, tasks, workflows } from '../src
 import { createClarifySession } from '../src/services/clarify'
 import { createCrossClarifySession } from '../src/services/crossClarify'
 import { sealRoundQuestions } from '../src/services/clarifySeal'
-import { listTaskQuestions, stageTaskQuestion } from '../src/services/taskQuestions'
+import {
+  listTaskQuestions,
+  reassignTaskQuestion,
+  stageTaskQuestion,
+} from '../src/services/taskQuestions'
 import { buildClarifyQueueContext } from '../src/services/clarifyQueue'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type {
@@ -326,35 +330,11 @@ describe('RFC-136 — 重答（reseal）正向路径', () => {
     expect(answers.find((a) => a.questionId === 'q2')?.customText).toBe('FRESH')
   })
 
-  test('D6 — reseal 题客户端误传 scope 被忽略（question_scopes_json 原值保持）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1')])
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1', 0)],
-      scopes: { q1: 'designer' },
-      autoStage: true,
-      sealedBy: 'u1',
-      now: () => 1_000,
-    })
-    const dtos = await listTaskQuestions(db, taskId)
-    for (const e of dtos.filter((x) => x.staged)) await stageTaskQuestion(db, e.id, false, actor)
-
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1', 1)],
-      scopes: { q1: 'questioner' }, // 误传——必须被忽略
-      autoStage: true,
-      sealedBy: 'u1',
-      allowResealFor: ['q1'],
-      now: () => 2_000,
-    })
-    const round = await roundRow(db, taskId)
-    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(scopes.q1).toBe('designer')
-  })
+  // RFC-162: retired — per-question scope (designer↔questioner) deleted. This test asserted a
+  // reseal ignores a client-forged scope so question_scopes_json keeps its original value; scope
+  // no longer exists (sealRoundQuestions drops the arg; the column is never written), so there is
+  // nothing to preserve. The reseal answer-overwrite semantics it rode on are covered by the
+  // 正向路径 cases above.
 
   test('AC-8 — 重答后注入面读到新答案（buildClarifyQueueContext 含新不含旧）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
@@ -443,12 +423,15 @@ describe('RFC-136 — 守卫（rejected 路径不放宽）', () => {
   test('cross 多角色条目仅一行 staged → 整题 409（不产生半新半旧；即便 allowReseal）', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1')])
-    // designer scope → questioner + designer 双角色条目；autoStage 全 staged。
+    // RFC-162: 双角色（questioner + designer）不再来自 scope，而来自人工改派——先让面板建出
+    // questioner 条目，再 reassign 到上游 designer 增派一条 designer handler 行；随后 seal
+    // (autoStage) 按 (origin × question) 一起盖两行 sealed_at/staged_at → 双行全 staged。
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'designer', actor)
     await sealRoundQuestions({
       db,
       originNodeRunId,
       answers: [makeAns('q1', 0)],
-      scopes: { q1: 'designer' },
       autoStage: true,
       sealedBy: 'u1',
     })
@@ -477,11 +460,14 @@ describe('RFC-136 — 守卫（rejected 路径不放宽）', () => {
   test('unstage 级联：cross 双行一张卡移出待下发 → 整题回待指派、可重答', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1')])
+    // RFC-162: 双行（questioner + designer）来自人工改派（scope 已删）——reassign 增派 designer
+    // handler，再 seal(autoStage) 一并盖两行 → 双行两张卡。
+    const [questioner] = await listTaskQuestions(db, taskId)
+    await reassignTaskQuestion(db, questioner!.id, 'designer', actor)
     await sealRoundQuestions({
       db,
       originNodeRunId,
       answers: [makeAns('q1', 0, 'OLD')],
-      scopes: { q1: 'designer' },
       autoStage: true,
       sealedBy: 'u1',
     })

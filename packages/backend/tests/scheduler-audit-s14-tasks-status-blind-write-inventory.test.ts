@@ -46,11 +46,35 @@ const STATUS_WRITE_ALLOWLIST: Record<string, number> = {
  * RFC-097 §2 第 10 行——不翻状态，故不进 status 棘轮）。
  */
 const NON_STATUS_UPDATE_TASKS_SNAPSHOT: Record<string, number> = {
+  // RFC-164: persistGate writes workgroup_config_json only (gate state on the
+  // task's config copy) — never the status column.
+  'services/workgroupRunner.ts': 1,
   'services/limits.ts': 1,
   // RFC-108 T11 (AR-09): circuit-breaker accounting — recordAutoRecoveryAttempt
   // updates auto_recovery_{attempts,window_started_at,suspended};
   // clearAutoRecoverySuspension resets them. Neither touches `status`.
   'services/recoveryBreaker.ts': 2,
+  // RFC-165: two-phase workspace tombstone — every writer touches ONLY
+  // workspace_pruning_at / workspace_pruned_at (workspace claim /
+  // heal-missing-dir / finalize / boot reconcile / iso transient claim +
+  // CAS-scoped release). Status flips stay in setTaskStatus; its revive gate
+  // READS these columns inside the status CAS.
+  'services/gc.ts': 6,
+  // RFC-165 (R3-2-r4): the revive gate stamps workspace_pruned_at when the
+  // dir vanished pre-tombstone (heal-forward) — companion-column write only.
+  'services/lifecycle.ts': 1,
+  // RFC-164 PR-3: gate approve/reject + mid-run config edit both rewrite
+  // workgroup_config_json (the task-owned runtime copy) — never `status`
+  // (the gate's status flip rides transitionTaskStatusByEvent separately).
+  // RFC-167 dw-confirm adds NO direct write: approve + reject ride the dw
+  // slot through resumeKick's status CAS, and the reject-exhausted round
+  // rides it through setTaskStatus extra (Codex impl-gate P1 — the phase
+  // and the status can never tear).
+  'routes/workgroupTasks.ts': 2,
+  // RFC-167: persistDwState writes workgroup_config_json only (dw phase /
+  // attempts / generatedDef on the task's config copy) — never `status`
+  // (workgroupRunner persistGate 同款).
+  'services/dynamicWorkflowRunner.ts': 1,
 }
 
 function walkTsFiles(dir: string): string[] {

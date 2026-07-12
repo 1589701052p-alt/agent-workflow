@@ -17,8 +17,15 @@
 //     not run start. This is the v2 change from the original startedAt-based rule.
 //   * staged is ONLY a pre-dispatch state — once dispatched, processing wins.
 //   * **handler 'failed' → 'processing'** (decision D3: failure stays 处理中).
-//   * handler 'done' WITH output → 'awaiting_confirm'; done WITHOUT output →
-//     'processing' (defensive).
+//   * handler 'done' → 'awaiting_confirm', WITH OR WITHOUT output. A done handler
+//     CONSUMED the answer (same bar as the RFC-139 ledger's done=consumed): a
+//     clarify-answer rerun that ASKS A FOLLOW-UP exits `done` with NO
+//     <workflow-output> port (runner kind==='clarify'), and that state is
+//     PERMANENT — the follow-up round's own answer rerun caps this entry's lineage
+//     window, so no output-producing run can ever enter it. The old
+//     `done && hasOutput` bar stranded every such "answered but the agent asked
+//     again" question at 处理中 forever (live incident 01KWDKBS9K22KB6HH4KNR3XMX6:
+//     5 self questions bound to a done-no-output clarify-answer run). done → 已处理待确认.
 
 import { describe, expect, test } from 'bun:test'
 import {
@@ -130,10 +137,18 @@ describe('deriveQuestionPhase (v2)', () => {
     ).toBe('awaiting_confirm')
   })
 
-  test('handler done WITHOUT output → processing (defensive)', () => {
+  // Regression — live incident 01KWDKBS9K22KB6HH4KNR3XMX6 (2026-07-09): a
+  // clarify-answer rerun that answered a batch of questions THEN asked a follow-up
+  // exits `done` with no <workflow-output> port. The questions it answered bind to
+  // that run; the follow-up round's answer rerun becomes their lineage-window UPPER
+  // bound (resolveHandlerRun), so no later output run rescues them. The old
+  // `done && hasOutput` bar parked them at 处理中 permanently even though the answer
+  // WAS processed (and the ledger already counts the run as consumed, RFC-139).
+  // done → 已处理待确认, aligning the display oracle with the ledger.
+  test('handler done WITHOUT output (clarify-ask continuation) → awaiting_confirm', () => {
     expect(
       deriveQuestionPhase(input({ handlerRun: handler({ status: 'done', hasOutput: false }) })),
-    ).toBe('processing')
+    ).toBe('awaiting_confirm')
   })
 })
 

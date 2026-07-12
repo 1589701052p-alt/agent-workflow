@@ -68,11 +68,34 @@ import {
 import { autoDispatchClarifyRound } from '../src/services/clarifyAutoDispatch'
 import { createCrossClarifySession } from '../src/services/crossClarify'
 import { createClarifySession } from '../src/services/clarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. Fix B (the designer's own rerun after a continue) is now an explicit reassign of
+// the answered round's questioner card to the graph designer node + a dispatch of that designer
+// entry; the retry_index / freshness bump this file locks is minted by the SAME buildFrontierMintPlan.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -328,13 +351,15 @@ describe('RFC-056 patch 2026-05-25 — questioner cascade no-skip + cci inherita
     expect(sess.session.iteration).toBe(1)
 
     // User continues.
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: sess.crossClarifyNodeRunId,
       answers: [makeAns('hwdacf')],
       actor,
     })
-    expect(ret.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    // RFC-162: the designer revision is an explicit reassign+dispatch of the answered round.
+    const disp = await reassignThenDispatchDesigner(db, taskId, sess.crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
 
     // Fix B — designer rerun must jump to cci=2, NOT 1. With the pre-patch
     // `(lastDesigner.cci ?? 0) + 1` formula, lastDesigner picks designerV0

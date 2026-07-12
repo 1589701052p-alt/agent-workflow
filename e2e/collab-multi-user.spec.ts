@@ -22,6 +22,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { startDaemon, type DaemonHandle } from './harness'
 
@@ -144,8 +145,8 @@ async function createTaskAsUser(
     body: JSON.stringify({
       name,
       workflowId,
-      repoPath: repoDir,
-      baseBranch: 'main',
+      repoUrl: pathToFileURL(repoDir).href,
+      ref: 'main',
       inputs: { topic: 'collab-test' },
     }),
   })
@@ -183,15 +184,6 @@ test.beforeAll(async () => {
   execSync('git config user.name e2e', { cwd: repoDir })
   execSync('git add .', { cwd: repoDir })
   execSync('git commit -qm initial', { cwd: repoDir })
-  // Register the path so the task launch picks it up.
-  await fetch(`${daemon.baseUrl}/api/repos/recent`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${daemon.token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ path: repoDir }),
-  })
 })
 
 test.afterAll(async () => {

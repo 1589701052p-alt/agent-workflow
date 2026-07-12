@@ -28,6 +28,8 @@ import {
   getCrossClarifyDetail,
   listCrossClarifySummaries,
 } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests, TASK_CHANNEL, taskBroadcaster } from '../src/ws/broadcaster'
 import type {
   ClarifyAnswer,
@@ -141,6 +143,26 @@ function makeAnswer(): ClarifyAnswer {
 
 // RFC-099 audit-only actor for the unified answer driver (never enters a prompt).
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The designer rerun is now minted by reassigning the answered round's questioner
+// card to the graph designer node + dispatching that designer entry.
+async function reassignThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunId: string,
+) {
+  const questioner = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'questioner' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!questioner) throw new Error(`no questioner entry for round ${crossClarifyNodeRunId}`)
+  await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  const designer = (await listTaskQuestions(db, taskId)).find(
+    (e) => e.roleKind === 'designer' && e.originNodeRunId === crossClarifyNodeRunId,
+  )
+  if (!designer) throw new Error(`no designer entry after reassign for ${crossClarifyNodeRunId}`)
+  return dispatchTaskQuestions(db, taskId, [designer.id], actor)
+}
 
 beforeEach(() => resetBroadcastersForTests())
 afterAll(() => resetBroadcastersForTests())
@@ -416,7 +438,7 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     })
     const received: TaskWsMessage[] = []
     taskBroadcaster.subscribe(TASK_CHANNEL(taskId), (m) => received.push(m))
-    const res = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: crossClarifyNodeRunId,
       answers: [makeAnswer()],
@@ -429,10 +451,12 @@ describe('RFC-058 baseline T6 — WS event payload shape', () => {
     await broadcastCrossClarifyAnsweredForRound(db, crossClarifyNodeRunId, {})
     const types = received.map((m) => m.type)
     // RFC-058 baseline, RFC-132 update: continue submit fires .answered. The legacy
-    // .designer-rerun-batched event was emitted only by the deleted immediate-mint
-    // path; the designer continuation is now observable on the dispatch result.
+    // .designer-rerun-batched event was emitted only by the deleted immediate-mint path.
+    // RFC-162: the designer continuation is now an explicit reassign+dispatch of the answered
+    // round, observable on the dispatch result.
     expect(types).toContain('cross-clarify.answered')
-    expect(res.dispatch.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
+    const disp = await reassignThenDispatchDesigner(db, taskId, crossClarifyNodeRunId)
+    expect(disp.reruns.some((r) => r.targetNodeId === 'designer')).toBe(true)
   })
 
   test('cross-clarify.rejected on stop submit', async () => {

@@ -10,7 +10,7 @@
 // 三个调用位：单文档详情（当前 + 历史只读视图）、多文档轮视图。pending /
 // 无决策时渲染 null。
 import { useTranslation } from 'react-i18next'
-import type { UserPublic } from '@agent-workflow/shared'
+import { isSystemDecision, type UserPublic } from '@agent-workflow/shared'
 import { AttributionChip, type AttributionRole } from '@/components/AttributionChip'
 import { StatusChip } from '@/components/StatusChip'
 import { DECISION_CHIP_KIND, type ReviewDecisionView } from '@/lib/review/decisionChip'
@@ -37,7 +37,9 @@ export function ReviewDecisionInfo(props: ReviewDecisionInfoProps) {
   const { t } = useTranslation()
   const { decision } = props
   if (decision === undefined || decision === 'pending') return null
-  const isSystem = props.decidedBy === 'system'
+  // RFC-149: sentinel spelling lives in shared (SYSTEM_DECIDER); read via the
+  // predicate instead of a scattered string-literal comparison.
+  const isSystem = isSystemDecision(props.decidedBy)
   const trimmedReason = props.decisionReason?.trim() ?? ''
   const reason =
     decision === 'rejected'

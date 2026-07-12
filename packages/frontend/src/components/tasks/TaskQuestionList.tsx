@@ -1,15 +1,17 @@
 // RFC-120 — task question list / 任务中心 board (v1-A kanban embryo).
 //
 // Columns = the lifecycle phases (待指派 / 待下发 / 处理中 / 已处理待确认 / 完成 /
-// 已关闭). Each card is one handler entry (问题 × 承接角色) showing its source node
-// and target (handler) node. Actions:
-//   - confirm  (已处理待确认 → 完成)
-//   - stage / unstage (待指派 ↔ 待下发)
-//   - reassign designer entries to another workflow agent node (Select)
+// 已关闭). RFC-163（用户 2026-07-10「下发前一问一卡、下发后各处理节点拆开」）: cards come from
+// `groupBoardEntries` — an UNDISPATCHED question is ONE card whose handler rows list its
+// processing nodes (the asker itself + any reassign-added designer), so a reassign edits a row
+// inside the same card instead of conjuring a second card; DISPATCHED entries split into
+// per-handler cards (independently tracked / confirmed). Actions:
+//   - confirm  (已处理待确认 → 完成; dispatched single cards only)
+//   - stage / unstage (待指派 ↔ 待下发; GROUP-level — the whole handler set stages/dispatches
+//     together so the asker never dispatches without its coexisting designer, one frontier)
+//   - reassign (card-level Select anchored on the asker entry → adds/removes/re-targets the
+//     designer handler row, RFC-162 semantics)
 // Data: GET /api/tasks/:id/questions; writes POST .../{confirm,reassign,stage}.
-// Re-target/dispatch execution that mints reruns is gated on RFC-119 (see RFC
-// design §11.7); v1-A records the override + stage intent + closes the loop on
-// the existing auto-dispatch flow.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
@@ -27,6 +29,7 @@ import {
   groupAnswerableQuestions,
 } from '@/components/clarify/CentralizedAnswerDialog'
 import { QuestionAuthorForm } from '@/components/tasks/QuestionAuthorForm'
+import { groupBoardEntries } from '@/lib/task-question-board'
 
 export type TaskQuestionPhase = 'pending' | 'staged' | 'processing' | 'awaiting_confirm' | 'done'
 // RFC-126: 'closed' 相位移除（不再有 abandon/closed 终态；问题留在原地）。
@@ -39,9 +42,8 @@ export interface TaskQuestionEntry {
    *  for a manual question (RFC-120 §15): it has no clarify round / answer page. */
   originNodeRunId: string | null
   sourceKind: 'self' | 'cross' | 'manual'
-  /** RFC-134: + 'echo' — 改派回执（只读知会卡：目标=提问节点、生来已下发；无改派/stage，
-   *  confirm 任意相位可关，D3）。 */
-  roleKind: 'self' | 'questioner' | 'designer' | 'echo'
+  /** RFC-162: 'echo' 已删。default self/questioner；designer = 人工增派的修订 handler。 */
+  roleKind: 'self' | 'questioner' | 'designer'
   /** The node that ASKED the question. NULL for a manual question (board shows "手动"). */
   sourceNodeId: string | null
   defaultTargetNodeId: string | null
@@ -131,31 +133,30 @@ export function TaskQuestionList({
     mutationFn: (id: string) => api.post(`/api/tasks/${taskId}/questions/${id}/confirm`),
     onSuccess: invalidate,
   })
+  // RFC-163 — GROUP-level stage: a pre-dispatch card carries the question's WHOLE handler set
+  // (asker + reassign-added designer), and「加入待下发」moves them together so batch dispatch
+  // hands the full group to ONE computeUpstreamFrontier (asker never dispatches without its
+  // coexisting designer — the board-path dual of RFC-162 Finding-2). Reuses the per-id /stage
+  // endpoint (no backend change); Promise.all + single invalidate.
   const stageM = useMutation({
-    mutationFn: (v: { id: string; staged: boolean }) =>
-      api.post(`/api/tasks/${taskId}/questions/${v.id}/stage`, { staged: v.staged }),
+    mutationFn: (v: { ids: string[]; staged: boolean }) =>
+      Promise.all(
+        v.ids.map((id) =>
+          api.post(`/api/tasks/${taskId}/questions/${id}/stage`, { staged: v.staged }),
+        ),
+      ),
     onSuccess: invalidate,
   })
-  // RFC-138 + RFC-140: collapse（改派给提问节点 ⇒ 退化为反问者 scope、designer 卡消失；
-  // 改派给设计节点 ⇒ 退化为设计者 scope、questioner 卡消失 + echo 回执补给提问节点）
-  // 留一行方向化知会文案——卡片凭空消失会被误读成丢数据。常规 override 改派则清掉。
-  const [collapseNotice, setCollapseNotice] = useState<'questioner' | 'designer' | null>(null)
+  // RFC-162: reassign 改派语义归一——不再移动提问者条目，而是「增派/移除一条 designer 处理
+  // 节点」（改派给上游/下游 ⇒ 该问题多一张 designer 卡；改派回提问节点 ⇒ 移除 designer 卡回到
+  // 单卡）。collapse/scope/echo 全删，看板只需 invalidate 后重渲染。
   const reassignM = useMutation({
     mutationFn: (v: { id: string; targetNodeId: string }) =>
       api.post<{
         ok: boolean
-        action?: 'override' | 'collapsed-to-questioner' | 'collapsed-to-designer'
+        action?: 'added-designer' | 'removed-designer' | 'moved-manual'
       }>(`/api/tasks/${taskId}/questions/${v.id}/reassign`, { targetNodeId: v.targetNodeId }),
-    onSuccess: (data) => {
-      setCollapseNotice(
-        data?.action === 'collapsed-to-questioner'
-          ? 'questioner'
-          : data?.action === 'collapsed-to-designer'
-            ? 'designer'
-            : null,
-      )
-      invalidate()
-    },
+    onSuccess: () => invalidate(),
   })
   // 用户 2026-07-02 拍板（推翻 RFC-133 §4 逐卡勾选、恢复 RFC-128 §11.1 语义）：
   // 「进待下发=已确定，批量下发=全下」——一键下发当前视图（尊重节点 filter）的**全部**
@@ -259,15 +260,6 @@ export function TaskQuestionList({
           <div className="task-questions__filter" />
           <div className="task-questions__actions">{addBtn}</div>
         </div>
-        {collapseNotice !== null && (
-          <p className="muted" data-testid="tq-collapse-notice">
-            {t(
-              collapseNotice === 'questioner'
-                ? 'taskQuestions.collapsedToQuestioner'
-                : 'taskQuestions.collapsedToDesigner',
-            )}
-          </p>
-        )}
         <EmptyState title={t('taskQuestions.empty')} />
         {authorForm}
       </div>
@@ -292,15 +284,25 @@ export function TaskQuestionList({
       counts.set(e.effectiveTargetNodeId, (counts.get(e.effectiveTargetNodeId) ?? 0) + 1)
     }
   }
+  // RFC-163 — group first, THEN filter by group (Codex design-gate P1): a node filter matches a
+  // card when ANY of its handlers lands on that node, and the matched card keeps its WHOLE
+  // handler set. Filtering entries before grouping would drop the non-matching sibling handlers
+  // from the card, and the batch-dispatch expansion below would then send a PARTIAL group —
+  // exactly the out-of-order dispatch AC-3 forbids. The chip count stays per-entry (matches the
+  // canvas badges); showing an off-filter sibling row inside a matched card is intentional.
+  const cards = groupBoardEntries(entries)
   const shown = targetFilter
-    ? entries.filter((e) => e.effectiveTargetNodeId === targetFilter)
-    : entries
+    ? cards.filter((c) => c.handlers.some((h) => h.entry.effectiveTargetNodeId === targetFilter))
+    : cards
 
   // Only staged (待下发) cards are dispatch candidates. The board action bar renders ONLY
   // when ≥1 staged card is visible in the CURRENT view (golden-lock: no staged cards ⇒ no
-  // batch-dispatch bar). 用户 2026-07-02 拍板（推翻 RFC-133 勾选）：批量下发 = 这批
-  // stagedShown 的**全部** id（尊重节点 filter；无 filter 时=全部 staged）。
-  const stagedShown = shown.filter((e) => e.phase === 'staged')
+  // batch-dispatch bar). 用户 2026-07-02 拍板（推翻 RFC-133 勾选）：批量下发 = 当前视图全部
+  // staged 卡（尊重节点 filter；无 filter 时=全部 staged）。RFC-163: 每张 staged 卡展开其
+  // **整组** handler id（未经 filter 裁剪）——组内提问节点与增派 designer 一起进同一个
+  // dispatch 批、走同一个 frontier。
+  const stagedCards = shown.filter((c) => c.phase === 'staged')
+  const stagedDispatchIds = stagedCards.flatMap((c) => c.handlers.map((h) => h.entry.id))
 
   return (
     <div className="task-questions-wrap">
@@ -340,7 +342,7 @@ export function TaskQuestionList({
           {/* 批量下发（用户 2026-07-02 拍板恢复 RFC-128 §11.1 全下、删 RFC-133 逐卡勾选）。
               Only present when ≥1 staged card is visible (golden-lock: no staged ⇒ no bar);
               一键下发当前视图的全部 staged 条目。 */}
-          {stagedShown.length > 0 && (
+          {stagedCards.length > 0 && (
             <div className="task-questions__batch" data-testid="tq-batch-dispatch-bar">
               <button
                 type="button"
@@ -349,10 +351,10 @@ export function TaskQuestionList({
                 disabled={dispatchM.isPending}
                 onClick={() => {
                   setDispatchError(null)
-                  dispatchM.mutate(stagedShown.map((e) => e.id))
+                  dispatchM.mutate(stagedDispatchIds)
                 }}
               >
-                {t('taskQuestions.batchDispatchCount', { count: stagedShown.length })}
+                {t('taskQuestions.batchDispatchCount', { count: stagedDispatchIds.length })}
               </button>
             </div>
           )}
@@ -374,18 +376,9 @@ export function TaskQuestionList({
         </div>
       </div>
       {dispatchError !== null && <ErrorBanner error={dispatchError} />}
-      {collapseNotice !== null && (
-        <p className="muted" data-testid="tq-collapse-notice">
-          {t(
-            collapseNotice === 'questioner'
-              ? 'taskQuestions.collapsedToQuestioner'
-              : 'taskQuestions.collapsedToDesigner',
-          )}
-        </p>
-      )}
       <div className="task-questions" data-testid="task-questions-board">
         {PHASE_ORDER.map((phase) => {
-          const col = shown.filter((e) => e.phase === phase)
+          const col = shown.filter((c) => c.phase === phase)
           return (
             <div className="task-questions__col" key={phase} data-phase={phase}>
               <div className="task-questions__col-head">
@@ -394,98 +387,123 @@ export function TaskQuestionList({
                 </StatusChip>
                 <span className="task-questions__count">{col.length}</span>
               </div>
-              {col.map((e) => {
-                // RFC-127 T4: 改派下拉对**任意角色**（self/questioner/designer）开放——
-                // self/questioner 走借壳顶替，不再 deadlock。仍仅在「未下发态」(待指派
-                // pending / 待下发 staged)：已下发的 processing/awaiting_confirm/done 后端
-                // reassignTaskQuestion 以 `dispatched_at IS NULL` + 非终态拒改派（下发后换
-                // handler 是 reopen 的职责），前端把入口收敛到未下发态与之对齐。
-                // RFC-134：echo 生来已下发 → 相位永不落 pending/staged，reassignable/hasStage
-                // 对它天然为 false（与后端 CAS/D10 守卫对齐，无需角色特判）。
-                const reassignable = e.phase === 'pending' || e.phase === 'staged'
-                // RFC-134 D3：回执任意相位可 confirm（「已知悉」收卡；confirm 不撤销投递）。
-                const hasConfirm =
-                  e.phase === 'awaiting_confirm' || (e.roleKind === 'echo' && e.phase !== 'done')
-                // RFC-128 §11 (D5, 用户 2026-07-01) — 「加入待下发」only makes sense once the
-                // answer is sealed: the server stage gate rejects staging an unsealed entry
-                // (ConflictError 'task-question-not-sealed', services/taskQuestions.ts
-                // isEntrySealed/stageTaskQuestion), so a shown-but-always-erroring 加入 button is
-                // worse than an absent one — hide it for an unanswered card. 移出待下发 (unstage,
-                // the e.staged direction) stays available regardless of seal so a mistaken stage
-                // can be undone before the answer lands (mirrors the server allowing unstage on an
-                // unsealed entry). Keeps `hasStage` in agreement with that server gate.
-                const hasStage =
-                  (e.phase === 'pending' || e.phase === 'staged') && (e.staged || e.sealed)
+              {col.map((card) => {
+                // RFC-163: 代表条目 = handler 首行（分组卡的 asker〔self/questioner 排前〕、单卡
+                // 的唯一条目、manual 卡的 manual 条目）——标题/答案/来源/testid 都取它。
+                const rep = card.handlers[0]!.entry
+                const undispatched = card.phase === 'pending' || card.phase === 'staged'
+                // RFC-162/163: 改派在「未下发态」开放——卡级 Select 锚定 rep（asker/manual/落单
+                // designer），编辑该问题的 designer 处理组（增派上游/下游 or 移回单卡）。已下发
+                // 卡由后端 `dispatched_at IS NULL` + asker-dispatched 守卫拒改派。
+                const reassignable = undispatched
+                const hasConfirm = card.phase === 'awaiting_confirm'
+                // RFC-128 §11 (D5) —「加入待下发」only makes sense once the answer is sealed (the
+                // server stage gate rejects an unsealed entry). RFC-163 group form: STAGE needs
+                // EVERY handler sealed (designer inherits the asker's seal, RFC-162, so lockstep);
+                // UNSTAGE stays available whenever any handler is staged (mistaken stage undo).
+                const anyStaged = card.handlers.some((h) => h.entry.staged)
+                const allSealed = card.handlers.every((h) => h.entry.sealed)
+                const hasStage = undispatched && (anyStaged || allSealed)
                 const hasActions = hasConfirm || hasStage
+                const anyAutoDeferred = card.handlers.some((h) => h.entry.autoDispatchDeferred)
                 // 2026-07-07 长节点名截断：meta 值 CSS ellipsis 后全名靠 title hover 可达。
                 const sourceLabel =
-                  e.sourceNodeId !== null
-                    ? labelFor(e.sourceNodeId)
+                  rep.sourceNodeId !== null
+                    ? labelFor(rep.sourceNodeId)
                     : t('taskQuestions.manualSource')
-                const targetLabel = labelFor(e.effectiveTargetNodeId)
+                // 卡级改派 Select 的展示值 = designer 目标（有增派时）?? 代表条目目标——选回提问
+                // 节点自己 ⇒ 后端删 designer 行、卡内行 -1（'removed-designer'）。
+                const designerRow = card.handlers.find((h) => h.entry.roleKind === 'designer')
+                const selectValue =
+                  designerRow?.entry.effectiveTargetNodeId ?? rep.effectiveTargetNodeId ?? ''
+                const targetLabel = labelFor(rep.effectiveTargetNodeId)
                 return (
                   <Card
-                    key={e.id}
-                    data-testid={`tq-card-${e.id}`}
+                    key={card.key}
+                    data-testid={`tq-card-${rep.id}`}
+                    className={card.grouped ? 'task-questions__card--grouped' : undefined}
                     interactive
                     footer={
                       hasActions ? (
                         <>
-                          {/* RFC-128 P4/P5 (用户 2026-07-01): the per-card "去回答/查看" Link to
-                              /clarify/$nodeRunId is REMOVED — the centralized answer pane is the
-                              single answer entry now, and answered content is shown via the card's
-                              answerSummary below. originNodeRunId stays on the DTO (the pane groups
-                              unsealed questions by it). */}
-                          {/* 2026-07-02 (用户拍板): the §15 per-card 复制 button is REMOVED —
-                              "+ 新增问题" is the only manual-question entry. */}
+                          {/* RFC-128 P4/P5 (用户 2026-07-01): the per-card "去回答/查看" Link is
+                              REMOVED — the centralized answer pane is the single answer entry;
+                              answered content shows via answerSummary below. */}
                           {hasConfirm && (
                             <ConfirmButton
                               label={t('taskQuestions.confirm')}
                               size="sm"
-                              onConfirm={() => confirmM.mutate(e.id)}
+                              onConfirm={() => confirmM.mutate(rep.id)}
                             />
                           )}
                           {hasStage && (
                             <button
                               type="button"
                               className="btn btn--sm"
-                              onClick={() => stageM.mutate({ id: e.id, staged: !e.staged })}
-                              data-testid={`tq-stage-${e.id}`}
+                              onClick={() => {
+                                // 组级 stage：进待下发=整组全进；移出=只撤已 staged 的（混态防御，
+                                // 见 lib/task-question-board groupPhase）。
+                                const next = !anyStaged
+                                const ids = card.handlers
+                                  .filter((h) => (next ? !h.entry.staged : h.entry.staged))
+                                  .map((h) => h.entry.id)
+                                stageM.mutate({ ids, staged: next })
+                              }}
+                              data-testid={`tq-stage-${rep.id}`}
                             >
-                              {e.staged ? t('taskQuestions.unstage') : t('taskQuestions.stage')}
+                              {anyStaged ? t('taskQuestions.unstage') : t('taskQuestions.stage')}
                             </button>
                           )}
                         </>
                       ) : undefined
                     }
                   >
-                    {/* 用户 2026-07-02 拍板：RFC-133 的 staged 逐卡勾选（tq-select-*）已删——
-                        批量下发恒为全下，卡片不再有选择控件。 */}
                     <div className="card__title">
-                      {e.questionTitle}
-                      {/* RFC-134 — 回执标签：与承接卡区分（知会提问节点，非承接义务）。 */}
-                      {e.roleKind === 'echo' && (
-                        <StatusChip kind="neutral" data-testid={`tq-echo-chip-${e.id}`}>
-                          {t('taskQuestions.roleEcho')}
-                        </StatusChip>
-                      )}
+                      {rep.questionTitle}
                       {/* RFC-140 W2 — auto-split defer 徽标：已点过批量下发、等 home 当前续跑
-                          结束后由系统自动补发（无需人工回来重点）。 */}
-                      {e.autoDispatchDeferred && (
-                        <StatusChip kind="info" data-testid={`tq-auto-dispatch-chip-${e.id}`}>
+                          结束后由系统自动补发。组卡=任一 handler 带标即显。 */}
+                      {anyAutoDeferred && (
+                        <StatusChip kind="info" data-testid={`tq-auto-dispatch-chip-${rep.id}`}>
                           {t('taskQuestions.autoDispatchQueued')}
                         </StatusChip>
                       )}
                     </div>
                     {/* RFC-120 lock: 答案紧贴问题、排在 meta 之前（节点信息不得插在问与答之间）。 */}
-                    {e.answerSummary && (
-                      <div className="task-questions__answer">{e.answerSummary}</div>
+                    {rep.answerSummary && (
+                      <div className="task-questions__answer">{rep.answerSummary}</div>
+                    )}
+                    {/* RFC-163 — 分组卡的处理节点行：提问节点（自己续跑）+ 增派的修订 handler。
+                        改派＝下方 Select 增/删/改这里的行，卡数不变。 */}
+                    {card.grouped && (
+                      <div
+                        className="task-questions__handlers"
+                        data-testid={`tq-handlers-${rep.id}`}
+                      >
+                        {card.handlers.map((h) => (
+                          <div
+                            className="task-questions__handler-row"
+                            key={h.entry.id}
+                            data-testid={`tq-handler-${h.entry.id}`}
+                          >
+                            <span className="task-questions__handler-role">
+                              {h.entry.roleKind === 'designer'
+                                ? t('taskQuestions.handlerDesigner')
+                                : t('taskQuestions.handlerAsker')}
+                            </span>
+                            <span
+                              className="task-questions__handler-node"
+                              title={labelFor(h.entry.effectiveTargetNodeId)}
+                            >
+                              {labelFor(h.entry.effectiveTargetNodeId)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     )}
                     <div className="task-questions__meta">
                       <span className="task-questions__meta-pair">
                         <span className="task-questions__meta-k">{t('taskQuestions.source')}</span>
-                        {/* §15 — a manual question has no source node: show "手动".
-                            用户 2026-07-02: 显示节点名（labelFor 经 nodeOptions 解析，查无回退原 id）。 */}
+                        {/* §15 — a manual question has no source node: show "手动". */}
                         <span className="task-questions__meta-v" title={sourceLabel}>
                           {sourceLabel}
                         </span>
@@ -497,9 +515,9 @@ export function TaskQuestionList({
                         <span className="task-questions__meta-k">{t('taskQuestions.target')}</span>
                         {reassignable ? (
                           <Select
-                            value={e.effectiveTargetNodeId ?? ''}
+                            value={selectValue}
                             ariaLabel={t('taskQuestions.reassign')}
-                            onChange={(v) => reassignM.mutate({ id: e.id, targetNodeId: v })}
+                            onChange={(v) => reassignM.mutate({ id: rep.id, targetNodeId: v })}
                             options={nodeOptions.map((n) => ({ value: n.id, label: n.label }))}
                           />
                         ) : (

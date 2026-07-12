@@ -7,9 +7,10 @@ import { rimrafDir } from './helpers/cleanup'
 //   - 'both'     → status=failed with 'clarify-and-output-both-present'
 //   - 'none'     → status=failed with 'envelope' error message
 //
-// Also exercises the protocol-block wire-up: when opts.hasClarifyChannel is
-// true, the user prompt contains the buildClarifyProtocolBlock() text so the
-// agent reads the rules; when false, the standard output-only block is the
+// Also exercises the protocol-block wire-up: when opts.clarifyChannel is wired
+// with directive:'mandatory' (RFC-148 ADT — the historical hasClarifyChannel
+// true), the user prompt contains the buildClarifyProtocolBlock() text so the
+// agent reads the rules; when absent, the standard output-only block is the
 // only protocol block present.
 
 import type { Agent } from '@agent-workflow/shared'
@@ -149,7 +150,7 @@ describe('runNode envelope branching (RFC-023)', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          hasClarifyChannel: true,
+          clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
         }),
     )
 
@@ -158,7 +159,7 @@ describe('runNode envelope branching (RFC-023)', () => {
     expect(result.clarify).toBeDefined()
     expect(result.clarify?.questions).toHaveLength(1)
     expect(result.clarify?.questions[0]?.id).toBe('q1')
-    // RFC-100: the mandatory ask-back block must be in the prompt when hasClarifyChannel=true
+    // RFC-100: the mandatory ask-back block must be in the prompt when the clarify channel directive is 'mandatory'
     expect(result.prompt).toContain('MANDATORY ASK-BACK')
   })
 
@@ -199,7 +200,7 @@ describe('runNode envelope branching (RFC-023)', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          hasClarifyChannel: true,
+          clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
         }),
     )
     expect(result.status).toBe('failed')
@@ -235,14 +236,14 @@ describe('runNode envelope branching (RFC-023)', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        hasClarifyChannel: true,
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       }),
     )
     expect(result.status).toBe('failed')
     expect(result.errorMessage).toContain('clarify-options-too-few')
   })
 
-  test('protocol block omitted when hasClarifyChannel=false', async () => {
+  test('protocol block omitted when no clarify channel is wired', async () => {
     const agent = makeAgent()
     const nodeRunId = await insertPendingNodeRun(h.db, h.taskId)
     const result = await withEnv({ MOCK_OPENCODE_OUTPUTS: JSON.stringify({ summary: 'ok' }) }, () =>
@@ -258,7 +259,7 @@ describe('runNode envelope branching (RFC-023)', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        // hasClarifyChannel omitted (defaults to undefined)
+        // clarifyChannel omitted (defaults to { kind: 'none' } semantics)
       }),
     )
     expect(result.status).toBe('done')
@@ -291,7 +292,7 @@ describe('runNode envelope branching (RFC-023)', () => {
         appHome: h.appHome,
         opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
         db: h.db,
-        hasClarifyChannel: true,
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       }),
     )
     expect(result.status).toBe('done')
@@ -301,8 +302,9 @@ describe('runNode envelope branching (RFC-023)', () => {
   })
 
   // RFC-100 runtime ask-back guard: while a clarify channel is ACTIVE
-  // (opts.hasClarifyChannel=true = effectiveHasClarifyChannel, the user has not
-  // clicked "Stop clarifying"), the ONLY valid reply is <workflow-clarify>. An
+  // (opts.clarifyChannel.directive === 'mandatory' — the historical
+  // effectiveHasClarifyChannel; the user has not clicked "Stop clarifying"),
+  // the ONLY valid reply is <workflow-clarify>. An
   // agent that emits <workflow-output> instead is rejected with a
   // `clarify-required-*` error (→ same-session followup re-demands clarify; node
   // hard-fails after retries). There is no output escape hatch. Covers BOTH
@@ -325,7 +327,7 @@ describe('runNode envelope branching (RFC-023)', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          hasClarifyChannel: true,
+          clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
         }),
     )
     expect(result.status).toBe('failed')
@@ -334,7 +336,7 @@ describe('runNode envelope branching (RFC-023)', () => {
     expect(result.outputs).toEqual({})
   })
 
-  test('RFC-100: cross-clarify questioner is guarded identically (clarifyMode=cross)', async () => {
+  test("RFC-100: cross-clarify questioner is guarded identically (kind:'cross')", async () => {
     const agent = makeAgent({ outputs: ['summary'] })
     const nodeRunId = await insertPendingNodeRun(h.db, h.taskId)
     const result = await withEnv(
@@ -352,8 +354,7 @@ describe('runNode envelope branching (RFC-023)', () => {
           appHome: h.appHome,
           opencodeCmd: ['bun', 'run', MOCK_OPENCODE],
           db: h.db,
-          hasClarifyChannel: true,
-          clarifyMode: 'cross',
+          clarifyChannel: { kind: 'cross', directive: 'mandatory', injectStopNotice: false },
         }),
     )
     expect(result.status).toBe('failed')

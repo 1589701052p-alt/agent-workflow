@@ -3,12 +3,17 @@
 // route (it pulls in TanStack Router, react-query, useTaskSync, the
 // Prose pipeline, IntersectionObserver, etc.) and the readonly contract
 // is a list of NEGATIVE assertions — "this affordance is not in the DOM
-// when readonly is true". The cheapest way to keep that contract from
-// rotting under a future refactor is to scan the source for the
+// when the view is historical". The cheapest way to keep that contract
+// from rotting under a future refactor is to scan the source for the
 // patterns that implement it.
 //
-// If a future change drops one of the `!readonly &&` guards (or renames
-// `readonly`), the corresponding assertion below fails.
+// RFC-149 rewrite: the old `readonly` + `isAwaiting` boolean pair became the
+// three-state `mode: ReviewPaneMode` ('awaiting' | 'decided' | 'historical').
+// Guards now read `mode !== 'historical'` (render gate) and
+// `mode !== 'awaiting'` (disable gate — the 'decided' state renders write
+// affordances greyed out instead of hiding them). If a future change drops
+// one of the `mode !== 'historical' &&` guards (or reverts to scattered
+// booleans), the corresponding assertion below fails.
 
 import { describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -27,70 +32,108 @@ function pane(): string {
   return readFileSync(PANE_TSX, 'utf8')
 }
 
-describe('RFC-013 reviews.detail.tsx — readonly historical view', () => {
+describe('RFC-013/RFC-149 reviews.detail.tsx — readonly historical view', () => {
   test('route declares validateSearch for ?version=<vid>', () => {
     const s = src()
     expect(s).toMatch(/validateSearch\s*:/)
     expect(s).toMatch(/raw\.version/)
   })
 
-  test('component reads search via useSearch and resolves view via resolveReviewView', () => {
+  test('component reads search via useSearch and resolves the three-state mode', () => {
     const s = src()
     expect(s).toMatch(/useSearch\(\s*\{\s*from:\s*Route\.id\s*\}\s*\)/)
     expect(s).toMatch(/resolveReviewView\(/)
-    // The readonly flag derives from view.mode === 'historical'.
-    expect(s).toMatch(/const readonly\s*=\s*view\.mode\s*===\s*'historical'/)
+    // RFC-149: the mode derives from view.mode === 'historical', then splits
+    // the current view into 'awaiting' / 'decided' off awaitingReview.
+    expect(s).toMatch(
+      /const mode:\s*ReviewPaneMode\s*=\s*view\.mode\s*===\s*'historical'\s*\?\s*'historical'\s*:\s*detail\.data\?\.summary\.awaitingReview\s*===\s*true\s*\?\s*'awaiting'\s*:\s*'decided'/,
+    )
+    // The retired boolean pair must not come back.
+    expect(s).not.toMatch(/const readonly\s*=/)
+    expect(s).not.toMatch(/const isAwaiting\s*=/)
   })
 
-  test('keyboard handler short-circuits when readonly', () => {
+  test('viewed-version fields converge through pickViewedVersion (no per-field ternary fork)', () => {
     const s = src()
-    // Effect body opens with the readonly short-circuit before touching
+    // RFC-149: one picker call selects decision / decisionReason / decidedAt /
+    // decidedBy / decidedByRole / versionIndex together.
+    expect(s).toMatch(
+      /pickViewedVersion\(view,\s*historicalDetail\.data,\s*detail\.data\?\.currentVersion\)/,
+    )
+    // The seven per-field `view.mode === 'historical' ? historicalDetail…` ternaries
+    // must not re-grow next to the picker.
+    expect(s).not.toMatch(/view\.mode\s*===\s*'historical'\s*\?\s*historicalDetail\.data/)
+    // The decision info block reads the picked object.
+    expect(s).toMatch(/decision=\{viewed\.decision\}/)
+    expect(s).toMatch(/decidedBy=\{viewed\.decidedBy\}/)
+  })
+
+  test('keyboard handler short-circuits when historical', () => {
+    const s = src()
+    // Effect body opens with the mode short-circuit before touching
     // popover / editingId / activeElement / diffMode.
-    expect(s).toMatch(/onKey\s*=\s*\(e:[^)]*\)\s*=>\s*\{[\s\S]*?if\s*\(\s*readonly\s*\)\s*return/)
-    // RFC-082: right after the readonly bail, the route keyboard also bails
+    expect(s).toMatch(
+      /onKey\s*=\s*\(e:[^)]*\)\s*=>\s*\{[\s\S]*?if\s*\(\s*mode\s*===\s*'historical'\s*\)\s*return/,
+    )
+    // RFC-082: right after the historical bail, the route keyboard also bails
     // when the pane is capturing keystrokes (popover open / inline-editing),
     // so A/R/I never fire mid-comment.
     expect(s).toMatch(
-      /if\s*\(\s*readonly\s*\)\s*return[\s\S]{0,80}if\s*\(\s*paneCapturing\s*\)\s*return/,
+      /if\s*\(\s*mode\s*===\s*'historical'\s*\)\s*return[\s\S]{0,80}if\s*\(\s*paneCapturing\s*\)\s*return/,
     )
-    // RFC-082: `editingId` moved into <ReviewDocPane> with the comment
-    // machinery; the route's A/R/I keyboard now gates on `paneCapturing`
-    // (reported by the pane) instead — still alongside `readonly` in the deps.
-    expect(s).toMatch(/paneCapturing[\s\S]{0,200}readonly\s*\]/m)
+    // `mode` sits in the effect deps alongside paneCapturing.
+    expect(s).toMatch(/paneCapturing[\s\S]{0,200}mode\s*\]/m)
   })
 
-  test('decision buttons + dialog are gated behind !readonly (route); popover gated in pane', () => {
+  test('decision buttons + dialog are gated behind mode (route); popover gated in pane', () => {
     const s = src()
-    // The three decision buttons live in a header-actions cluster wrapped
-    // by `{!readonly && (<div className="review-detail__decision-actions" ...>)}`.
-    // (May 2026: the bottom <footer> was retired when the buttons moved to
-    // the top-right of the page.)
+    // The three decision buttons live in a header-actions cluster wrapped by
+    // `{mode !== 'historical' && (<div className="review-detail__decision-actions" ...>)}`
+    // — rendered on BOTH current states ('awaiting' AND 'decided')…
     expect(s).toMatch(
-      /\{\s*!readonly\s*&&\s*\(\s*<div\s+className="review-detail__decision-actions"/,
+      /\{\s*mode !== 'historical'\s*&&\s*\(\s*<div\s+className="review-detail__decision-actions"/,
     )
+    // …and disabled unless the round is actually awaiting a decision.
+    const disabledDecisions = s.match(
+      /disabled=\{mode !== 'awaiting' \|\| submitDecision\.isPending\}/g,
+    )
+    expect(disabledDecisions?.length).toBe(3)
     // The styled in-app decision dialog is also gated.
-    expect(s).toMatch(/\{\s*!readonly\s*&&\s*decisionDialog\s*!==\s*null\s*&&/)
+    expect(s).toMatch(/\{\s*mode !== 'historical'\s*&&\s*decisionDialog\s*!==\s*null\s*&&/)
     // RFC-082: the selection→comment popover moved to <ReviewDocPane>; its
-    // !readonly gate lives there now.
-    expect(pane()).toMatch(/\{\s*!readonly\s*&&\s*popover\s*!==\s*null\s*&&/)
+    // historical gate lives there now.
+    // RFC-149 impl-gate: NEW comment creation is awaiting-only (a decided
+    // round would only get a server-side rejection).
+    expect(pane()).toMatch(/\{\s*mode === 'awaiting'\s*&&\s*popover\s*!==\s*null\s*&&/)
   })
 
-  test('comment-bubble write actions (edit/copy/delete) are gated behind !readonly (pane)', () => {
+  test('comment-bubble write actions render unless historical; edit/delete disabled unless awaiting (pane)', () => {
+    const p = pane()
     // RFC-082: the bubble write actions moved to <ReviewDocPane>.
-    expect(pane()).toMatch(/\{\s*!readonly\s*&&\s*!isEditing\s*&&\s*\(/)
+    expect(p).toMatch(/\{\s*mode !== 'historical'\s*&&\s*!isEditing\s*&&\s*\(/)
+    // RFC-149 'decided' contract: edit (✎) + delete (×) stay visible but
+    // disabled on a current-but-decided round.
+    const disabledWrites = p.match(/disabled=\{mode !== 'awaiting'\}/g)
+    expect(disabledWrites?.length).toBe(2)
+    // The pane takes the single three-state prop, not the retired boolean pair.
+    expect(p).toMatch(/mode:\s*ReviewPaneMode/)
+    expect(p).not.toMatch(/readonly:\s*boolean/)
+    expect(p).not.toMatch(/awaiting:\s*boolean/)
   })
 
-  test('diff toolbar is gated behind !readonly', () => {
+  test('diff toolbar is gated behind mode !== historical', () => {
     const s = src()
-    // The whole diff-mode toolbar lives under {!readonly && data.currentVersion.versionIndex > 1 && (...)}.
-    expect(s).toMatch(/\{\s*!readonly\s*&&\s*data\.currentVersion\.versionIndex\s*>\s*1\s*&&\s*\(/)
+    // The whole diff-mode toolbar lives under {mode !== 'historical' && data.currentVersion.versionIndex > 1 && (...)}.
+    expect(s).toMatch(
+      /\{\s*mode !== 'historical'\s*&&\s*data\.currentVersion\.versionIndex\s*>\s*1\s*&&\s*\(/,
+    )
   })
 
-  test('onMouseUpInDoc bails out early when readonly (pane)', () => {
-    // RFC-082: onMouseUpInDoc moved into <ReviewDocPane>.
-    expect(pane()).toMatch(
-      /onMouseUpInDoc\s*=\s*useCallback\(\s*async\s*\(\)\s*=>\s*\{\s*if\s*\(\s*readonly\s*\)\s*return/,
-    )
+  test('onMouseUpInDoc bails out unless awaiting (pane)', () => {
+    // RFC-082: onMouseUpInDoc moved into <ReviewDocPane>. RFC-149 impl-gate:
+    // the bail widened from historical-only to non-awaiting (decided rounds
+    // must not open the add-comment popover either).
+    expect(pane()).toMatch(/if\s*\(\s*mode\s*!==\s*'awaiting'\s*\)\s*return/)
   })
 
   test('historical body / comments come from a separate query keyed by vid', () => {
@@ -112,7 +155,7 @@ describe('RFC-013 reviews.detail.tsx — readonly historical view', () => {
 
   test('readonly banner renders + has a back-to-current Link', () => {
     const s = src()
-    expect(s).toMatch(/readonly-banner/)
+    expect(s).toMatch(/\{\s*mode === 'historical'\s*&&\s*\(\s*<div className="readonly-banner"/)
     expect(s).toMatch(/reviews\.historicalBanner/)
     expect(s).toMatch(/reviews\.backToCurrent/)
     // Search is empty object on the back link so the no-query path is hit.
@@ -129,18 +172,18 @@ describe('RFC-013 reviews.detail.tsx — readonly historical view', () => {
     // so the button works in BOTH modes without an extra readonly branch.
     expect(s).toMatch(/handleDownloadMarkdown[\s\S]*?activeBody/)
     // The button lives inside an actions div that itself is NOT gated on
-    // readonly (we want the download available on the historical view
+    // the mode (we want the download available on the historical view
     // too — that's the whole point of downloading a historical version).
     // We check the few characters immediately before the actions div
     // opener: it should be a closing tag `</div>` of the page-header-text
-    // block, not `{!readonly && (`.
+    // block, not `{mode !== 'historical' && (`.
     const actionsIdx = s.indexOf('review-detail__page-header-actions')
     expect(actionsIdx).toBeGreaterThan(-1)
-    const justBefore = s.slice(Math.max(0, actionsIdx - 50), actionsIdx)
-    expect(justBefore).not.toMatch(/!readonly\s*&&\s*\(/)
-    // Filename uses the version index — not just the node id — so users
-    // can keep multiple versions of the same review on disk.
-    expect(s).toMatch(/headerVersionIndex/)
+    const justBefore = s.slice(Math.max(0, actionsIdx - 60), actionsIdx)
+    expect(justBefore).not.toMatch(/mode !== 'historical'\s*&&\s*\(/)
+    // Filename uses the viewed version index — not just the node id — so
+    // users can keep multiple versions of the same review on disk.
+    expect(s).toMatch(/viewed\.versionIndex/)
     // The blob has the right MIME type so OSes recognize the .md extension.
     expect(s).toMatch(/text\/markdown/)
   })

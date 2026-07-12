@@ -7,6 +7,7 @@
 // binary) so the registry stays mutable (tested in PR-C).
 
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ulid } from 'ulid'
 import { createInMemoryDb, type DbClient } from '../src/db/client'
@@ -105,7 +106,7 @@ describe('createRuntime (RFC-112 PR-A)', () => {
       createRuntime(db, { name: 'opencode', protocol: 'opencode' }),
     ).rejects.toMatchObject({ code: 'runtime-exists' })
     // Once the preseeded row is deleted the name is free to recreate (any protocol).
-    await deleteRuntime(db, 'opencode', 'claude-code') // non-default here → allowed
+    await deleteRuntime(db, 'opencode', { defaultRuntime: 'claude-code' }) // non-default here → allowed
     const recreated = await createRuntime(db, { name: 'opencode', protocol: 'claude-code' })
     expect(recreated.protocol).toBe('claude-code')
   })
@@ -156,7 +157,7 @@ describe('updateRuntime / deleteRuntime guards (RFC-112 PR-A)', () => {
   test('RFC-153: a preseeded runtime is deletable (not the default, not referenced)', async () => {
     // claude-code is not the effective default (opencode is, config unset) and no
     // agent pins it → deletion succeeds and sticks (seed won't re-add it).
-    await deleteRuntime(db, 'claude-code', null)
+    await deleteRuntime(db, 'claude-code', {})
     expect(await getRuntime(db, 'claude-code')).toBeNull()
   })
 
@@ -169,11 +170,11 @@ describe('updateRuntime / deleteRuntime guards (RFC-112 PR-A)', () => {
 
   test('delete blocked while an agent references it', async () => {
     await insertAgent(db, 'auditor', 'my-oc')
-    await expect(deleteRuntime(db, 'my-oc', null)).rejects.toMatchObject({ code: 'runtime-in-use' })
+    await expect(deleteRuntime(db, 'my-oc', {})).rejects.toMatchObject({ code: 'runtime-in-use' })
   })
 
   test('delete blocked while it is the config default', async () => {
-    await expect(deleteRuntime(db, 'my-oc', 'my-oc')).rejects.toMatchObject({
+    await expect(deleteRuntime(db, 'my-oc', { defaultRuntime: 'my-oc' })).rejects.toMatchObject({
       code: 'runtime-in-use',
     })
   })
@@ -181,21 +182,89 @@ describe('updateRuntime / deleteRuntime guards (RFC-112 PR-A)', () => {
   test('RFC-153 F1: deleting effective default opencode (config.defaultRuntime unset) is blocked', async () => {
     // findRuntimeReferences folds unset → 'opencode', so the fallback default can't
     // be deleted out from under dispatch even when config never set it explicitly.
-    await expect(deleteRuntime(db, 'opencode', null)).rejects.toMatchObject({
+    await expect(deleteRuntime(db, 'opencode', {})).rejects.toMatchObject({
       code: 'runtime-in-use',
     })
   })
 
   test('delete succeeds once unreferenced', async () => {
-    await deleteRuntime(db, 'my-oc', null)
+    await deleteRuntime(db, 'my-oc', {})
     expect(await getRuntime(db, 'my-oc')).toBeNull()
   })
 
   test('delete/update a non-existent runtime is 404', async () => {
-    await expect(deleteRuntime(db, 'nope', null)).rejects.toMatchObject({
+    await expect(deleteRuntime(db, 'nope', {})).rejects.toMatchObject({
       code: 'runtime-not-found',
     })
     await expect(updateRuntime(db, 'nope', {})).rejects.toMatchObject({ code: 'runtime-not-found' })
+  })
+
+  test('RFC-153 impl-gate: delete blocked while a per-feature config field references it', async () => {
+    // memoryDistillRuntime / commitPushRuntime / mergeAgentRuntime hold runtime
+    // NAMEs (resolveInternalAgentRuntime); each must block delete like agents do,
+    // else the internal job silently downgrades to the protocol-name fallback.
+    await expect(
+      deleteRuntime(db, 'my-oc', { memoryDistillRuntime: 'my-oc' }),
+    ).rejects.toMatchObject({ code: 'runtime-in-use' })
+    await expect(deleteRuntime(db, 'my-oc', { commitPushRuntime: 'my-oc' })).rejects.toMatchObject({
+      code: 'runtime-in-use',
+    })
+    await expect(deleteRuntime(db, 'my-oc', { mergeAgentRuntime: 'my-oc' })).rejects.toMatchObject({
+      code: 'runtime-in-use',
+    })
+  })
+
+  test('RFC-153 impl-gate: cannot delete the LAST runtime even when config.defaultRuntime dangles', async () => {
+    // Delete down to a single row under a dangling default; the last-row backstop
+    // (checked before the effective-default guard) refuses the final delete so the
+    // table can never be emptied — which would let the next boot re-seed the
+    // "deleted" preseeded rows (violating "deleted rows stay deleted").
+    const refs = { defaultRuntime: 'ghost' } // dangling → not any real row
+    await deleteRuntime(db, 'my-oc', refs) // 3 → 2 (effective default folds to opencode ≠ my-oc)
+    await deleteRuntime(db, 'claude-code', refs) // 2 → 1
+    await expect(deleteRuntime(db, 'opencode', refs)).rejects.toMatchObject({
+      code: 'runtime-last',
+    })
+  })
+
+  test('RFC-153 impl-gate 2nd pass: a stale/dangling default still protects the opencode fallback', async () => {
+    // >1 row so the last-row backstop is NOT the blocker. A dangling default
+    // resolves (exactly like dispatch / resolveRuntimeByName) to the opencode
+    // fallback, so opencode is the EFFECTIVE default and must be undeletable even
+    // though config.defaultRuntime literally names something else.
+    await expect(
+      deleteRuntime(db, 'opencode', { defaultRuntime: 'deleted-long-ago' }),
+    ).rejects.toMatchObject({ code: 'runtime-in-use' })
+    // sanity: a non-fallback row (claude-code) under the same dangling default IS
+    // deletable — it isn't the effective default.
+    await deleteRuntime(db, 'claude-code', { defaultRuntime: 'deleted-long-ago' })
+    expect(await getRuntime(db, 'claude-code')).toBeNull()
+  })
+
+  test('RFC-153 impl-gate 2nd pass: deleteRuntime is atomic (count/check/delete in one sync tx)', async () => {
+    // Concurrency can't be exercised deterministically in-process (bun:sqlite is
+    // synchronous), so the atomicity contract is locked at the SOURCE level: the
+    // last-row + reference guards are only race-free if the count, checks and delete
+    // share one dbTxSync. A refactor that splits them back into awaited DB statements
+    // reopens the concurrent all-delete race (2nd-pass impl-gate finding).
+    const src = readFileSync(
+      resolve(import.meta.dir, '..', 'src', 'services', 'runtimeRegistry.ts'),
+      'utf-8',
+    )
+    const start = src.indexOf('export async function deleteRuntime')
+    const fn = src.slice(start, start + 1 + src.slice(start + 1).indexOf('\nexport '))
+    expect(fn).toContain('dbTxSync(')
+    expect(fn).not.toMatch(/await db\.(select|delete)/)
+  })
+
+  test('RFC-153 impl-gate 3rd pass: missing built-in default resolves to itself, not opencode', async () => {
+    // config.defaultRuntime='claude-code' but the claude-code ROW is gone. Exactly
+    // like resolveRuntimeByName, a MISSING built-in name resolves to its OWN protocol
+    // (claude-code), NOT opencode — so opencode is NOT the effective default and IS
+    // deletable. (A missing NON-builtin name would fall back to opencode instead.)
+    await deleteRuntime(db, 'claude-code', { defaultRuntime: 'opencode' }) // 3 → 2 (remove claude-code)
+    await deleteRuntime(db, 'opencode', { defaultRuntime: 'claude-code' }) // opencode not effective default
+    expect(await getRuntime(db, 'opencode')).toBeNull()
   })
 })
 

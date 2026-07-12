@@ -2,13 +2,14 @@
 //
 // Locks the RFC-100 contract on the PROMPT side. self-clarify (RFC-023) and the
 // cross-clarify questioner (RFC-056) share this exact render path — both reach
-// renderUserPrompt with hasClarifyChannel = effectiveHasClarifyChannel — so a
-// single set of render-side assertions covers both.
+// renderUserPrompt with the RFC-148 clarifyChannel ADT whose directive
+// projection is the historical effectiveHasClarifyChannel — so a single set of
+// render-side assertions covers both.
 //
-//   1. clarify ACTIVE (hasClarifyChannel=true): mandatory ask-back preamble +
+//   1. clarify ACTIVE (directive='mandatory'): mandatory ask-back preamble +
 //      clarify format, and NO <workflow-output> format — the agent is never told
 //      how to finalize, so it must ask back.
-//   2. stop round (hasClarifyChannel=false): the output format returns.
+//   2. stop round (directive='stopped'): the output format returns.
 //   3. the mandatory preamble carries the full ask-back discipline (investigate
 //      first, prioritized/deep questions, never guess terms, no assumptions, ask
 //      in the user's language, asking back is success).
@@ -32,7 +33,7 @@ describe('RFC-100 mandatory ask-back — clarify-active prompt', () => {
     inputs: {},
     meta: META,
     agentOutputs: ['design', 'plan'],
-    hasClarifyChannel: true,
+    clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
   })
 
   test('emits the mandatory preamble + clarify format, never the output format', () => {
@@ -64,16 +65,16 @@ describe('RFC-100 mandatory ask-back — clarify-active prompt', () => {
 })
 
 describe('RFC-100 mandatory ask-back — stop round restores the output format', () => {
-  test('hasClarifyChannel=false emits the output protocol block, not the mandatory preamble', () => {
+  test("directive='stopped' emits the output protocol block, not the mandatory preamble", () => {
     const stop = renderUserPrompt({
       promptTemplate: 'do the thing',
       inputs: {},
       meta: META,
       agentOutputs: ['design'],
-      hasClarifyChannel: false,
-      // a real stop round still carries the answers block (directive=stop is
-      // applied upstream by the scheduler when flipping effectiveHasClarifyChannel).
-      clarifyContext: { answersBlock: 'A', iteration: '2', directive: 'stop' },
+      clarifyChannel: { kind: 'self', directive: 'stopped', injectStopNotice: false },
+      // a real stop round still carries clarify context (the stop trailer rides
+      // the flat block upstream when the scheduler drops the directive to 'stopped').
+      clarifyContext: { iteration: '2' },
     })
     expect(stop).toContain('You MUST end your reply with a `<workflow-output>` block')
     expect(stop).toContain('<port name="design">')

@@ -47,7 +47,6 @@ import { hasOpenDispatchedEntryOnHome } from '@/services/clarifyRerunLedger'
 import { sealRoundQuestions } from '@/services/clarifySeal'
 import { enqueueDistillJob } from '@/services/memoryDistillScheduler'
 import { buildFrozenAttributionSet } from '@/services/clarifyRounds'
-import { validateQuestionScopes } from '@/services/crossClarify'
 import { loadRollbackTarget, rollbackNodeRunWorktrees } from '@/services/nodeRollback'
 import {
   dispatchDeferredTaskQuestions,
@@ -63,7 +62,6 @@ import {
   type ClarifyAnswer,
   type ClarifyDirective,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
 } from '@agent-workflow/shared'
 
 const log = createLogger('clarify-auto-dispatch')
@@ -170,9 +168,7 @@ async function selfHomeHasOpenLedger(
     .where(
       and(
         eq(taskQuestions.taskId, taskId),
-        // RFC-134 D4：白名单**有意**不含 'echo'——回执是 cause 序列化的显式豁免项（不 mint、
-        // 无 rerun_cause，queued 回执绝不阻塞任何后续下发）。不得「顺手」把 echo 加进来
-        //（源码文本锁：rfc134 测试断言本数组恒为三角色）。
+        // RFC-162: 'echo' role deleted; self/questioner/designer are the whole deferred set.
         inArray(taskQuestions.roleKind, ['self', 'questioner', 'designer']),
         isNotNull(taskQuestions.dispatchedAt),
       ),
@@ -209,8 +205,6 @@ export interface AutoDispatchClarifyRoundArgs {
    *  the quick path's stop semantics (a 'stop' cross round mints a questioner-stop rerun via
    *  dispatch + persists the canvas directive). */
   directive?: ClarifyDirective
-  /** Per-question scope (cross rounds only); merged by the seal. */
-  scopes?: Record<string, ClarifyQuestionScope>
   /** RFC-023 optimistic lock — the round iteration the client believes it is answering. When set
    *  and != the round's current iteration, reject (clarify-iteration-mismatch), mirroring the
    *  immediate path (submitClarifyAnswers / submitCrossClarifyAnswers); the /clarify page always
@@ -320,21 +314,6 @@ export async function autoDispatchClarifyRound(
     throw new NotFoundError('task-not-found', `task ${round.taskId} not found`)
   }
 
-  // 2b. RFC-059 questionScopes validation (BEFORE any write) — the legacy submitCrossClarifyAnswers
-  //     validated the scope map against the round's questions (reject an unknown questionId / bad enum
-  //     → ValidationError 'cross-clarify-question-scopes-malformed'); RFC-132 PR-B preserves that on
-  //     the unified quick channel. Pure (args + questions); a malformed map never reaches the DB.
-  if (args.scopes !== undefined) {
-    const roundQuestions = ((): ClarifyQuestion[] => {
-      try {
-        return JSON.parse(round.questionsJson) as ClarifyQuestion[]
-      } catch {
-        return []
-      }
-    })()
-    validateQuestionScopes(args.scopes, roundQuestions)
-  }
-
   // 3. Seal the round (control channel) as a WHOLE-ROUND FINALIZE. The quick channel finalizes the
   //    ENTIRE round (the immediate path flips the whole round answered even when some answers are
   //    blank — "User did not answer this question."); the deferred path must match (golden-lock) AND
@@ -358,25 +337,11 @@ export async function autoDispatchClarifyRound(
           customText: '',
         },
     )
-  // Codex impl-gate (high): forward scope ONLY for the not-yet-locked questions sealed by THIS call.
-  // sealRoundQuestions merges EVERY provided scope key (it does not itself filter locked questions), so
-  // passing the whole quick-submit scope map would let a stale defer=false submit OVERWRITE an
-  // already-sealed (control-channel) question's scope — e.g. control-seal q1 as 'designer', then a
-  // stale quick finalize carrying q1:'questioner' would flip q1 → questioner, deleting q1's staged
-  // designer entry (reconcile drops the designer row). Mirror the immediate path
-  // (submitCrossClarifyAnswers, which skips lockedIds when merging scopes): drop locked-question scopes.
-  const unlockedScopes =
-    args.scopes !== undefined
-      ? Object.fromEntries(Object.entries(args.scopes).filter(([qid]) => !lockedIds.has(qid)))
-      : undefined
   const sealResult = await sealRoundQuestions({
     db,
     originNodeRunId,
     answers: sealAnswers,
     ...(args.directive !== undefined ? { directive: args.directive } : {}),
-    ...(unlockedScopes !== undefined && Object.keys(unlockedScopes).length > 0
-      ? { scopes: unlockedScopes }
-      : {}),
     sealedBy: args.actor.userId,
     ...(args.now !== undefined ? { now: args.now } : {}),
   })
@@ -437,8 +402,8 @@ export async function autoDispatchClarifyRound(
   //    still open). Designer entries are intentionally excluded (see the module header). The dispatch
   //    re-applies the same `dispatched_at IS NULL` + `confirmation='open'` filter under lock B, so
   //    this read is just the candidate set.
-  const entries = await db
-    .select({ id: taskQuestions.id })
+  const askerRows = await db
+    .select({ id: taskQuestions.id, questionId: taskQuestions.questionId })
     .from(taskQuestions)
     .where(
       and(
@@ -449,8 +414,29 @@ export async function autoDispatchClarifyRound(
         isNotNull(taskQuestions.sealedAt),
       ),
     )
-
-  const entryIds = entries.map((e) => e.id)
+  // RFC-162 (Codex impl-gate P1) — a question with a COEXISTING undispatched designer (added via a
+  // pre-submit 改派 on the asker-anchored picker) must NOT quick-dispatch its asker in isolation.
+  // The quick path splits self/questioner (step 5) from designer (step 7) into two frontier
+  // computations, so an asker DOWNSTREAM of its newly-added upstream designer would be minted
+  // directly here — out of order with (and not cascading from) the true upstream frontier. Park
+  // such askers instead: they + their designer sibling ride the §18 park until the board's UNIFIED
+  // dispatchTaskQuestions computes ONE computeUpstreamFrontier over both (upstream designer starts,
+  // the asker cascades). Questions with no designer sibling (the common case) auto-dispatch as before.
+  const designerQuestionIds = new Set(
+    (
+      await db
+        .select({ questionId: taskQuestions.questionId })
+        .from(taskQuestions)
+        .where(
+          and(
+            eq(taskQuestions.originNodeRunId, originNodeRunId),
+            eq(taskQuestions.roleKind, 'designer'),
+            isNull(taskQuestions.dispatchedAt),
+          ),
+        )
+    ).map((d) => d.questionId),
+  )
+  const entryIds = askerRows.filter((e) => !designerQuestionIds.has(e.questionId)).map((e) => e.id)
 
   // 5. RFC-098 B1 worktree rollback for SELF-clarify ISOLATED reruns (Codex round-4 [high]). The
   //    legacy quick path (submitClarifyAnswers) resets the worktree to the asking run's pre_snapshot
@@ -460,6 +446,13 @@ export async function autoDispatchClarifyRound(
   //    (questioner) reruns do NOT roll back — submitCrossClarifyAnswers has no rollback — so this is
   //    self-only. resolveSelfRollbackRun returns the asking run iff a rollback is due (self + isolated
   //    + a snapshot + a worktree), else null.
+  //    RFC-162 (Codex re-review P2, accepted limitation): when EVERY self entry of the round was
+  //    parked above (all reassigned to a designer) `entryIds` is empty ⇒ no quick self continuation
+  //    runs now ⇒ no rollback now (resetting the tree before the parked designer runs would be
+  //    wrong). Such a reassigned self is board-dispatched, which by design does NOT roll back — for
+  //    the primary UPSTREAM-designer case that is CORRECT (the asker must see the designer's
+  //    revision, not reset to pre-question); the DOWNSTREAM-designer case loses the (usually no-op,
+  //    RFC-023) rollback, consistent with every other board-dispatched self continuation.
   const selfRollbackRun =
     round.kind === 'self' && entryIds.length > 0 && taskRow.worktreePath !== ''
       ? await resolveSelfRollbackRun(
@@ -623,10 +616,48 @@ export async function autoDispatchClarifyRound(
             isNotNull(taskQuestions.sealedAt),
           ),
         )
-      const designerEntryIds = allDesigner
-        .filter((e) =>
-          targetDesignerNodes.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
-        )
+      // RFC-162 (Codex impl-gate P1) — a designer that COEXISTS with an undispatched asker
+      // (self/questioner) for the same (round, question) must NOT be quick-dispatched in
+      // isolation: its asker was parked above (step 4), so dispatching the designer alone here
+      // would run the upstream + cascade the asker's node while the asker ENTRY lingers
+      // undispatched (a later board dispatch would then redundantly re-mint it). Such a designer
+      // rides the §18 park with its asker until the board's UNIFIED computeUpstreamFrontier
+      // dispatches both together. (Every RFC-162 clarify designer is reassign-created and thus
+      // has a coexisting asker — so this quick designer auto-dispatch is effectively board-only
+      // now; kept + gated rather than removed for defense.)
+      const undispatchedAskerKeys = new Set(
+        (
+          await db
+            .select({
+              originNodeRunId: taskQuestions.originNodeRunId,
+              questionId: taskQuestions.questionId,
+            })
+            .from(taskQuestions)
+            .where(
+              and(
+                eq(taskQuestions.taskId, round.taskId),
+                inArray(taskQuestions.roleKind, ['self', 'questioner']),
+                isNull(taskQuestions.dispatchedAt),
+              ),
+            )
+        ).map((a) => `${a.originNodeRunId}:${a.questionId}`),
+      )
+      const designerCandidates = allDesigner.filter((e) =>
+        targetDesignerNodes.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
+      )
+      // RFC-162 (Codex re-review P2) — skip the WHOLE target designer node if ANY of its sibling
+      // rounds is blocked (its asker still undispatched, parked in step 4). Filtering per-row and
+      // dispatching only the UNBLOCKED siblings would let assertDesignerReady pass on a PARTIAL
+      // multi-source batch → mint the designer WITHOUT the parked round's feedback, then a second
+      // rerun later — instead of the intended single aggregated batch. Park the whole target; the
+      // board's UNIFIED dispatch mints it once, with every sibling's feedback, when all are ready.
+      const blockedTargets = new Set(
+        designerCandidates
+          .filter((e) => undispatchedAskerKeys.has(`${e.originNodeRunId}:${e.questionId}`))
+          .map((e) => e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''),
+      )
+      const designerEntryIds = designerCandidates
+        .filter((e) => !blockedTargets.has(e.overrideTargetNodeId ?? e.defaultTargetNodeId ?? ''))
         .map((e) => e.id)
       if (designerEntryIds.length > 0) {
         try {

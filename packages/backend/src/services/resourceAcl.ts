@@ -1,6 +1,6 @@
 // RFC-099 — resource-level ownership ACL core.
 //
-// Five resource types (agent / skill / mcp / plugin / workflow) carry
+// Six resource types (agent / skill / mcp / plugin / workflow / workgroup) carry
 // owner_user_id + visibility ('private'|'public') columns plus per-user rows
 // in resource_grants. This module is the single authority for "can this actor
 // see / modify this resource":
@@ -32,7 +32,16 @@ import type { Actor } from '@/auth/actor'
 import { SYSTEM_USER_ID } from '@/auth/actor'
 import type { DbClient } from '@/db/client'
 import { dbTxSync } from '@/db/txSync'
-import { agents, mcps, plugins, resourceGrants, skills, users, workflows } from '@/db/schema'
+import {
+  agents,
+  mcps,
+  plugins,
+  resourceGrants,
+  skills,
+  users,
+  workflows,
+  workgroups,
+} from '@/db/schema'
 import { ForbiddenError, NotFoundError, ValidationError } from '@/util/errors'
 
 /**
@@ -58,6 +67,7 @@ export const ACL_TABLES = {
   mcp: mcps,
   plugin: plugins,
   workflow: workflows,
+  workgroup: workgroups, // RFC-164
 } as const
 
 export function isAdminActor(actor: Actor): boolean {

@@ -18,14 +18,22 @@ const ROUTE_SRC = path.join(
   path.dirname(new URL(import.meta.url).pathname),
   '../src/routes/agents.tsx',
 )
+const CELL_SRC = path.join(
+  path.dirname(new URL(import.meta.url).pathname),
+  '../src/components/ResourceNameCell.tsx',
+)
 const STYLES_SRC = path.join(path.dirname(new URL(import.meta.url).pathname), '../src/styles.css')
 
 describe('/agents list — name cell does not wrap, description cell truncates to one line', () => {
-  test('name <td> carries data-table__nowrap', async () => {
+  test('name <td> carries data-table__nowrap (via shared ResourceNameCell)', async () => {
+    // RFC-151 PR-3 moved the name cell into <ResourceNameCell>. Same intent:
+    // the cell itself (not just the link) must get the nowrap modifier, and
+    // /agents must actually route its name column through the shared cell.
     const src = await fs.readFile(ROUTE_SRC, 'utf8')
-    // The name cell wraps the link to /agents/:name; make sure the cell
-    // itself (not just the link) gets the nowrap modifier.
-    expect(src).toMatch(/<td className="data-table__nowrap">\s*<Link to="\/agents\/\$name"/)
+    expect(src).toMatch(/<ResourceNameCell\s+to="\/agents\/\$name"/)
+    const cell = await fs.readFile(CELL_SRC, 'utf8')
+    expect(cell).toMatch(/<td className="data-table__nowrap">\s*<Link/)
+    expect(cell).toContain('className="data-table__link"')
   })
 
   test('description <td> carries data-table__truncate (and keeps the muted color)', async () => {

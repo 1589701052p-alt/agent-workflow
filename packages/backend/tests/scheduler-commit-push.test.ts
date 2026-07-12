@@ -21,7 +21,7 @@ import { nodeRuns } from '../src/db/schema'
 import { runGit } from '../src/util/git'
 import { createAgent } from '../src/services/agent'
 import { createWorkflow } from '../src/services/workflow'
-import { startTask } from '../src/services/task'
+import { startTaskWithLocalRepo } from '../src/services/task'
 import { commitPushNodeId, isCommitPushNodeId } from '../src/services/commitPush'
 import type { CommitPushMeta } from '@agent-workflow/shared'
 import { stubCmd, writeStubOpencode } from './helpers/stub-runtime'
@@ -151,7 +151,7 @@ describe('RFC-075 scheduler auto commit&push', () => {
   afterEach(() => rimrafDir(h.tmp))
 
   test('autoCommitPush ON → writer change is committed + pushed to the remote', async () => {
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'cp-on',
@@ -194,7 +194,7 @@ describe('RFC-075 scheduler auto commit&push', () => {
   })
 
   test('autoCommitPush OFF (default) → no commit node_run (byte-baseline)', async () => {
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: h.wfId,
         name: 'cp-off',

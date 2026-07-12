@@ -50,7 +50,11 @@ function TasksPage() {
       <header className="page__header page__header--row">
         <div>
           <h1>{t('tasks.title')}</h1>
-          <p className="page__hint">{t('tasks.hint')}</p>
+        </div>
+        <div className="page__actions">
+          <Link to="/tasks/new" className="btn btn--primary" data-testid="tasks-new-button">
+            {t('taskWizard.title')}
+          </Link>
         </div>
       </header>
 
@@ -124,6 +128,20 @@ function TasksPage() {
                   >
                     {row.workflowName ?? row.workflowId}
                   </Link>
+                  {/* RFC-164 PR-4: workgroup tasks carry a badge next to the
+                      workflow cell (their workflowId is the builtin host). */}
+                  {row.workgroupId != null && (
+                    <>
+                      {' '}
+                      <StatusChip
+                        kind="info"
+                        size="sm"
+                        data-testid={`task-workgroup-badge-${row.id}`}
+                      >
+                        {t('tasks.workgroupBadge')}
+                      </StatusChip>
+                    </>
+                  )}
                 </td>
                 <td>
                   <TaskStatusChip status={row.status} />

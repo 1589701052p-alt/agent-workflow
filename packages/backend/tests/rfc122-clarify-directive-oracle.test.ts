@@ -5,7 +5,8 @@
 //   1. resolveEffectiveClarifyChannel — the STOP override forces mandatory
 //      ask-back OFF for BOTH self-clarify AND cross-questioner (both are
 //      hasClarifyChannel=true), and golden-locks the no-override boolean.
-//   2. renderUserPrompt — clarifyStopNotice injects the `### User directive:
+//   2. renderUserPrompt — clarifyChannel.injectStopNotice (RFC-148 ADT; the
+//      historical clarifyStopNotice boolean) injects the `### User directive:
 //      STOP CLARIFYING` trailer on a first-run STOP (no answersBlock), keeps the
 //      output protocol, and is suppressed when ask-back is still active.
 //   3. buildPromptContext directiveOverride — the toggle rebuilds the LAST
@@ -99,32 +100,43 @@ describe('RFC-122 resolveEffectiveClarifyChannel', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. renderUserPrompt — clarifyStopNotice (first-run STOP injection)
+// 2. renderUserPrompt — injectStopNotice (first-run STOP injection)
 // ---------------------------------------------------------------------------
-describe('RFC-122 renderUserPrompt clarifyStopNotice', () => {
+describe('RFC-122 renderUserPrompt clarifyChannel.injectStopNotice', () => {
   test('first-run STOP: injects STOP CLARIFYING + output protocol, no mandatory ask-back', () => {
-    const out = renderMinimal({ hasClarifyChannel: false, clarifyStopNotice: true })
+    const out = renderMinimal({
+      clarifyChannel: { kind: 'self', directive: 'stopped', injectStopNotice: true },
+    })
     expect(out).toContain(STOP_TRAILER)
     expect(out).toContain(OUTPUT_PROTO)
     expect(out).not.toContain(MANDATORY)
   })
 
-  test('golden-lock: no notice + clarify channel ⇒ mandatory ask-back appended (today)', () => {
-    const out = renderMinimal({ hasClarifyChannel: true })
+  test('golden-lock: no notice + mandatory clarify channel ⇒ mandatory ask-back appended (today)', () => {
+    const out = renderMinimal({
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
+    })
     expect(out).toContain(MANDATORY)
     expect(out).not.toContain(STOP_TRAILER)
   })
 
-  test('golden-lock: a plain output node is byte-identical with clarifyStopNotice omitted vs false', () => {
+  test('golden-lock: a plain output node is byte-identical with clarifyChannel omitted vs kind:none vs stopped-without-notice', () => {
     const base = renderMinimal({})
-    const withFalse = renderMinimal({ clarifyStopNotice: false })
-    expect(withFalse).toBe(base)
+    const explicitNone = renderMinimal({ clarifyChannel: { kind: 'none' } })
+    // The nearest new-shape spelling of the historical `clarifyStopNotice: false`.
+    const stoppedNoNotice = renderMinimal({
+      clarifyChannel: { kind: 'self', directive: 'stopped', injectStopNotice: false },
+    })
+    expect(explicitNone).toBe(base)
+    expect(stoppedNoNotice).toBe(base)
     expect(base).not.toContain(STOP_TRAILER)
   })
 
-  test('guard: clarifyStopNotice is ignored while ask-back is still active (channel wins)', () => {
+  test('guard: injectStopNotice is ignored while ask-back is still active (mandatory wins)', () => {
     // Defensive — the scheduler never sets both, but the renderer must not double-talk.
-    const out = renderMinimal({ hasClarifyChannel: true, clarifyStopNotice: true })
+    const out = renderMinimal({
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: true },
+    })
     expect(out).toContain(MANDATORY)
     expect(out).not.toContain(STOP_TRAILER)
   })

@@ -34,6 +34,10 @@ describe('isAgentNodeKind (raw-surface tolerance)', () => {
       'clarify',
       undefined,
       '',
+      // Codex 实现门 medium 同型：继承键不得经原型链索引行为表。
+      'constructor',
+      'toString',
+      '__proto__',
     ]) {
       expect(isAgentNodeKind(k)).toBe(false)
     }

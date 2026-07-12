@@ -15,7 +15,10 @@ import type { NodeRun, NodeRunEventsResponse, NodeRunOutput, Task } from '@agent
 import { NODE_EVENT_KIND } from '@agent-workflow/shared'
 import { useNavigate } from '@tanstack/react-router'
 import { NodeDependencyTreeSection } from './agents/NodeDependencyTreeSection'
+import { LoadingState } from './LoadingState'
 import { SessionTab } from './node-session/SessionTab'
+import { StatusChip } from './StatusChip'
+import { TabBar, type TabDef } from './TabBar'
 import { api, ApiError } from '@/api/client'
 import { clarifyRoundForRun, formatIterationLabel, nodeRunHistory } from '@/lib/node-history'
 import {
@@ -109,11 +112,11 @@ export function NodeDetailDrawer({
   // collapsed the previous two-section layout into one.
   const history = nodeRunHistory(run, runs)
 
-  const tabs: Array<[Tab, string]> = [
-    ['session', t('nodeDrawer.tabSession')],
-    ['events', t('nodeDrawer.tabEvents')],
-    ['output', t('nodeDrawer.tabOutput')],
-    ['stats', t('nodeDrawer.tabStats')],
+  const tabs: Array<TabDef<Tab>> = [
+    { key: 'session', label: t('nodeDrawer.tabSession') },
+    { key: 'events', label: t('nodeDrawer.tabEvents') },
+    { key: 'output', label: t('nodeDrawer.tabOutput') },
+    { key: 'stats', label: t('nodeDrawer.tabStats') },
   ]
 
   return (
@@ -134,18 +137,7 @@ export function NodeDetailDrawer({
           ×
         </button>
       </header>
-      <div className="tabs tabs--inspector">
-        {tabs.map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            className={`tabs__tab ${tab === k ? 'tabs__tab--active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabBar<Tab> variant="inspector" tabs={tabs} active={tab} onSelect={setTab} />
       {retryable && (
         <div className="inspector__action-row">
           <button
@@ -210,9 +202,9 @@ function SubProcessList({ shards, onPick }: { shards: NodeRun[]; onPick?: (id: s
                 className="subprocess-list__item"
                 onClick={() => onPick?.(c.id)}
               >
-                <span className={`status-chip status-chip--${nodeRunStatusToKind(c.status)}`}>
+                <StatusChip kind={nodeRunStatusToKind(c.status)}>
                   {t(displayNoderunStatusKey(c))}
-                </span>
+                </StatusChip>
                 <code className="subprocess-list__shard">
                   {c.shardKey ?? t('nodeDrawer.shardNoKey')}
                 </code>
@@ -384,9 +376,9 @@ function StatsTab({
                       onClick={() => onPickRetry?.(r.id)}
                     >
                       <code>{formatIterationLabel(r, { t }, clarifyRoundForRun(r, history))}</code>{' '}
-                      <span className={`status-chip status-chip--${nodeRunStatusToKind(r.status)}`}>
+                      <StatusChip kind={nodeRunStatusToKind(r.status)}>
                         {t(displayNoderunStatusKey(r))}
-                      </span>
+                      </StatusChip>
                       {r.startedAt !== null && (
                         <span className="muted">{new Date(r.startedAt).toLocaleTimeString()}</span>
                       )}
@@ -443,7 +435,7 @@ function EventsTab({ taskId, nodeRunId }: { taskId: string; nodeRunId: string })
           </button>
         ))}
       </div>
-      {query.isLoading && <div className="muted">{t('common.loading')}</div>}
+      {query.isLoading && <LoadingState size="compact" />}
       {query.error !== null && query.error !== undefined && (
         <div className="error-box">{describeError(query.error)}</div>
       )}

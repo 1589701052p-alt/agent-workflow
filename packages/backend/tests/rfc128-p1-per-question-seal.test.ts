@@ -261,75 +261,30 @@ describe('RFC-128 P1 — AC-3 轮 answered 仅全 seal 才翻', () => {
 })
 
 // ---------------------------------------------------------------------------
-// AC-2 — reconcile 门控 (cross). RFC-128 P3 放开了 P1 阶段的 P2-4a 临时「整轮 gate」：现在
-// partial seal 一个 designer-scope 题即逐题出它的 designer 条目，未 seal 的兄弟题不出；整轮
-// 全 seal = 全题 designer 条目（黄金锁，= 旧 roundAnswered 逐字一致）。
+// AC-2 — reconcile 门控 (cross). RFC-162: per-question scope (designer↔questioner) is DELETED, so
+// the old "seal a designer-scope question → its designer entry appears" gate is gone. reconcile now
+// emits exactly ONE asker (questioner) entry per question for a cross round; designer handlers come
+// ONLY from a human reassign (locked in rfc120-task-questions-service.test.ts). The three tests here
+// asserting the deleted designer-by-scope gate were RETIRED; the one below locks the surviving half
+// (reconcile is asker-only, per-question sealed derivation still works on a partial round).
 // ---------------------------------------------------------------------------
 
-describe('RFC-128 P1/P3 — AC-2 reconcile 逐题门控: seal 一题即出它的 designer 条目', () => {
-  test('partial seal Q1(designer scope) → 出 Q1 designer 条目；Q2 未 seal 不出（P3 放开 P2-4a）', async () => {
+describe('RFC-162 — AC-2 reconcile: cross round → questioner-only entries (no designer)', () => {
+  test('partial seal q1 → 只出 questioner 条目（q1 sealed=true / q2 sealed=false）；从不出 designer', async () => {
     const db = createInMemoryDb(MIGRATIONS)
     const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
 
-    const res = await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'designer' }, // scope 在答该题时定（已 merge 进 round）
-    })
+    const res = await sealRoundQuestions({ db, originNodeRunId, answers: [makeAns('q1')] })
     expect(res.roundFullySealed).toBe(false)
 
     const dtos = await listTaskQuestions(db, taskId)
     const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
-    // P3 逐题：Q1 已 seal + designer scope → 出 Q1 designer 条目；Q2 未 seal → 只 questioner。
-    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:questioner'])
-    // Q1 designer 条目 sealed=true（即便轮仍 awaiting_human——partial 派生），故可 stage/dispatch。
-    const q1Designer = dtos.find((d) => d.questionId === 'q1' && d.roleKind === 'designer')!
-    expect(q1Designer.sealed).toBe(true)
-  })
-
-  test('全题 seal（designer scope）→ 轮 answered → 两题 designer 条目都出现（= 旧整轮行为）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'designer' },
-    })
-    const res2 = await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q2')],
-      scopes: { q2: 'designer' },
-    })
-    expect(res2.roundFullySealed).toBe(true)
-
-    const dtos = await listTaskQuestions(db, taskId)
-    const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
-    // 全 seal → 轮 answered → designer 条目出现（两题都 designer scope）。
-    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:designer', 'q2:questioner'])
-  })
-
-  test('全题 seal 但 scope 混合 → 仅 designer-scope 题出 designer 条目', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'designer' },
-    })
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q2')],
-      scopes: { q2: 'questioner' },
-    })
-    const dtos = await listTaskQuestions(db, taskId)
-    const sig = dtos.map((d) => `${d.questionId}:${d.roleKind}`).sort()
-    expect(sig).toEqual(['q1:designer', 'q1:questioner', 'q2:questioner'])
+    // RFC-162: exactly one questioner entry per question — NEVER a designer entry from a seal.
+    expect(sig).toEqual(['q1:questioner', 'q2:questioner'])
+    // Per-question sealed derivation survives: q1 sealed even though the round is still
+    // awaiting_human (partial, derived), q2 not.
+    expect(dtos.find((d) => d.questionId === 'q1')!.sealed).toBe(true)
+    expect(dtos.find((d) => d.questionId === 'q2')!.sealed).toBe(false)
   })
 })
 
@@ -353,7 +308,6 @@ describe('RFC-128 P1 — DTO sealed 字段 + answerSummary 独立轮 status', ()
           customText: 'because',
         },
       ],
-      scopes: { q1: 'questioner' },
     })
 
     const dtos = await listTaskQuestions(db, taskId)
@@ -469,83 +423,12 @@ describe('RFC-128 P1 — P2-2 quick-channel 不覆盖已 sealed (self)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// P2-3 — cross scopes merge: sparse questionScopes 不丢早先 seal 的 scope
+// RFC-162: retired — P2-3 "cross scopes merge" (sparse questionScopes 不丢早先 seal 的 scope +
+// locked-scope 不被 stale tab 改写 + scopes 黄金锁). Per-question scope (designer↔questioner) is
+// DELETED: sealRoundQuestions / autoDispatchClarifyRound no longer take `scopes` and question_scopes_json
+// is never written, so there is no scope-merge behavior left to lock. The answer-merge half these
+// tests rode on (sealed answers not overwritten by a stale finalize) survives in the P2-2 block above.
 // ---------------------------------------------------------------------------
-
-describe('RFC-128 P1 — P2-3 cross scopes merge (sparse request 不丢 scope)', () => {
-  test('先 seal q1=questioner scope；整轮 submit 只带 q2 scope → q1 scope 保留 questioner', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-
-    // Control channel seals q1 with questioner scope (round stays awaiting_human).
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'questioner' },
-    })
-
-    // Quick channel finalize sends a SPARSE scopes map (only q2) — q1 omitted.
-    await autoDispatchClarifyRound({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1'), makeAns('q2')],
-      directive: 'continue',
-      scopes: { q2: 'designer' }, // q1 omitted → must NOT lose its stored scope
-      actor,
-    })
-
-    const [round] = await roundOf(db, taskId)
-    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(scopes.q1).toBe('questioner') // P2-3: preserved (not defaulted to designer)
-    expect(scopes.q2).toBe('designer')
-  })
-
-  // P2-3b (Codex re-gate): a LOCKED question's scope is sealed — a stale whole-round tab that
-  // posts a DIFFERENT scope for it must NOT change the stored scope (mirrors answer lockedIds).
-  test('先 seal q1=questioner；整轮 submit 改 q1=designer → q1 scope 仍锁定 questioner（不被改）', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'questioner' },
-    })
-
-    // Stale tab finalize tries to FLIP q1 back to designer — must be ignored (q1 is locked).
-    await autoDispatchClarifyRound({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1'), makeAns('q2')],
-      directive: 'continue',
-      scopes: { q1: 'designer', q2: 'designer' },
-      actor,
-    })
-
-    const [round] = await roundOf(db, taskId)
-    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(scopes.q1).toBe('questioner') // P2-3b: locked scope NOT re-routed to designer
-    expect(scopes.q2).toBe('designer')
-  })
-
-  test('黄金锁: 无 stored scope 时，整轮 finalize 的 scopes 行为不变', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-    await autoDispatchClarifyRound({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1'), makeAns('q2')],
-      directive: 'continue',
-      scopes: { q1: 'designer', q2: 'questioner' },
-      actor,
-    })
-    const [round] = await roundOf(db, taskId)
-    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(scopes).toEqual({ q1: 'designer', q2: 'questioner' })
-  })
-})
 
 // ---------------------------------------------------------------------------
 // RFC-128 (用户 2026-07-01) — autoStage 参数：控制通道 seal 即进「待下发/staged」。
@@ -602,23 +485,9 @@ describe('RFC-128 P1 — autoStage 参数 (seal→待下发/staged)', () => {
     expect(list.find((d) => d.questionId === 'q2')!.staged).toBe(false) // call 2 did not stage it
   })
 
-  test('cross designer partial seal + autoStage → questioner + designer 两角色条目都 staged', async () => {
-    const db = createInMemoryDb(MIGRATIONS)
-    const { taskId, originNodeRunId } = await seedCrossRound(db, [makeQ('q1'), makeQ('q2')])
-
-    await sealRoundQuestions({
-      db,
-      originNodeRunId,
-      answers: [makeAns('q1')],
-      scopes: { q1: 'designer' },
-      autoStage: true,
-    })
-
-    const list = await listTaskQuestions(db, taskId)
-    const q1Entries = list.filter((d) => d.questionId === 'q1')
-    // A designer-scope cross question has BOTH a questioner entry (always) + a designer entry
-    // (sealed designer-scope). autoStage mirrors the sealed_at stamp → both role entries staged.
-    expect(q1Entries.map((d) => d.roleKind).sort()).toEqual(['designer', 'questioner'])
-    for (const e of q1Entries) expect(e.staged).toBe(true)
-  })
+  // RFC-162: retired — "cross designer partial seal + autoStage → questioner + designer 两角色条目都
+  // staged". A designer entry no longer arises from a designer-scope seal (scope deleted); a cross
+  // seal produces only the questioner entry. autoStage's stamp semantics (across every role row of a
+  // question, keyed on origin × question) are covered by the self cases above and, for a genuine
+  // two-role question built via reassign, by rfc136-reanswer.test.ts.
 })

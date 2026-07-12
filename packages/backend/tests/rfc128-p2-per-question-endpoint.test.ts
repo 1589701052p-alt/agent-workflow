@@ -39,11 +39,7 @@ import { createSession } from '../src/auth/sessionStore'
 import { createUser } from '../src/services/users'
 import { createClarifySession } from '../src/services/clarify'
 import { createCrossClarifySession, resolveCrossNodeStopped } from '../src/services/crossClarify'
-import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
-import {
-  loadUndispatchedDesignerTargets,
-  loadUndispatchedSelfQuestionerTargets,
-} from '../src/services/taskQuestions'
+import { loadUndispatchedSelfQuestionerTargets } from '../src/services/taskQuestions'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 import type { ClarifyAnswer, ClarifyQuestion } from '@agent-workflow/shared'
 
@@ -336,25 +332,10 @@ describe('RFC-128 P2 — T6 defer=true 控制通道 (seal 进待下发/staged, �
     expect(await clarifyAnswerReruns(h.db, taskId)).toBe(0)
   })
 
-  test('cross defer-seal 带 scope：route 把 questionScopes 透传给 sealRoundQuestions（落 question_scopes_json）', async () => {
-    const h = await buildHarness()
-    const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1'), makeQ('q2')])
-
-    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
-      method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'questioner' },
-      }),
-    })
-    expect(res.status).toBe(200)
-    const [round] = await roundOf(h.db, taskId)
-    const scopes = JSON.parse(round?.questionScopesJson ?? '{}') as Record<string, string>
-    expect(scopes.q1).toBe('questioner')
-    expect(round?.status).toBe('awaiting_human') // q2 未 seal → partial
-    expect(await clarifyAnswerReruns(h.db, taskId)).toBe(0)
-  })
+  // RFC-162: retired — "cross defer-seal 带 scope：route 把 questionScopes 透传落 question_scopes_json".
+  // Per-question scope is DELETED: the route schema dropped `questionScopes` and sealRoundQuestions
+  // no longer writes question_scopes_json, so there is no passthrough to lock. The partial-seal /
+  // no-rerun half is covered by the self partial defer-seal test above.
 })
 
 // ---------------------------------------------------------------------------
@@ -370,7 +351,7 @@ describe('RFC-128 P2 — T6 defer=true 控制通道 (seal 进待下发/staged, �
 // ---------------------------------------------------------------------------
 
 describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner → 200 + park (no strand)', () => {
-  test('cross full seal 单题 questioner scope (deferred) → 200 + 轮 answered + node_run 关 + questioner home parked', async () => {
+  test('cross full seal 单题 (deferred) → 200 + 轮 answered + node_run 关 + questioner home parked', async () => {
     const h = await buildHarness()
     const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
       deferred: true,
@@ -378,11 +359,8 @@ describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner 
 
     const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
       method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'questioner' }, // questioner-scope full seal — now parks, not strands
-      }),
+      // RFC-162: scope deleted — a cross full seal parks the questioner home (not strands).
+      body: JSON.stringify({ defer: true, answers: [makeAns('q1')] }),
     })
     expect(res.status).toBe(200)
     expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
@@ -394,35 +372,15 @@ describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner 
     expect(parked.has('questioner')).toBe(true)
   })
 
-  test('cross full seal 混合 scope（designer + questioner, deferred）→ 200 + 两 home 各自 park（designer + self/q 源）', async () => {
-    const h = await buildHarness()
-    const { taskId, nodeRunId } = await seedCrossRound(
-      h.db,
-      h.alice.id,
-      [makeQ('q1'), makeQ('q2')],
-      { deferred: true },
-    )
+  // RFC-162: retired — "cross full seal 混合 scope（designer + questioner）→ 两 home 各自 park".
+  // Per-question scope is DELETED, so a cross seal never mints a designer entry / a §18 designer park;
+  // both questions become questioner entries that park the ONE questioner home. There is no "two homes
+  // park" behavior left. The questioner park is locked by the single-question test above.
 
-    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
-      method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        answers: [makeAns('q1'), makeAns('q2')],
-        questionScopes: { q1: 'designer', q2: 'questioner' }, // mixed — both park, neither strands
-      }),
-    })
-    expect(res.status).toBe(200)
-    expect((await roundOf(h.db, taskId))[0]?.status).toBe('answered')
-    // designer q1 → §18 designer park; questioner q2 → P5-BC self/questioner park.
-    expect((await loadUndispatchedDesignerTargets(h.db, taskId)).has('designer')).toBe(true)
-    expect((await loadUndispatchedSelfQuestionerTargets(h.db, taskId)).has('questioner')).toBe(true)
-  })
-
-  test('cross full seal 全 designer scope + directive=stop (deferred) → 200 + 仅 questioner park（stop 轮无 designer 条目）', async () => {
-    // A stop round produces NO designer entries (reconcileDesiredEntries), only the questioner
-    // continuation entry. On a deferred task that questioner entry parks via the P5-BC park source
-    // until board dispatch mints the cross-clarify-questioner-rerun — no strand (the P5-0 guard was
-    // for the pre-park-source era).
+  test('cross full seal + directive=stop (deferred) → 200 + questioner park（无 designer 条目）', async () => {
+    // RFC-162: a cross round produces only the questioner (asker) continuation entry — never a
+    // designer entry (scope deleted). On a deferred task that questioner entry parks via the P5-BC
+    // park source until board dispatch mints the cross-clarify-questioner-rerun — no strand.
     const h = await buildHarness()
     const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
       deferred: true,
@@ -430,12 +388,7 @@ describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner 
 
     const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
       method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        directive: 'stop',
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'designer' },
-      }),
+      body: JSON.stringify({ defer: true, directive: 'stop', answers: [makeAns('q1')] }),
     })
     expect(res.status).toBe(200)
     expect((await roundOf(h.db, taskId))[0]?.status).toBe('answered')
@@ -444,7 +397,7 @@ describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner 
     expect((await loadUndispatchedSelfQuestionerTargets(h.db, taskId)).has('questioner')).toBe(true)
   })
 
-  test('对照（照常）：cross full seal 全 designer scope + directive=continue → 200（designer 主线，不发反问者续跑）', async () => {
+  test('对照（照常）：cross full seal + directive=continue → 200 + 轮 answered', async () => {
     const h = await buildHarness()
     const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
       deferred: true,
@@ -452,12 +405,7 @@ describe('RFC-128 P5-BC (route) — deferred cross full-seal of self/questioner 
 
     const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
       method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        directive: 'continue', // designer continue mainline → allowed
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'designer' },
-      }),
+      body: JSON.stringify({ defer: true, directive: 'continue', answers: [makeAns('q1')] }),
     })
     expect(res.status).toBe(200)
     expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
@@ -675,49 +623,12 @@ describe('RFC-128 P2 — Codex P1 / P5-0: full defer seal 关闭中介 node_run 
     expect(await nodeRunStatus(h.db, nodeRunId)).toBe('awaiting_human') // 不动
   })
 
-  test('full cross-designer defer seal（deferred task）：cross node_run done + 任务由 §18 designer park 把持 + 可 dispatch 续跑', async () => {
-    const h = await buildHarness()
-    const { taskId, nodeRunId } = await seedCrossRound(h.db, h.alice.id, [makeQ('q1')], {
-      deferred: true,
-    })
-
-    const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
-      method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'designer' },
-        // directive omitted → 'continue' (the §18 park requires directive='continue')
-      }),
-    })
-    expect(res.status).toBe(200)
-    expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)
-
-    // P1 + P2-2: cross-clarify node closed; round directive persisted as 'continue'.
-    expect(await nodeRunStatus(h.db, nodeRunId)).toBe('done')
-    expect((await roundOf(h.db, taskId))[0]?.directive).toBe('continue')
-
-    // The designer entry exists and the §18 park HOLDS the deferred task (proves the task is
-    // NOT permanently parked on the clarify node, and NOT prematurely advanced either).
-    const list = await listQuestions(h.app, h.alice.token, taskId)
-    const designer = list.find((q) => q.roleKind === 'designer')
-    expect(designer).toBeDefined()
-    // RFC-128 (用户 2026-07-01) AUTO-STAGE: a full designer defer-seal now stages the designer entry
-    // (phase='staged'); the §18 designer park (keyed on round status/directive, NOT staged_at) still
-    // holds the deferred task, and the staged entry stays dispatchable (asserted below).
-    expect(designer!.phase).toBe('staged')
-    expect(designer!.staged).toBe(true)
-    const parked = await loadUndispatchedDesignerTargets(h.db, taskId)
-    expect(parked.has('designer')).toBe(true)
-
-    // It is DISPATCHABLE: a board dispatch mints the designer rerun (releases the park) —
-    // the exact path the permanent-park bug (finding P1) used to deadlock.
-    const result = await dispatchTaskQuestions(h.db, taskId, [designer!.id], {
-      userId: h.alice.id,
-      role: 'owner',
-    })
-    expect(result.reruns.length).toBeGreaterThan(0)
-  })
+  // RFC-162: retired — "full cross-designer defer seal → cross node_run done + §18 designer park +
+  // dispatch". A designer entry no longer arises from a designer-scope seal (scope deleted); a cross
+  // full seal produces the questioner entry and parks the questioner home. The "full cross seal closes
+  // the intermediary node_run + persists directive" half is covered by the P5-BC block above
+  // (nodeRunStatus → 'done', directive persisted). The surviving designer-handler dispatch path (via a
+  // human reassign + §18 designer park) is locked in rfc120-task-questions-service.test.ts.
 })
 
 // ---------------------------------------------------------------------------
@@ -776,12 +687,8 @@ describe('RFC-128 P2/P5-BC — defer 透传 directive (stop): full deferred→20
 
     const res = await req(h.app, h.alice.token, `/api/clarify/${nodeRunId}/answers`, {
       method: 'POST',
-      body: JSON.stringify({
-        defer: true,
-        directive: 'stop',
-        answers: [makeAns('q1')],
-        questionScopes: { q1: 'designer' },
-      }),
+      // RFC-162: scope deleted — directive still threads through defer=true.
+      body: JSON.stringify({ defer: true, directive: 'stop', answers: [makeAns('q1')] }),
     })
     expect(res.status).toBe(200)
     expect(((await res.json()) as { roundFullySealed: boolean }).roundFullySealed).toBe(true)

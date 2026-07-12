@@ -12,7 +12,9 @@ export interface Resources {
     mcps: string
     plugins: string
     workflows: string
+    workgroups: string
     tasks: string
+    scheduled: string
     reviews: string
     clarify: string
     repos: string
@@ -48,6 +50,11 @@ export interface Resources {
       badgeAria: string
       shardLabel: string
       iterLabel: string
+      // RFC-164 PR-6: workgroup to-dos third source.
+      errorWorkgroups: string
+      wgKind: string
+      wgRow: string
+      wgBreakdown: string
     }
     // RFC-041 PR4: top-level Memory route.
     memory: string
@@ -90,14 +97,8 @@ export interface Resources {
       }
     }
     taskRow: {
-      statusRunning: string
-      statusAwaitingHuman: string
-      statusAwaitingReview: string
-      statusDone: string
-      statusFailed: string
-      statusCanceled: string
-      statusInterrupted: string
-      statusPending: string
+      // RFC-150 PR-1 (W0 补做): status* 键族已并入 tasks.status.*（与
+      // <TaskStatusChip> 同源），此处只剩相对时间文案。
       relativeJustNow: string
       relativeMinAgo: string
       relativeHourAgo: string
@@ -106,7 +107,6 @@ export interface Resources {
   }
   mcps: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -119,8 +119,6 @@ export interface Resources {
     deleteConfirm: string
     deleteReferenced: string
     newTitle: string
-    newHint: string
-    detailHint: string
     fieldName: string
     fieldNameHint: string
     fieldDescription: string
@@ -211,7 +209,6 @@ export interface Resources {
   }
   plugins: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -222,8 +219,6 @@ export interface Resources {
     formTitleNew: string
     formTitleEdit: string
     newTitle: string
-    newHint: string
-    detailHint: string
     fieldName: string
     fieldSpec: string
     fieldSpecHint: string
@@ -254,7 +249,6 @@ export interface Resources {
   }
   reviews: {
     title: string
-    hint: string
     emptyList: string
     filterPending: string
     filterAll: string
@@ -419,7 +413,6 @@ export interface Resources {
   // RFC-036 — /account self-service page.
   account: {
     title: string
-    subtitle: string
     profile: string
     username: string
     displayName: string
@@ -496,7 +489,6 @@ export interface Resources {
   // RFC-036 — /users admin page.
   users: {
     title: string
-    hint: string
     new: string
     username: string
     displayName: string
@@ -524,7 +516,6 @@ export interface Resources {
   }
   repos: {
     title: string
-    hint: string
     loading: string
     empty: string
     colUrl: string
@@ -572,10 +563,8 @@ export interface Resources {
   }
   settings: {
     title: string
-    hintBacked: string
-    hintPatched: string
-    hintRestart: string
     tabRuntime: string
+    tabSystemAgents: string
     tabLimits: string
     tabRecovery: string
     tabGc: string
@@ -602,6 +591,11 @@ export interface Resources {
     languageHint: string
     languageZhCN: string
     languageEnUS: string
+    commitPushLangLabel: string
+    commitPushLangHint: string
+    commitPushLangDefault: string
+    commitPushLangZhCN: string
+    commitPushLangEnUS: string
     memoryDistillLangLabel: string
     memoryDistillLangHint: string
     memoryDistillLangDefault: string
@@ -612,6 +606,20 @@ export interface Resources {
     memoryDistillRuntimeLabel: string
     memoryDistillRuntimeHint: string
     runtimeInherit: string
+    // RFC-156 — "System agents" tab: per-card titles + one-line role hints for the
+    // internal framework agents, plus the fusion card's own runtime field.
+    systemAgents: {
+      commitPushTitle: string
+      commitPushHint: string
+      memoryTitle: string
+      memoryHint: string
+      mergeTitle: string
+      mergeHint: string
+      fusionTitle: string
+      fusionHint: string
+      fusionRuntime: string
+      fusionRuntimeHint: string
+    }
     restartRequiredTitle: string
     restartRequiredHint: string
     renderingPlantumlEndpointLabel: string
@@ -677,7 +685,6 @@ export interface Resources {
       enabledHint: string
       testOk: string
       testFail: string
-      testSaveFirst: string
       testDetailIssuer: string
       testDetailToken: string
       testDetailJwks: string
@@ -704,6 +711,8 @@ export interface Resources {
     skipLink: string
   }
   common: {
+    searchEllipsis: string
+    noMatches: string
     loading: string
     open: string
     delete: string
@@ -755,6 +764,13 @@ export interface Resources {
     fieldProtocolHint: string
     fieldBinary: string
     fieldBinaryHint: string
+    fieldConfigDirEnv: string
+    fieldConfigDirEnvHint: string
+    fieldConfigDirName: string
+    fieldConfigDirNameHint: string
+    configDirEnvInvalid: string
+    configDirEnvReserved: string
+    configDirNameInvalid: string
     fieldModel: string
     fieldModelHint: string
     fieldVariant: string
@@ -781,7 +797,6 @@ export interface Resources {
   }
   agents: {
     title: string
-    hint: string
     newButton: string
     emptyList: string
     colName: string
@@ -790,21 +805,12 @@ export interface Resources {
     colRuntime: string
     runtimeDefaultTag: string
     loadingAgent: string
-    detailHint: string
     saveButton: string
     newTitle: string
-    newHint: string
     createButton: string
   }
   skills: {
     title: string
-    hintBefore: string
-    hintManaged: string
-    hintMid: string
-    hintManagedPath: string
-    hintBetween: string
-    hintExternal: string
-    hintAfter: string
     newButton: string
     emptyList: string
     colName: string
@@ -812,11 +818,6 @@ export interface Resources {
     colDescription: string
     colPath: string
     newTitle: string
-    newHintBefore: string
-    newHintManaged: string
-    newHintMid: string
-    newHintExternal: string
-    newHintAfter: string
     tabManaged: string
     tabExternal: string
     fieldName: string
@@ -964,8 +965,9 @@ export interface Resources {
   }
   workflows: {
     title: string
-    hint: string
     newButton: string
+    createButton: string
+    fieldNameHint: string
     importButton: string
     emptyList: string
     importedAsNew: string
@@ -975,10 +977,281 @@ export interface Resources {
     colName: string
     colVersion: string
     colId: string
+    errors: {
+      nameRequired: string
+      nameInvalid: string
+    }
+  }
+  // RFC-164 — workgroup resource pages (list + quick-create dialog / detail).
+  workgroups: {
+    title: string
+    newButton: string
+    emptyList: string
+    colName: string
+    colMode: string
+    colMembers: string
+    colLeader: string
+    colDescription: string
+    colUpdated: string
+    modeLeaderWorker: string
+    modeFreeCollab: string
+    modeDynamicWorkflow: string
+    deleteTitle: string
+    deleteBody: string
+    newTitle: string
+    createButton: string
+    renameButton: string
+    renameTitle: string
+    renameField: string
+    sectionBasics: string
+    sectionMode: string
+    sectionMembers: string
+    sectionSwitches: string
+    fieldName: string
+    fieldNameHint: string
+    fieldDescription: string
+    fieldInstructions: string
+    fieldInstructionsHint: string
+    fieldMode: string
+    modeHintLeaderWorker: string
+    modeHintFreeCollab: string
+    modeHintDynamicWorkflow: string
+    dynamicModeNotice: string
+    // Launch-readiness banner (shared workgroupLaunchReadiness reasons).
+    readiness: {
+      noAgentMember: string
+      leaderMissing: string
+    }
+    // Member gallery + context panel (detail page, RFC-168).
+    membersEmpty: string
+    memberTypeAgent: string
+    memberTypeHuman: string
+    memberRemove: string
+    setLeaderButton: string
+    leaderBadge: string
+    addAgentMember: string
+    addHumanMember: string
+    addAgentTitle: string
+    addHumanTitle: string
+    addMemberConfirm: string
+    panelConfigTitle: string
+    panelAria: string
+    panelClose: string
+    memberSave: string
+    editAgentDefinition: string
+    agentMissing: string
+    portsIn: string
+    portsOut: string
+    configSaved: string
+    memberFieldAgent: string
+    memberFieldUser: string
+    memberFieldDisplayName: string
+    memberFieldRole: string
+    memberAgentPlaceholder: string
+    memberUserPlaceholder: string
+    memberDisplayNamePlaceholder: string
+    memberRolePlaceholder: string
+    fieldShareOutputs: string
+    fieldShareOutputsHint: string
+    fieldDirectMessages: string
+    fieldDirectMessagesHint: string
+    fieldBlackboard: string
+    fieldBlackboardHint: string
+    fcSwitchesNotice: string
+    fieldMaxRounds: string
+    fieldMaxRoundsHint: string
+    fieldCompletionGate: string
+    fieldCompletionGateHint: string
+    // RFC-164 PR-4 — detail-page launch entry + /workgroups/launch page.
+    launchButton: string
+    launch: {
+      title: string
+      backToGroup: string
+      missingGroup: string
+      fieldGoal: string
+      fieldGoalHint: string
+      advanced: string
+      maxDurationMin: string
+      maxDurationMinHint: string
+      maxTotalTokens: string
+      maxTotalTokensHint: string
+      start: string
+      notReady: string
+      humanMembersUnsupported: string
+      invalidPayload: string
+    }
+    // RFC-167 PR-3 — dynamic-workflow orchestration panel (tasks.detail).
+    dw: {
+      title: string
+      generating: string
+      rejectionFeedback: string
+      awaiting: string
+      attemptsUsed: string
+      gateTitle: string
+      approve: string
+      reject: string
+      rejectTitle: string
+      rejectCommentLabel: string
+      rejectCommentHint: string
+      rejectSubmit: string
+      saveAs: string
+      saveAsTitle: string
+      saveAsNameLabel: string
+      saveAsDescLabel: string
+      saveAsSubmit: string
+      saved: string
+      executing: string
+      executingDone: string
+      executingFailed: string
+      canceledNotice: string
+      exhausted: string
+      previewEmpty: string
+      canvasPending: string
+    }
+    // RFC-164 PR-4 — workgroup task chat room (tasks.detail default tab).
+    room: {
+      empty: string
+      roundDivider: string
+      authorSystem: string
+      assignedTo: string
+      resultSummary: string
+      viewRun: string
+      cancelCard: string
+      composerPlaceholder: string
+      send: string
+      sending: string
+      terminalNotice: string
+      mentionsAria: string
+      membersTitle: string
+      working: string
+      idle: string
+      gateTitle: string
+      gateAwaiting: string
+      gateConfirm: string
+      gateReject: string
+      // PR-5: live gate — reject requires a comment (dialog).
+      gateRejectTitle: string
+      gateRejectCommentLabel: string
+      gateRejectCommentHint: string
+      gateRejectSubmit: string
+      // PR-5: human delivery (拍板 #16 双形态).
+      deliverTodo: string
+      deliverQuick: string
+      deliverQuickPlaceholder: string
+      deliverForm: string
+      deliverFormTitle: string
+      deliverSummaryLabel: string
+      deliverDetailLabel: string
+      deliverSubmit: string
+      // PR-5: mid-run config dialog.
+      configButton: string
+      configTitle: string
+      configSubmit: string
+      configEmptyHint: string
+      configMembersTitle: string
+      configWillRemove: string
+      configUndoRemove: string
+      configNewChip: string
+      // PR-5: free_collab task-list panel.
+      fcListTitle: string
+      fcOpen: string
+      fcActive: string
+      fcDone: string
+      fcEmpty: string
+      infoTitle: string
+      infoGoal: string
+      infoMode: string
+      infoMaxRounds: string
+      infoSwitches: string
+      assignmentStatus: {
+        open: string
+        dispatched: string
+        running: string
+        awaiting_human: string
+        delivered: string
+        done: string
+        failed: string
+        canceled: string
+      }
+      source: {
+        leader: string
+        human: string
+        self_claim: string
+        system: string
+      }
+    }
+    errors: {
+      nameRequired: string
+      nameInvalid: string
+      agentNameRequired: string
+      userRequired: string
+      displayNameRequired: string
+      displayNameInvalid: string
+      displayNameTooLong: string
+      displayNameDuplicate: string
+      leaderMustBeAgent: string
+      maxRoundsInvalid: string
+      dynamicNoHumanMembers: string
+    }
+  }
+  scheduled: {
+    repairBadge: string
+    title: string
+    empty: string
+    new: string
+    colName: string
+    colSchedule: string
+    colNext: string
+    colStatus: string
+    colEnabled: string
+    enabledYes: string
+    enabledNo: string
+    lastNever: string
+    last_launched: string
+    last_failed: string
+    saveAsScheduled: string
+    dialogTitle: string
+    fieldName: string
+    fieldMode: string
+    fieldEvery: string
+    fieldUnit: string
+    fieldAt: string
+    fieldDays: string
+    fieldDayOfMonth: string
+    dayOfMonthHint: string
+    tzNote: string
+    modeInterval: string
+    modeDaily: string
+    modeWeekly: string
+    modeMonthly: string
+    unitMinutes: string
+    unitHours: string
+    unitDays: string
+    dow: { 0: string; 1: string; 2: string; 3: string; 4: string; 5: string; 6: string }
+    preview: string
+    save: string
+    saving: string
+    cancel: string
+    runHistory: string
+    noRuns: string
+    autoDisabled: string
+    runNow: string
+    edit: string
+    editTitle: string
+    enable: string
+    disable: string
+    delete: string
+    deleteConfirm: string
+    uploadUnsupported: string
+    editConfig: string
+    degradedBanner: string
+    editConfigTitle: string
+    saveConfig: string
+    backToSchedule: string
+    collabLoadError: string
   }
   tasks: {
     title: string
-    hint: string
     filterAll: string
     emptyList: string
     colId: string
@@ -1014,6 +1287,7 @@ export interface Resources {
     /** RFC-066: multi-repo summary `<details>` label on the task detail page. */
     multiRepoSummary: string
     cancelButton: string
+    relaunchButton: string
     resumeButton: string
     resuming: string
     syncWorkflow: {
@@ -1233,6 +1507,11 @@ export interface Resources {
     tabFeedback: string
     tabQuestions: string
     tabTimeline: string
+    // RFC-164 PR-4: workgroup chat room tab + tasks-list workgroup badge.
+    tabChatroom: string
+    // RFC-167 PR-3: dynamic-workflow orchestration tab.
+    tabDwOrchestration: string
+    workgroupBadge: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
     worktreeFilesOversized: string
@@ -1273,9 +1552,6 @@ export interface Resources {
   }
   editor: {
     newTitle: string
-    newHint: string
-    create: string
-    creating: string
     fieldName: string
     fieldDescription: string
     loadingWorkflow: string
@@ -1330,11 +1606,60 @@ export interface Resources {
     nodeTitleUnsetAgent: string
     nodeTitleUnsetKey: string
   }
+  taskWizard: {
+    launchEntry: string
+    title: string
+    titleScheduled: string
+    titleEdit: string
+    stepMode: string
+    stepSpace: string
+    stepContent: string
+    stepConfirm: string
+    kindLabel: string
+    kindWorkflow: string
+    kindAgent: string
+    kindWorkgroup: string
+    kindHintWorkflow: string
+    kindHintAgent: string
+    kindHintWorkgroup: string
+    objectWorkflow: string
+    objectAgent: string
+    objectWorkgroup: string
+    objectPlaceholder: string
+    objectEmpty: string
+    workgroupNotReady: string
+    spaceLabel: string
+    spaceRemote: string
+    spaceScratch: string
+    spaceScratchDesc: string
+    spaceRemoteDesc: string
+    spaceScratchHint: string
+    contentDescription: string
+    contentDescriptionHint: string
+    advanced: string
+    allowClarify: string
+    allowClarifyHint: string
+    maxDurationMin: string
+    maxDurationMinHint: string
+    maxTotalTokens: string
+    maxTotalTokensHint: string
+    edit: string
+    launch: string
+    saveScheduled: string
+    saveConfig: string
+    limitInvalid: string
+    summaryCollaborators: string
+    clarifyOff: string
+    kindLocked: string
+    degradedBanner: string
+  }
+  stepper: {
+    progress: string
+    back: string
+    next: string
+  }
   launch: {
     title: string
-    hintBefore: string
-    hintCode: string
-    hintAfter: string
     backToEditor: string
     fieldTaskName: string
     fieldTaskNameHint: string
@@ -1576,12 +1901,33 @@ export interface Resources {
     parseError: string
     signalHint: string
   }
+  capabilityCard: {
+    inputs: string
+    outputs: string
+    prompt: string
+    required: string
+    noneDeclared: string
+  }
   agentForm: {
+    /** RFC-155 — form-section titles (visible + collapsible groups). */
+    sectionBasics: string
+    sectionPrompt: string
+    sectionOutputs: string
+    sectionDependencyGraph: string
+    sectionResources: string
+    sectionAdvanced: string
     fieldName: string
     fieldNameHint: string
     fieldNamePlaceholder: string
     fieldDescription: string
     fieldDescriptionPlaceholder: string
+    fieldInputs: string
+    fieldInputsHint: string
+    fieldInputsPlaceholder: string
+    inputsValidate: string
+    inputKindLabel: string
+    inputRequired: string
+    inputRequiredLabel: string
     fieldOutputs: string
     fieldOutputsHint: string
     fieldOutputsPlaceholder: string
@@ -1618,7 +1964,6 @@ export interface Resources {
     pluginsPickerLoading: string
     pluginsPickerEmpty: string
     pluginsPickerLoadFailed: string
-    fieldDependencyTree: string
     fieldSyncOutputsOnIterate: string
     fieldSyncOutputsOnIterateHint: string
     /** RFC-060 PR-B — agent role flavor selector (normal / aggregator). */
@@ -1641,7 +1986,6 @@ export interface Resources {
     fieldFrontmatterExtraHint: string
     fieldBody: string
     bodyPlaceholder: string
-    rawBodySummary: string
     importButton: string
     autodetect: {
       button: string
@@ -1855,6 +2199,8 @@ export interface Resources {
     commitPushMaxRepairRetriesHint: string
     commitPushDiffMaxBytes: string
     commitPushDiffMaxBytesHint: string
+    mergeAgentRuntime: string
+    mergeAgentRuntimeHint: string
     maxConcurrentNodes: string
     multiProcessConc: string
     logLevel: string
@@ -1945,11 +2291,18 @@ export interface Resources {
   /** Canvas chip label for review nodes (⚖ icon). */
   reviewNode: {
     label: string
+    /** RFC-158: task-detail canvas click hints when the review node is clickable. */
+    navAwaiting: string
+    navDecided: string
   }
   /** Canvas chip label fallback for clarify / cross-clarify nodes — used
    *  when the renderer is invoked without an explicit `data.kindLabel`. */
   clarifyNode: {
     label: string
+    /** RFC-161: task-detail canvas click hints when the clarify node is clickable
+     *  (shared by clarify + cross-clarify renderers; both jump to /clarify). */
+    navAwaiting: string
+    navAnswered: string
   }
   crossClarifyNode: {
     label: string
@@ -1961,7 +2314,6 @@ export interface Resources {
     nav: { label: string; badgeTitle: string }
     list: {
       title: string
-      hint: string
       filter: { awaiting: string; answered: string; all: string }
       empty: string
       colTask: string
@@ -2039,19 +2391,6 @@ export interface Resources {
     multiSourcePendingLinkLabel: string
     abandonedChip: string
     abandonedTooltip: string
-    questionScope: {
-      label: string
-      designer: string
-      questioner: string
-      designerTooltip: string
-      questionerTooltip: string
-      shortcutHint: string
-    }
-    submitHint: {
-      allDesigner: string
-      allQuestioner: string
-      mixed: string
-    }
     inspector: {
       title: string
       sessionModeForQuestioner: string
@@ -2105,7 +2444,6 @@ export interface Resources {
   // RFC-041 PR4: platform memory UI surface.
   memory: {
     title: string
-    hint: string
     adminOnly: string
     empty: string
     confirmDelete: string
@@ -2475,8 +2813,8 @@ export interface Resources {
     empty: string
     source: string
     target: string
-    collapsedToQuestioner: string
-    collapsedToDesigner: string
+    handlerAsker: string
+    handlerDesigner: string
     autoDispatchQueued: string
     noTarget: string
     reassign: string
@@ -2544,7 +2882,9 @@ export const zhCN: Resources = {
     mcps: 'MCP',
     plugins: '插件',
     workflows: '工作流',
+    workgroups: '工作组',
     tasks: '任务',
+    scheduled: '定时任务',
     reviews: '评审',
     clarify: '反问',
     repos: '远端仓',
@@ -2578,6 +2918,10 @@ export const zhCN: Resources = {
       badgeAria: '{{n}} 项待处理',
       shardLabel: '分片 {{shard}}',
       iterLabel: '第 {{iter}} 轮',
+      errorWorkgroups: '工作组待办加载失败',
+      wgKind: '工作组',
+      wgRow: '{{n}} 项工作组待办',
+      wgBreakdown: '待交付 {{d}} · 待确认 {{g}}',
     },
     memory: '记忆',
     memoryHint: '从过往反问、评审与反馈中沉淀的长期上下文',
@@ -2621,14 +2965,6 @@ export const zhCN: Resources = {
       },
     },
     taskRow: {
-      statusRunning: '运行中',
-      statusAwaitingHuman: '等待回答',
-      statusAwaitingReview: '等待评审',
-      statusDone: '已完成',
-      statusFailed: '失败',
-      statusCanceled: '已取消',
-      statusInterrupted: '已中断',
-      statusPending: '排队中',
       relativeJustNow: '刚刚',
       relativeMinAgo: '{{n}} 分钟前',
       relativeHourAgo: '{{n}} 小时前',
@@ -2637,7 +2973,6 @@ export const zhCN: Resources = {
   },
   reviews: {
     title: '评审',
-    hint: '人工评审节点产出的设计文档；选词写意见，三个按钮决定下一步。',
     emptyList: '没有评审项。',
     filterPending: '待评审',
     filterAll: '全部',
@@ -2797,7 +3132,6 @@ export const zhCN: Resources = {
   },
   account: {
     title: '我的账户',
-    subtitle: '管理你的密码、会话与个人访问令牌。',
     profile: '基本信息',
     username: '用户名',
     displayName: '显示名',
@@ -2886,7 +3220,6 @@ export const zhCN: Resources = {
   },
   users: {
     title: '用户',
-    hint: '管理用户列表 —— 仅管理员可见。',
     new: '新建用户',
     username: '用户名',
     displayName: '显示名',
@@ -2914,7 +3247,6 @@ export const zhCN: Resources = {
   },
   repos: {
     title: '远端仓缓存',
-    hint: '所有通过 Git URL 启动任务时克隆下来的远端仓库；可手动 Refresh 拉新或 Delete 释放磁盘。',
     loading: '加载中…',
     empty: '还没有任何缓存的远端仓库。在 launcher 的"远端 URL"模式启动一次任务即可建立缓存。',
     colUrl: '远端 URL',
@@ -2963,10 +3295,8 @@ export const zhCN: Resources = {
   },
   settings: {
     title: '设置',
-    hintBacked: '基于 ',
-    hintPatched: '。补丁通过 ',
-    hintRestart: '。标注 restart 的字段需重启守护进程才生效。',
     tabRuntime: '运行时',
+    tabSystemAgents: '系统 Agent',
     tabLimits: '限额',
     tabRecovery: '恢复',
     tabGc: 'GC',
@@ -2994,6 +3324,12 @@ export const zhCN: Resources = {
     languageHint: '切换中文 / 英文，保存即生效，无需刷新页面。',
     languageZhCN: '简体中文',
     languageEnUS: 'English',
+    commitPushLangLabel: '提交信息输出语言',
+    commitPushLangHint:
+      '控制内置提交 agent 生成的 commit message 摘要 / 正文用哪种语言（初始提交信息与被拒后的修复信息）；Conventional-Commits 的 `<type>(<scope>):` 前缀始终保持小写英文。与界面语言独立，缺省 = English。仅对后续新生成的提交生效。',
+    commitPushLangDefault: '跟随默认（English）',
+    commitPushLangZhCN: '简体中文',
+    commitPushLangEnUS: 'English',
     memoryDistillLangLabel: '记忆提炼输出语言',
     memoryDistillLangHint:
       '控制记忆提炼任务生成的候选记忆 title / bodyMd 用哪种语言；[category:xxx] 前缀始终保持小写英文。与界面语言独立，缺省 = English (RFC-041 默认)。仅对后续新批次生效，不回填已有记忆。',
@@ -3007,6 +3343,20 @@ export const zhCN: Resources = {
     memoryDistillRuntimeHint:
       '记忆提炼运行的运行时 profile，其 model 及其它参数都来自该 profile；留空则继承全局默认运行时。',
     runtimeInherit: '继承（全局默认）',
+    systemAgents: {
+      commitPushTitle: '提交推送',
+      commitPushHint: '自动提交时生成 commit message、修复被拒推送的内置 agent（RFC-075）。',
+      memoryTitle: '记忆提取',
+      memoryHint: '从任务产物提炼长期记忆候选的内置 agent（RFC-041）。',
+      mergeTitle: '合并冲突解决',
+      mergeHint: '按节点隔离合并回主干、遇真实三方冲突时解决冲突的内置 agent（RFC-130）。',
+      fusionTitle: '技能融合',
+      fusionHint:
+        '把多个技能融合成一个的内置 aw-skill-merger agent（RFC-101）；运行时写在该 agent 行上，点“保存”与其余内置 agent 一并写入。',
+      fusionRuntime: '融合运行时',
+      fusionRuntimeHint:
+        '技能融合运行的运行时 profile，其 model 来自该 profile；留空则继承全局默认运行时。',
+    },
     restartRequiredTitle: '需要重启守护进程',
     restartRequiredHint:
       '新值已写入 config.json，但 bind host / bind port 仅在下次 agent-workflow start 时生效。请在终端先 agent-workflow stop，再 agent-workflow start。',
@@ -3076,7 +3426,6 @@ export const zhCN: Resources = {
       enabledHint: '开启后会出现在登录页；关闭则隐藏。',
       testOk: '连接成功',
       testFail: '连接失败',
-      testSaveFirst: '请先保存，再运行测试',
       testDetailIssuer: 'issuer：',
       testDetailToken: 'token：',
       testDetailJwks: 'jwks：',
@@ -3106,6 +3455,8 @@ export const zhCN: Resources = {
     skipLink: '跳过引导，直接打开 agent 列表 →',
   },
   common: {
+    searchEllipsis: '搜索…',
+    noMatches: '无匹配项',
     loading: '加载中…',
     open: '打开',
     delete: '删除',
@@ -3159,6 +3510,13 @@ export const zhCN: Resources = {
     fieldProtocolHint: '该二进制遵循哪种运行时协议——opencode 或 Claude Code。',
     fieldBinary: '二进制路径',
     fieldBinaryHint: '可执行文件的绝对路径。留空则用该协议的默认二进制（PATH）。',
+    fieldConfigDirEnv: '配置目录环境变量',
+    fieldConfigDirEnvHint: '自定义二进制读取配置目录路径所用的环境变量名。留空则用协议默认。',
+    fieldConfigDirName: '配置目录名',
+    fieldConfigDirNameHint: '每次运行根目录下的配置目录叶子名（单层目录名）。留空则用协议默认。',
+    configDirEnvInvalid: '必须是合法的环境变量名（字母、数字、下划线，不以数字开头）。',
+    configDirEnvReserved: '该变量名被平台保留（会与注入机制冲突），请换一个。',
+    configDirNameInvalid: '必须是单层目录名：不能含路径分隔符，也不能是 "." 或 ".."。',
     fieldModel: '模型',
     fieldModelHint: '该运行时上的 agent 启动时所用模型。留空则用二进制自身默认。',
     fieldVariant: '变体',
@@ -3185,7 +3543,6 @@ export const zhCN: Resources = {
   },
   agents: {
     title: '代理',
-    hint: '虚拟代理；通过 OPENCODE_CONFIG_CONTENT 在 per-run 注入。',
     newButton: '+ 新建代理',
     emptyList: '还没有代理。创建一个开始吧。',
     colName: '名称',
@@ -3194,21 +3551,12 @@ export const zhCN: Resources = {
     colRuntime: '运行时',
     runtimeDefaultTag: '默认',
     loadingAgent: '加载代理中…',
-    detailHint: '代理定义；保存会写入数据库。',
     saveButton: '保存修改',
     newTitle: '新建代理',
-    newHint: '数据库是唯一真值源；这不是文件路径。',
     createButton: '创建代理',
   },
   skills: {
     title: '技能',
-    hintBefore: '文件系统是真值源。',
-    hintManaged: 'managed',
-    hintMid: ' 类型存放于 ',
-    hintManagedPath: '~/.agent-workflow/skills/',
-    hintBetween: '；',
-    hintExternal: 'external',
-    hintAfter: ' 类型按 task 运行时 symlink 进来。',
     newButton: '+ 新建技能',
     emptyList: '还没有技能。',
     colName: '名称',
@@ -3216,11 +3564,6 @@ export const zhCN: Resources = {
     colDescription: '描述',
     colPath: '路径',
     newTitle: '新建技能',
-    newHintBefore: '选 ',
-    newHintManaged: 'managed',
-    newHintMid: ' 让框架完整托管，或选 ',
-    newHintExternal: 'external',
-    newHintAfter: ' 注册一个已存在的技能目录。',
     tabManaged: '托管',
     tabExternal: '外部',
     fieldName: '名称',
@@ -3368,7 +3711,6 @@ export const zhCN: Resources = {
   },
   mcps: {
     title: 'MCP 服务器',
-    hint: '注册可供 agent 引用的 MCP 服务器。运行时 runner 按 agent 依赖闭包合并注入 OPENCODE_CONFIG_CONTENT.mcp，opencode 子进程启动后建立连接。',
     newButton: '+ 新建 MCP',
     emptyList: '还没有登记的 MCP 服务器。',
     colName: '名称',
@@ -3381,8 +3723,6 @@ export const zhCN: Resources = {
     deleteConfirm: '删除该 MCP？',
     deleteReferenced: '无法删除：以下 agent 仍在引用，请先解除引用：',
     newTitle: '新建 MCP 服务器',
-    newHint: '注册可被 agent 引用的 MCP 服务器；运行时按依赖闭包合并注入到 opencode 子进程。',
-    detailHint: '编辑该 MCP 的配置；保存后所有引用它的 agent 下一次启动时生效。',
     fieldName: '名称',
     fieldNameHint:
       '小写字母 / 数字 / `-` / `_`，需以字母数字开头。同时是工具命名前缀（详见下方说明）。',
@@ -3476,7 +3816,6 @@ export const zhCN: Resources = {
   },
   plugins: {
     title: '插件',
-    hint: '注册 opencode 插件后，可在任意代理的 frontmatter.plugins 中按名称引用。保存即在 ~/.agent-workflow/plugins/ 下急安装，运行时框架以 file://<已缓存路径> 注入到 OPENCODE_CONFIG_CONTENT.plugin，spawn 阶段零联网。',
     newButton: '+ 新建插件',
     emptyList: '尚未登记任何插件。',
     colName: '名称',
@@ -3487,10 +3826,6 @@ export const zhCN: Resources = {
     formTitleNew: '新建插件',
     formTitleEdit: '编辑插件',
     newTitle: '新建插件',
-    newHint:
-      '注册一个 opencode 插件后，代理可在 frontmatter.plugins 中按名引用。保存即执行 `npm install --prefix ~/.agent-workflow/plugins/{id}/` 急安装；运行时框架以 file://<cachedPath> 注入，spawn 阶段不联网。',
-    detailHint:
-      '编辑插件的 spec / options 等字段。改动会在引用该插件的任意 agent 下次启动时生效；正在执行的 task 仍使用旧 cachedPath。',
     fieldName: '名称',
     fieldSpec: 'Spec',
     fieldSpecHint:
@@ -3523,8 +3858,9 @@ export const zhCN: Resources = {
   },
   workflows: {
     title: '工作流',
-    hint: '由 agents 与 wrapper 构成的 DAG。每次启动 task 会快照当前 definition。',
     newButton: '+ 新建工作流',
+    createButton: '创建工作流',
+    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]，至多 128 字。',
     importButton: '导入 YAML',
     emptyList: '还没有工作流。',
     importedAsNew: '已作为新工作流导入。',
@@ -3534,10 +3870,275 @@ export const zhCN: Resources = {
     colName: '名称',
     colVersion: '版本',
     colId: 'ID',
+    errors: {
+      nameRequired: '名称必填。',
+      nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
+    },
+  },
+  // RFC-164 — 工作组资源页（列表 + 快速新建弹窗 / 详情管理页）。
+  workgroups: {
+    title: '工作组',
+    newButton: '+ 新建工作组',
+    emptyList: '还没有工作组。',
+    colName: '名称',
+    colMode: '模式',
+    colMembers: '成员数',
+    colLeader: 'Leader',
+    colDescription: '描述',
+    colUpdated: '更新时间',
+    modeLeaderWorker: 'Leader-Worker',
+    modeFreeCollab: '自由协作',
+    modeDynamicWorkflow: '动态工作流',
+    deleteTitle: '删除工作组',
+    deleteBody: '确认删除工作组「{{name}}」？已启动的任务保留启动时的配置快照，不受影响。',
+    newTitle: '新建工作组',
+    createButton: '创建工作组',
+    renameButton: '重命名',
+    renameTitle: '重命名工作组',
+    renameField: '新名称',
+    sectionBasics: '基本信息',
+    sectionMode: '协作模式',
+    sectionMembers: '成员',
+    sectionSwitches: '协作开关',
+    fieldName: '名称',
+    fieldNameHint: '小写字母 / 数字开头，只允许 [a-z0-9_-]，至多 128 字。',
+    fieldDescription: '描述',
+    fieldInstructions: '工作组章程',
+    fieldInstructionsHint: '可选。每一轮都会注入给每个成员的公共指令。',
+    fieldMode: '模式',
+    modeHintLeaderWorker: 'Leader 逐轮派活给 worker，启动前需指定一名 agent 成员为 leader。',
+    modeHintFreeCollab: '无 leader 的自由协作，三个协作开关强制全开。',
+    modeHintDynamicWorkflow:
+      '内置 agent 根据你的目标把成员编排成一条 workflow，你确认后顺序执行。无聊天室——成员即可编排的 agent 池。',
+    dynamicModeNotice:
+      '动态工作流没有回合制聊天室，故三个协作开关、最大回合、完成确认门均不适用。下方成员即可编排的 agent 池。',
+    readiness: {
+      noAgentMember: '还没有 agent 成员，无法启动。',
+      leaderMissing: 'Leader-Worker 模式需要指定一名 agent 成员为 leader。',
+    },
+    membersEmpty: '还没有成员。用下方按钮添加 agent 或人类成员。',
+    memberTypeAgent: '代理',
+    memberTypeHuman: '人类',
+    memberRemove: '移除',
+    setLeaderButton: '设为 leader',
+    leaderBadge: 'Leader',
+    addAgentMember: '+ 添加 agent 成员',
+    addHumanMember: '+ 添加人类成员',
+    addAgentTitle: '添加 agent 成员',
+    addHumanTitle: '添加人类成员',
+    addMemberConfirm: '添加',
+    panelConfigTitle: '工作组配置',
+    panelAria: '上下文面板',
+    panelClose: '关闭',
+    memberSave: '保存成员',
+    editAgentDefinition: '编辑 agent 定义 →',
+    agentMissing: 'agent 不存在',
+    portsIn: '输入',
+    portsOut: '输出',
+    configSaved: '已保存',
+    memberFieldAgent: '代理名',
+    memberFieldUser: '平台用户',
+    memberFieldDisplayName: '显示名',
+    memberFieldRole: '职责',
+    memberAgentPlaceholder: '可填入尚不存在的代理名（启动时才校验）。',
+    memberUserPlaceholder: '搜索并选择平台用户',
+    memberDisplayNamePlaceholder: '组内唯一，禁止 @、逗号、空白。',
+    memberRolePlaceholder: '组内职责说明（选人依据），可选。',
+    fieldShareOutputs: '产出互见',
+    fieldShareOutputsHint: '把同伴已完成任务的结果摘要注入给每个成员。',
+    fieldDirectMessages: '定向消息',
+    fieldDirectMessagesHint: '成员可以互相 @；@ 会注入给对方并可唤醒对方。',
+    fieldBlackboard: '公共黑板',
+    fieldBlackboardHint: '把公共聊天流（按预算截尾）注入给每个成员。',
+    fcSwitchesNotice: '自由协作模式下三个协作开关强制视为全开；切回 Leader-Worker 后恢复原设置。',
+    fieldMaxRounds: '最大轮数',
+    fieldMaxRoundsHint: '1–500，默认 20。',
+    fieldCompletionGate: '完成门（人工确认）',
+    fieldCompletionGateHint: 'Leader 宣布完成后任务停在待人工确认，而不是直接结束。',
+    launchButton: '启动任务',
+    launch: {
+      title: '启动工作组任务：{{name}}',
+      backToGroup: '← 返回工作组',
+      missingGroup: '缺少工作组名称——请从工作组详情页进入启动页。',
+      fieldGoal: '任务目标',
+      fieldGoalHint: '工作组这次要完成什么。每一轮都会注入给每个成员。',
+      advanced: '高级选项',
+      maxDurationMin: '最长运行时长（分钟）',
+      maxDurationMinHint: '可选。超时后任务被平台取消。',
+      maxTotalTokens: 'Token 总量上限',
+      maxTotalTokensHint: '可选。全任务累计 token 超限后被平台取消。',
+      start: '启动',
+      notReady: '工作组尚未就绪，无法启动：',
+      humanMembersUnsupported: '当前版本暂不支持含人类成员的工作组启动任务，后续版本将开放。',
+      invalidPayload: '启动参数无效，请检查表单后重试。',
+    },
+    dw: {
+      title: '动态编排',
+      generating: '编排 agent 正在生成 workflow…（第 {{n}} 次尝试）',
+      rejectionFeedback: '上轮驳回意见（本轮生成将参照修正）：',
+      awaiting: '生成完成，请审阅下方 workflow。确认后将按图执行；驳回可附意见重新生成。',
+      attemptsUsed: '本轮经 {{n}} 次自动重试后通过校验。',
+      gateTitle: '编排确认门',
+      approve: '确认执行',
+      reject: '驳回重生成',
+      rejectTitle: '驳回并要求重新编排',
+      rejectCommentLabel: '驳回意见',
+      rejectCommentHint: '意见会注入下一轮生成提示，帮助编排 agent 修正方案。',
+      rejectSubmit: '确认驳回',
+      saveAs: '另存为 Workflow',
+      saveAsTitle: '把生成的 workflow 另存为可复用定义',
+      saveAsNameLabel: '名称',
+      saveAsDescLabel: '描述（可选）',
+      saveAsSubmit: '保存',
+      saved: '已另存为 {{name}}。',
+      executing: '已确认，DAG 正在执行——进度见「运行状态」页签。',
+      executingDone: '执行完成——结果见「运行状态」画布与「工作树差异」页签。',
+      executingFailed: '执行失败——失败节点见「运行状态」画布，可从任务头部重试。',
+      canceledNotice: '任务已取消，编排流程终止。',
+      exhausted: 'workflow 生成失败（重试已耗尽）。可在详情页查看错误后重试任务。',
+      previewEmpty: '暂无可预览的生成结果。',
+      canvasPending: '等待编排确认后展示真实 DAG。',
+    },
+    room: {
+      empty: '还没有消息。发一条话启动讨论；@成员名 即直接派单。',
+      roundDivider: '第 {{n}} 回合',
+      authorSystem: '系统',
+      assignedTo: '派给',
+      resultSummary: '结果摘要',
+      viewRun: '查看执行现场',
+      cancelCard: '取消',
+      composerPlaceholder: '向房间发言；@成员名 直接给该成员派单',
+      send: '发送',
+      sending: '发送中…',
+      terminalNotice: '任务已结束，聊天室只读。',
+      mentionsAria: '成员补全',
+      membersTitle: '成员',
+      working: '忙碌',
+      idle: '空闲',
+      gateTitle: '完成门',
+      gateAwaiting: 'Leader 已宣布完成，等待人工确认。',
+      gateConfirm: '确认完成',
+      gateReject: '驳回',
+      gateRejectTitle: '驳回完成申报',
+      gateRejectCommentLabel: '驳回意见',
+      gateRejectCommentHint: '必填。会作为高优先级内容注入给 leader 继续推进。',
+      gateRejectSubmit: '确认驳回',
+      deliverTodo: '待你交付',
+      deliverQuick: '快速回复',
+      deliverQuickPlaceholder: '直接输入交付内容…',
+      deliverForm: '表单交付',
+      deliverFormTitle: '结构化交付',
+      deliverSummaryLabel: '结论摘要',
+      deliverDetailLabel: '详细说明（可选）',
+      deliverSubmit: '交付',
+      configButton: '调整配置',
+      configTitle: '调整任务配置',
+      configSubmit: '保存调整',
+      configEmptyHint: '尚无改动。',
+      configMembersTitle: '成员',
+      configWillRemove: '将移除',
+      configUndoRemove: '撤销移除',
+      configNewChip: '新增',
+      fcListTitle: '任务清单',
+      fcOpen: '待认领',
+      fcActive: '进行中',
+      fcDone: '已完成',
+      fcEmpty: '清单还是空的。',
+      infoTitle: '工作组信息',
+      infoGoal: '目标',
+      infoMode: '模式',
+      infoMaxRounds: '最大轮数',
+      infoSwitches: '协作开关',
+      assignmentStatus: {
+        open: '待认领',
+        dispatched: '已派发',
+        running: '执行中',
+        awaiting_human: '等待人工',
+        delivered: '已交付',
+        done: '完成',
+        failed: '失败',
+        canceled: '已取消',
+      },
+      source: {
+        leader: 'Leader 派单',
+        human: '人工派单',
+        self_claim: '自领',
+        system: '系统',
+      },
+    },
+    errors: {
+      nameRequired: '名称必填。',
+      nameInvalid: '名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
+      agentNameRequired: 'agent 成员必须填写代理名。',
+      userRequired: '人类成员必须选择平台用户。',
+      displayNameRequired: '显示名必填。',
+      displayNameInvalid: '显示名不能包含 @、逗号或空白字符。',
+      displayNameTooLong: '显示名最长 64 个字符。',
+      displayNameDuplicate: '显示名在组内必须唯一。',
+      leaderMustBeAgent: 'Leader 只能是 agent 成员。',
+      maxRoundsInvalid: '最大轮数须为 1–500 的整数。',
+      dynamicNoHumanMembers: '动态工作流模式仅允许 agent 成员——请先移除人类成员再保存。',
+    },
+  },
+  scheduled: {
+    repairBadge: '需修复',
+    title: '定时任务',
+    empty: '还没有定时任务。在工作流启动页配好参数后选择「存为定时任务」。',
+    new: '新建',
+    colName: '名称',
+    colSchedule: '周期',
+    colNext: '下次触发',
+    colStatus: '最近触发',
+    colEnabled: '启用',
+    enabledYes: '开',
+    enabledNo: '关',
+    lastNever: '未触发',
+    last_launched: '已启动',
+    last_failed: '失败',
+    saveAsScheduled: '存为定时任务',
+    dialogTitle: '存为定时任务',
+    fieldName: '定时任务名称',
+    fieldMode: '重复',
+    fieldEvery: '每隔',
+    fieldUnit: '单位',
+    fieldAt: '时刻',
+    fieldDays: '星期',
+    fieldDayOfMonth: '每月几号',
+    dayOfMonthHint: '没有该日期的月份将跳过。',
+    tzNote: '按你的时区：{{tz}}',
+    modeInterval: '间隔',
+    modeDaily: '每天',
+    modeWeekly: '每周',
+    modeMonthly: '每月',
+    unitMinutes: '分钟',
+    unitHours: '小时',
+    unitDays: '天',
+    dow: { 0: '周日', 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六' },
+    preview: '下次 3 次触发',
+    save: '保存',
+    saving: '保存中…',
+    cancel: '取消',
+    runHistory: '触发历史',
+    noRuns: '还没有触发记录。',
+    autoDisabled: '连续启动失败已自动停用。重新启用可恢复。',
+    runNow: '立即运行一次',
+    edit: '编辑名称与周期',
+    editTitle: '编辑定时任务',
+    enable: '启用',
+    disable: '停用',
+    delete: '删除',
+    deleteConfirm: '确认删除？',
+    uploadUnsupported: '需要文件上传的工作流不支持定时。',
+    editConfig: '编辑任务配置',
+    degradedBanner:
+      '此定时任务的存储配置已不可读（旧版格式或数据损坏）——用「编辑任务配置」重新填写并保存整份配置即可修复；也可以禁用或删除该定时任务。',
+    editConfigTitle: '编辑任务配置：{{name}}',
+    saveConfig: '保存任务配置',
+    backToSchedule: '← 返回定时任务',
+    collabLoadError: '无法加载协作者，请重试后再保存（避免误删已有协作者）。',
   },
   tasks: {
     title: '任务',
-    hint: '任务在隔离的 git worktree 中运行。点击行查看节点状态与 worktree diff。',
     filterAll: '全部',
     emptyList: '没有匹配当前过滤的任务。',
     colId: 'ID',
@@ -3573,6 +4174,7 @@ export const zhCN: Resources = {
     // RFC-066: multi-repo summary on the task detail page.
     multiRepoSummary: '{{count}} 个仓库',
     cancelButton: '取消任务',
+    relaunchButton: '再次启动',
     resumeButton: '继续任务',
     resuming: '继续中…',
     // RFC-109 — 同步最新工作流并继续
@@ -3791,6 +4393,9 @@ export const zhCN: Resources = {
     tabFeedback: '留言',
     tabQuestions: '问题',
     tabTimeline: '评论区',
+    tabChatroom: '聊天室',
+    tabDwOrchestration: '动态编排',
+    workgroupBadge: '工作组',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',
     worktreeFilesOversized: '文件过大（{{size}}），超过 {{limit}} 阈值，未预览。',
@@ -3831,9 +4436,6 @@ export const zhCN: Resources = {
   },
   editor: {
     newTitle: '新建工作流',
-    newHint: '从左侧面板拖拽节点到画布即可创建。',
-    create: '创建',
-    creating: '创建中…',
     fieldName: '名称',
     fieldDescription: '描述',
     loadingWorkflow: '加载工作流中…',
@@ -3859,21 +4461,21 @@ export const zhCN: Resources = {
     paletteFanOutDesc: '多进程（按 sourcePort 分片）',
     paletteAgentFallbackDesc: '代理节点',
     paletteWrappers: '包装器',
-    paletteWrapperGitLabel: '⎈ Git 包装器',
+    paletteWrapperGitLabel: 'Git 包装器',
     paletteWrapperGitDesc: '在子节点前后快照 diff',
-    paletteWrapperLoopLabel: '⟳ 循环包装器',
+    paletteWrapperLoopLabel: '循环包装器',
     paletteWrapperLoopDesc: '重复执行子节点直到退出条件满足',
-    paletteWrapperFanoutLabel: '⫶ 分片包装器',
+    paletteWrapperFanoutLabel: '分片包装器',
     paletteWrapperFanoutDesc: '把 list<T> 端口的每个元素分配给内部子图独立执行；用聚合 agent 收口',
     paletteIo: 'IO',
-    paletteInputLabel: '↳ 输入',
+    paletteInputLabel: '输入',
     paletteInputDesc: 'launcher 表单值',
-    paletteOutputLabel: '⤴ 输出',
+    paletteOutputLabel: '输出',
     paletteOutputDesc: '任务详情页输出面板',
     paletteHuman: '人工',
-    paletteReviewLabel: '⚖ 评审',
+    paletteReviewLabel: '评审',
     paletteReviewDesc: '挂在 markdown port 下游，让人评审后再继续。',
-    paletteClarifyLabel: '⚡ 反问',
+    paletteClarifyLabel: '反问',
     paletteClarifyDesc: '让 agent 在无法决断时主动反问；从节点左侧 input 端往 agent 上拖即可挂接。',
     menuPaste: '粘贴',
     menuSelectAll: '全选',
@@ -3887,11 +4489,61 @@ export const zhCN: Resources = {
     nodeTitleUnsetAgent: '(未设置代理)',
     nodeTitleUnsetKey: '(未设置 key)',
   },
+  taskWizard: {
+    launchEntry: '启动任务',
+    title: '新建任务',
+    titleScheduled: '新建定时任务',
+    titleEdit: '编辑定时任务配置',
+    stepMode: '执行方式',
+    stepSpace: '执行空间',
+    stepContent: '任务内容',
+    stepConfirm: '确认',
+    kindLabel: '执行方式',
+    kindWorkflow: '工作流',
+    kindAgent: 'Agent',
+    kindWorkgroup: '工作组',
+    kindHintWorkflow: '按工作流定义的输入启动一次编排任务。',
+    kindHintAgent: '把任务描述直接交给一个 Agent 执行，支持反问。',
+    kindHintWorkgroup: '把使命交给一个工作组协同完成。',
+    objectWorkflow: '选择工作流',
+    objectAgent: '选择 Agent',
+    objectWorkgroup: '选择工作组',
+    objectPlaceholder: '请选择…',
+    objectEmpty: '暂无可选对象',
+    workgroupNotReady: '未就绪（缺可用 Agent 成员或负责人）',
+    spaceLabel: '执行空间',
+    spaceRemote: '远端仓库',
+    spaceScratch: '临时空间',
+    spaceScratchDesc: '平台建一个空 Git 仓库，产出以 diff 交付',
+    spaceRemoteDesc: '克隆远端仓库（URL），在其工作树上执行',
+    spaceScratchHint:
+      '平台会创建一个空 Git 仓库作为工作目录；产出以对空仓的 diff 形式交付，目录保留可手动取用。',
+    contentDescription: '任务描述',
+    contentDescriptionHint: '将作为提示词直接交给 Agent。',
+    advanced: '高级设置',
+    allowClarify: '允许反问',
+    allowClarifyHint: 'Agent 可在需要时向你提问（也可以不问直接产出）。',
+    maxDurationMin: '时长上限（分钟）',
+    maxDurationMinHint: '超时后任务自动取消；留空不限制。',
+    maxTotalTokens: 'Token 上限',
+    maxTotalTokensHint: '超出后任务自动取消；留空不限制。',
+    edit: '修改',
+    launch: '启动任务',
+    saveScheduled: '存为定时任务',
+    saveConfig: '保存配置',
+    limitInvalid: '上限必须为正数（Token 上限须为整数）。',
+    summaryCollaborators: '{{count}} 位协作者',
+    clarifyOff: '反问已关闭',
+    kindLocked: '编辑定时任务时执行方式不可更改（对象可在同类型内更换）。',
+    degradedBanner: '该定时任务存储的配置无法解析（旧格式或已损坏）；请重新填写并保存以修复。',
+  },
+  stepper: {
+    progress: '创建步骤',
+    back: '上一步',
+    next: '下一步',
+  },
   launch: {
     title: '启动：{{name}}',
-    hintBefore: '选好仓库 + 分支，填好工作流 inputs，然后提交。提交时会在 ',
-    hintCode: '~/.agent-workflow/worktrees/<repo>/<taskId>',
-    hintAfter: ' 处创建一个 worktree。',
     backToEditor: '← 返回编辑器',
     fieldTaskName: '任务名称',
     fieldTaskNameHint: '用于在列表和收件箱里区分本次任务，最多 255 字符（首尾空格会被裁剪）。',
@@ -4127,12 +4779,33 @@ export const zhCN: Resources = {
     parseError: '不是合法的 kind（如 list<path<md>>）',
     signalHint: '仅控制流——不携带数据',
   },
+  capabilityCard: {
+    inputs: '输入',
+    outputs: '输出',
+    prompt: '提示词：',
+    required: '必填',
+    noneDeclared: '（未声明）',
+  },
   agentForm: {
+    sectionBasics: '基本信息',
+    sectionPrompt: '提示词（正文）',
+    sectionOutputs: '输入与输出',
+    sectionDependencyGraph: '闭包依赖（预览）',
+    sectionResources: '资源与依赖引用',
+    sectionAdvanced: '高级设置',
     fieldName: '名称',
     fieldNameHint: 'kebab-case；用于 /agents/:name URL。',
     fieldNamePlaceholder: '例如 code-fixer',
     fieldDescription: '描述',
     fieldDescriptionPlaceholder: '一行简介，会显示在列表中',
+    fieldInputs: '输入端口',
+    fieldInputsHint:
+      '声明式输入端口（名称 + 类型 + 可选的「必填」标记）。可选——输入端口会展示在能力卡上，供 leader / 编排 agent 了解该 agent 消费什么；无论此处声明与否，agent 仍通过 {{token}} 模板接收提示词。',
+    fieldInputsPlaceholder: '输入端口名后按 Enter',
+    inputsValidate: '只允许小写字母 + 下划线',
+    inputKindLabel: '{{port}} 的输入类型',
+    inputRequired: '必填',
+    inputRequiredLabel: '将 {{port}} 标记为必填',
     fieldOutputs: '输出端口',
     fieldOutputsHint:
       '在 <port> envelope 中声明的端口名。可为每个端口选择类型；选「文件路径」并把扩展名设为 Markdown（.md）时，端口内容是 worktree 内的 .md 相对路径，框架会自动读取文件内容。',
@@ -4172,7 +4845,6 @@ export const zhCN: Resources = {
     pluginsPickerLoading: '加载中…',
     pluginsPickerEmpty: '暂无可选插件（已全部添加 / 仓库为空）',
     pluginsPickerLoadFailed: '加载插件列表失败；仍可在下方手动输入。',
-    fieldDependencyTree: '闭包依赖（预览）',
     fieldSyncOutputsOnIterate: '文档迭代期间是否同步刷新本代理生成的其他文档',
     fieldSyncOutputsOnIterateHint:
       '仅当本代理 outputs 含 ≥ 2 个 markdown / markdown_file 时实际生效；关闭则在用户点"返回修改"时只重生被评审的那一份，其他文档沿用上一版本。',
@@ -4197,7 +4869,6 @@ export const zhCN: Resources = {
     fieldFrontmatterExtraHint: '除 name/description/outputs/permission/skills 之外的其它键。',
     fieldBody: '正文 (Markdown)',
     bodyPlaceholder: 'Agent 系统提示词；Markdown。',
-    rawBodySummary: '裸 markdown（无预览）',
     importButton: '从 agent.md 导入',
     autodetect: {
       button: '自动识别依赖',
@@ -4412,6 +5083,9 @@ export const zhCN: Resources = {
     commitPushDiffMaxBytes: 'commit message diff 字节上限',
     commitPushDiffMaxBytesHint:
       '喂给生成 commit message 的 diff 截断阈值（默认 16384；0 表示只用 --stat）。',
+    mergeAgentRuntime: '合并冲突运行时',
+    mergeAgentRuntimeHint:
+      '内置合并冲突解决 agent 运行的运行时 profile，其 model 来自该 profile；留空则继承全局默认运行时。',
     maxConcurrentNodes: '最大并发节点数',
     multiProcessConc: 'Multi-process 子进程并发',
     logLevel: '日志级别',
@@ -4447,7 +5121,7 @@ export const zhCN: Resources = {
     bindHost: '监听 host',
     bindHostHint: '需要重启。默认 127.0.0.1 使 daemon 仅本机可达。',
     bindPort: '监听 port',
-    bindPortHint: '需要重启。0 让启动时自动挑空闲端口。',
+    bindPortHint: '需要重启。留空 / 0 让启动时自动挑空闲端口（此处会回填当前实际端口）。',
     modelLoadFailed: '模型列表加载失败 — 已降级为手动输入。',
     modelLoading: '加载模型列表…',
     modelRefresh: '刷新',
@@ -4492,9 +5166,13 @@ export const zhCN: Resources = {
   },
   reviewNode: {
     label: '评审',
+    navAwaiting: '点击打开评审',
+    navDecided: '点击查看最近评审结论',
   },
   clarifyNode: {
     label: '反问',
+    navAwaiting: '点击回答反问',
+    navAnswered: '点击查看反问记录',
   },
   crossClarifyNode: {
     label: '跨代理反问',
@@ -4509,6 +5187,7 @@ export const zhCN: Resources = {
     'task-not-resumable': '该任务还在运行或未失败，无法 resume。',
     'task-still-running': '任务还在运行，请先取消。',
     'workflow-import-conflict': '导入冲突：已存在同 id 的工作流。',
+    'workflow-name-invalid': '工作流名称须以小写字母 / 数字开头，只允许 [a-z0-9_-]，长度 ≤ 128。',
     'config-invalid': '配置不合法。',
     'task-invalid': '任务输入不合法。',
     'skill-source-path-missing': '路径不存在。',
@@ -4516,6 +5195,20 @@ export const zhCN: Resources = {
     'skill-source-path-in-use': '该父目录已登记。',
     'skill-source-children-referenced': '该父目录下的部分子技能仍被代理引用，请先解绑。',
     'skill-source-readonly': '此技能由父目录纳管，请在外部目录里编辑文件。',
+    // RFC-164 PR-4: workgroup room endpoints.
+    'workgroup-task-terminal': '任务已结束，无法再发送消息。',
+    'workgroup-assignment-not-cancelable': '该派单已开始执行或已结束，无法取消。',
+    // RFC-164 PR-5: 交付 / 确认门 / 中途改配置。
+    'workgroup-delivery-invalid': '交付内容无效：正文或结论摘要必填其一。',
+    'workgroup-delivery-not-human': '只有人类成员的派单可以交付。',
+    'workgroup-delivery-conflict': '该派单不在待交付状态，可能已被交付或取消。',
+    'workgroup-confirm-invalid': '确认参数无效：驳回必须填写意见。',
+    'workgroup-gate-not-open': '完成门当前未开启，无法确认或驳回。',
+    'workgroup-config-invalid': '配置调整参数无效。',
+    'workgroup-config-leader-immutable': 'Leader 成员不可移除。',
+    'workgroup-config-no-agents': '移除后将没有任何 agent 成员，无法保存。',
+    'workgroup-config-duplicate-member': '成员显示名与现有成员重复。',
+    'workgroup-config-empty': '没有任何改动可保存。',
     fallback: '请求失败',
   },
   clarify: {
@@ -4526,7 +5219,6 @@ export const zhCN: Resources = {
     },
     list: {
       title: '反问',
-      hint: 'Agent 发起的反问澄清；回答后流程会继续往下走。',
       filter: { awaiting: '待回答', answered: '已回答', all: '全部' },
       empty: '没有反问项。',
       colTask: '任务',
@@ -4621,21 +5313,6 @@ export const zhCN: Resources = {
     multiSourcePendingLinkLabel: '打开',
     abandonedChip: '反馈未送达 (abandoned)',
     abandonedTooltip: 'designer 任务在反馈被消费前已失败。需重启任务才能重试。',
-    // RFC-059: per-question scope picker文案（每道题旁的设计者/反问者切换）。
-    questionScope: {
-      label: '作用域',
-      designer: '设计者',
-      questioner: '反问者',
-      designerTooltip: '答案同时送达设计者与反问者（设计者用来更新文档）',
-      questionerTooltip: '答案只发给反问者；设计者不被通知、不重跑',
-      shortcutHint: 'Q/W 切换当前题的作用域（Q=设计者，W=反问者）',
-    },
-    submitHint: {
-      allDesigner: '提交后将触发设计者重跑（设计者收到全部 {{n}} 题），反问者随后用全部 Q&A 重跑',
-      allQuestioner: '提交后只重跑反问者（含全部 {{n}} 题与答案），设计者不参与',
-      mixed:
-        '提交后先触发设计者重跑（设计者仅收 {{d}} 题），反问者随后用全部 {{total}} 题与答案重跑',
-    },
     inspector: {
       title: '跨 agent 反问节点',
       sessionModeForQuestioner: 'questioner 重跑 session',
@@ -4656,7 +5333,7 @@ export const zhCN: Resources = {
       inLoopNo: '⚠ 未在 wrapper-loop 内 — 反问轮数不会被限制，建议套一层 loop。',
     },
     canvas: {
-      paletteLabel: '⚡ 跨代理反问',
+      paletteLabel: '跨代理反问',
       paletteHint: '拖到下游反问 agent 上自动建反问通道；再手动连 to_designer → 上游 designer。',
       handleLabel: {
         toQuestioner: '→ 反问者',
@@ -4698,7 +5375,6 @@ export const zhCN: Resources = {
   },
   memory: {
     title: '平台长期记忆',
-    hint: '从过往反问、评审与反馈中沉淀的长期上下文，注入到每次同维度的 agent 运行。',
     adminOnly: '仅管理员可审批',
     empty: '暂无沉淀',
     confirmDelete: '永久删除这条记忆？不可恢复。',
@@ -5160,8 +5836,9 @@ export const zhCN: Resources = {
     target: '处理节点',
     noTarget: '未指定',
     reassign: '改派处理节点',
-    collapsedToQuestioner: '该题已改由提问节点承接（反问者），不再单独安排设计者处理。',
-    collapsedToDesigner: '该题已改由设计节点统一承接，提问节点将收到回执知会，不再单独续跑。',
+    // RFC-163 — 下发前分组卡的处理节点行（提问节点 + 增派修订 handler）。
+    handlerAsker: '提问节点（自己续跑）',
+    handlerDesigner: '增派修订',
     autoDispatchQueued: '自动下发排队中',
     confirm: '确认',
     stage: '加入待下发',

@@ -14,6 +14,7 @@ import { SequenceDiagram } from './SequenceDiagram'
 import { LoadingState } from '@/components/LoadingState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { EmptyState } from '@/components/EmptyState'
+import { Segmented } from '@/components/Segmented'
 
 export interface CallChainRoot {
   /** `${filePath}#${qualifiedName}` of the root (changed) method. */
@@ -39,24 +40,16 @@ export function CallChainView({ taskId, root }: { taskId: string; root: CallChai
           </span>
           <span className="callchain__root-label">{root.label}</span>
         </div>
-        <div
-          className="segmented callchain__mode"
-          role="radiogroup"
-          aria-label={t('tasks.structCallMode')}
-        >
-          {(['tree', 'sequence'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={mode === m}
-              className={`segmented__option ${mode === m ? 'segmented__option--active' : ''}`}
-              onClick={() => setMode(m)}
-            >
-              {t(m === 'tree' ? 'tasks.structCallModeTree' : 'tasks.structCallModeSequence')}
-            </button>
-          ))}
-        </div>
+        <Segmented<ChainMode>
+          value={mode}
+          onChange={setMode}
+          options={(['tree', 'sequence'] as const).map((m) => ({
+            value: m,
+            label: t(m === 'tree' ? 'tasks.structCallModeTree' : 'tasks.structCallModeSequence'),
+          }))}
+          ariaLabel={t('tasks.structCallMode')}
+          className="callchain__mode"
+        />
       </div>
       {mode === 'tree' ? (
         <CallLevel taskId={taskId} parentRef={root.ref} ancestors={new Set([root.ref])} depth={1} />

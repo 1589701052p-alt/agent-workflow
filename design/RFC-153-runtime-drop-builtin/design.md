@@ -114,6 +114,28 @@ export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
    删/建同名的时间窗互斥），故 canonical (name,protocol) 判据准确。
 7. **升级路径**：删列 rebuild 保留所有行数据（含 admin 已配 model / binary）。
 
+> **实现门修订（Codex adversarial-review 2026-07-08，三轮 5 finding）**：预置行变可删后，删除
+> 完整性有多个新暴露的缺口。第一轮 1 high + 1 medium，第二轮 2 high，第三轮 1 medium（逐轮对上轮
+> 修复深审、逐步收敛）。
+
+8. **删被 config per-feature 引用**〔impl-F1〕：`findRuntimeReferences` 原只扫 `agents.runtime` +
+   `defaultRuntime`，漏了 `memoryDistillRuntime` / `commitPushRuntime` / `mergeAgentRuntime`（经
+   `resolveInternalAgentRuntime` 消费）——删被它们引用的 runtime → 内部 job 静默落协议名 fallback。
+   修：签名重构为 `RuntimeRefConfig`（4 字段），检查全覆盖并报出具体字段。
+9. **all-delete 复活**〔impl-F2〕：seed「空表才建」判据不 durable，可删空表 → 下次启动复活预置
+   行。修：`deleteRuntime` 加 last-row backstop（`length <= 1` → 409 `runtime-last`），表永不空。
+10. **stale default 仍能删 opencode**〔impl-F1 第二轮深化〕：第一轮只折叠 unset default→opencode，
+    但 resolver 对**任何** unknown/dangling default 都 fallback opencode。修：删前按 dispatch 同款算
+    effective default（configured 解析到行才算，否则 = opencode），dangling 时仍保护 opencode。
+11. **删除非原子**〔impl-F2 第二轮深化〕：`deleteRuntime` 的 read/count/check/delete 分开 await，
+    并发删两行都看到 count===2 → 表空。修：全部收进单个 `dbTxSync` 同步事务（[记忆] bun:sqlite
+    async 非事务，RFC-144 同款）；`findRuntimeReferences` 内联进 tx（单一实现，无外部调用者）。源码
+    原子契约有测试锁定。
+12. **missing 内置名 default 误判**〔impl-F1 第三轮深化〕：第二轮 effective default 只认「真实行」，
+    漏了 `resolveRuntimeByName` 的 `BUILTIN_NAMES` fallback——missing 'claude-code' default resolve 到
+    claude-code 协议本身（非 opencode），被误当 opencode → 误挡删 opencode。修：effective default 加
+    `|| BUILTIN_NAMES.has(cfg)`，完全镜像 resolveRuntimeByName 三分支（真实行 / 内置名保持 / else opencode）。
+
 ## 测试策略
 
 - **服务**：seed 空表建两行 / 非空 no-op（删过预置行也不补）；删除预置 runtime 成功；删
@@ -125,6 +147,13 @@ export async function seedBuiltinRuntimes(db: DbClient): Promise<void> {
     **不**把 config.opencodePath 写进它（protocol 不匹配）。
   - **F3**：同上撞名行的 profile **不**让 `assertConfigDefaultsMigrated` 放行（仍按真正的
     协议默认行判 → legacy 存在且真预置行 profile 全空则仍 abort）。
+- **实现门 2 回归**：
+  - **impl-F1**：`memoryDistillRuntime` / `commitPushRuntime` / `mergeAgentRuntime` 任一引用某
+    runtime 时删它 → 409 `runtime-in-use`；stale/dangling default 下删 opencode（表 >1 行）→ 409
+    （effective default fallback 保护），非 fallback 行可删；**missing 内置名 default**（claude-code
+    行已删、config 仍指它）→ opencode 可删（effective default = claude-code，非 opencode）。
+  - **impl-F2**：config.defaultRuntime 悬空时删到只剩 1 行 → 末次删 409 `runtime-last`；
+    `deleteRuntime` 源码含 `dbTxSync` 且无 per-statement `await db.select/delete`（原子契约源码锁）。
 - **model 端到端**（呼应用户原问）：给预置 opencode runtime 配 model → freeze 进
   `runtime_params_json` → `buildInlineConfig` 带上 `agent.opencode.model`；不配 → 省略。
 - **迁移**：0078 rebuild 保数据 + `builtin` 列消失；`upgrade-rolling` journal 77→78 +

@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import type { MemoryScope } from '@agent-workflow/shared'
 import { ChipsInput } from '@/components/ChipsInput'
 import { Field, TextArea, TextInput } from '@/components/Form'
+import { Segmented } from '@/components/Segmented'
 import { Select } from '@/components/Select'
 
 export interface MemoryFormState {
@@ -171,31 +172,15 @@ export function MemoryFormFields(props: MemoryFormFieldsProps) {
   return (
     <div className="memory-form" data-testid="memory-form">
       <Field label={t('memory.form.scopeType')} group>
-        <div
-          role="radiogroup"
-          aria-label={t('memory.form.scopeType')}
-          className="segmented memory-form__scope-segmented"
-        >
-          {SCOPE_OPTIONS.map((s) => {
-            const active = state.scopeType === s
-            return (
-              <button
-                key={s}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={disabled}
-                className={`segmented__option ${active ? 'segmented__option--active' : ''}`.trim()}
-                onClick={() => {
-                  if (s !== state.scopeType) props.onScopeType(s)
-                }}
-                data-testid={`memory-form-scope-${s}`}
-              >
-                {t(`memory.scope.${s}`)}
-              </button>
-            )
-          })}
-        </div>
+        <Segmented<MemoryScope>
+          value={state.scopeType}
+          onChange={props.onScopeType}
+          options={SCOPE_OPTIONS.map((s) => ({ value: s, label: t(`memory.scope.${s}`) }))}
+          ariaLabel={t('memory.form.scopeType')}
+          className="memory-form__scope-segmented"
+          disabled={disabled}
+          testidPrefix="memory-form-scope"
+        />
       </Field>
 
       <Field label={t('memory.form.scopeId')} group>

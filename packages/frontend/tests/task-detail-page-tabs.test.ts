@@ -24,9 +24,13 @@ describe('TaskDetailPage tab structure', () => {
     expect(SRC).not.toMatch(/className="page page--wide"/)
   })
 
-  test('renders a tab bar with role="tablist" + .task-detail__tab-bar', () => {
-    expect(SRC).toMatch(/role="tablist"/)
-    expect(SRC).toMatch(/className="task-detail__tab-bar tabs"/)
+  test('renders the shared <TabBar> carrying .task-detail__tab-bar', () => {
+    // RFC-150 PR-3: the hand-rolled `<nav role="tablist" class="task-detail__tab-bar
+    // tabs">` became the shared <TabBar className="task-detail__tab-bar"> —
+    // role=tablist/tab and the `tabs` class chain now come from the primitive
+    // (locked in tab-bar.test.tsx), so anchor on the TabBar wiring instead.
+    expect(SRC).toMatch(/<TabBar\b/)
+    expect(SRC).toMatch(/className="task-detail__tab-bar"/)
   })
 
   test('renders six panes keyed by `hidden={tab !== ...}` (one per TaskDetailTab)', () => {
@@ -87,8 +91,12 @@ describe('TaskDetailPage tab structure', () => {
     // RFC-065 added the worktree-files pane between outputs and worktree-diff.
     // RFC-120 added the task-questions pane (board) after feedback.
     // RFC-W002 added the timeline (评论区) pane after task-questions.
+    // RFC-164 PR-4 added the workgroup chatroom pane (first; content gated on
+    // isWorkgroup - see rfc164-workgroup-tabs.test.ts for its wiring locks).
+    // RFC-167 PR-3 added the dw-orchestration pane (dynamic-workflow confirm
+    // gate; content gated on isDynamicWorkgroup).
     const paneCount = (SRC.match(/className="task-detail__pane"/g) ?? []).length
-    expect(paneCount).toBe(10)
+    expect(paneCount).toBe(12)
     expect(SRC.match(/className="task-detail__panes"/g)?.length).toBe(1)
   })
 })

@@ -27,6 +27,7 @@ import { parseEvent } from './events'
 import { buildOpencodeSpawn } from './spawn'
 import { buildInlineConfig } from './inlineConfig'
 import { pickRuntimeHead } from '../head'
+import { stageSkills } from '../stageSkills'
 import { MIN_OPENCODE_VERSION, probeOpencode } from '@/util/opencode'
 import { listOpencodeModels } from '@/util/opencode-models'
 import { captureChildSessions } from '@/services/sessionCapture'
@@ -116,6 +117,13 @@ export const opencodeDriver: RuntimeDriver = {
   // inline-config build → RFC-029 inventory plugin append → RFC-041 memory
   // block append → serialize → spawn. async for materializeInventoryPlugin.
   async buildBusinessSpawn(ctx: BusinessNodeSpawnContext): Promise<SpawnPlan> {
+    // RFC-154: stage framework skills into THIS runtime's config dir (leaf name
+    // from the frozen profile; was the runner's runtime-blind `.opencode`
+    // preamble). Strict mode: a staging failure fails the spawn (runner §6 maps
+    // the throw to runtime-spawn-failed) — a silently missing skill is worse.
+    const runDir = join(ctx.runRoot, ctx.configDir.name)
+    stageSkills(runDir, ctx.skills, ctx.log)
+
     // RFC-022/028/031: primary + closure dependents + mcp + plugin entries.
     const inlineConfig = buildInlineConfig(
       ctx.agent,
@@ -180,7 +188,8 @@ export const opencodeDriver: RuntimeDriver = {
       prompt: ctx.prompt,
       resumeSessionId: ctx.resumeSessionId,
       worktreePath: ctx.worktreePath,
-      runDir: join(ctx.runRoot, '.opencode'),
+      runDir,
+      configDirEnv: ctx.configDir.env, // RFC-154: frozen env-var name
       inlineConfigSerialized: serializedInline,
       inventoryOutPath,
       gitUserName: ctx.gitUserName,

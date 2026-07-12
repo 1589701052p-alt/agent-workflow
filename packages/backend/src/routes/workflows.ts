@@ -7,7 +7,11 @@
 //
 // YAML import/export endpoints land in P-4-08.
 
-import { CreateWorkflowSchema, UpdateWorkflowSchema } from '@agent-workflow/shared'
+import {
+  CreateWorkflowSchema,
+  UpdateWorkflowSchema,
+  WorkflowNameSchema,
+} from '@agent-workflow/shared'
 import type { Hono } from 'hono'
 import { actorOf, type Actor } from '@/auth/actor'
 import type { AppDeps } from '@/server'
@@ -87,6 +91,19 @@ export function mountWorkflowRoutes(app: Hono, deps: AppDeps): void {
     const existing = await loadVisibleWorkflow(actor, id)
     assertNotBuiltin('workflow', existing) // RFC-104: built-ins are read-only
     await requireResourceOwner(deps.db, actor, 'workflow', existing)
+    // 2026-07-10 naming unification: renames follow the workgroup slug rules,
+    // but ONLY on change — auto-save PUTs echoing a stored legacy free-form
+    // name keep working (grandfather; see WorkflowNameSchema doc).
+    if (parsed.data.name !== undefined && parsed.data.name !== existing.name) {
+      const nameOk = WorkflowNameSchema.safeParse(parsed.data.name)
+      if (!nameOk.success) {
+        throw new ValidationError(
+          'workflow-name-invalid',
+          'workflow name must start with [a-z0-9] and contain only [a-z0-9_-] (max 128 chars)',
+          { issues: nameOk.error.issues },
+        )
+      }
+    }
     // RFC-099 (D15): only NEWLY-added agent references are checked.
     if (parsed.data.definition !== undefined) {
       const newNames = diffNewNames(

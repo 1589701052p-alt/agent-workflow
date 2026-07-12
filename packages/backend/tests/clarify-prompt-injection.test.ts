@@ -14,50 +14,53 @@ import { buildClarifyProtocolBlock, renderUserPrompt } from '@agent-workflow/sha
 
 const PROMPT_TS_PATH = resolve(__dirname, '../../shared/src/prompt.ts')
 
-describe('RFC-023 prompt token substitution', () => {
-  test('replaces all four __clarify_*__ tokens when context is set', () => {
+describe('RFC-023/132 prompt token substitution', () => {
+  // RFC-148 (RFC-132 收尾): __clarify_questions__/__clarify_answers__ tokens
+  // and the round-grouped auto-append sections are GONE — the flat
+  // `## Clarify Q&A` block is the single injection surface. The two live
+  // tokens keep substituting.
+  test('replaces the two live __clarify_*__ tokens when context is set', () => {
     const out = renderUserPrompt({
-      promptTemplate:
-        'iter={{__clarify_iteration__}} remaining={{__clarify_remaining__}}\nQ:\n{{__clarify_questions__}}\nA:\n{{__clarify_answers__}}',
+      promptTemplate: 'iter={{__clarify_iteration__}} remaining={{__clarify_remaining__}}',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
       clarifyContext: {
-        questionsBlock: '### Q1: which db?',
-        answersBlock: '### Q1\nSelected: "Postgres"',
+        flatBlock: '## Clarify Q&A\n\n1. [q1] which db?\n   Answer: Postgres',
         iteration: '1',
         remaining: '4',
       },
     })
     expect(out).toContain('iter=1 remaining=4')
-    expect(out).toContain('### Q1: which db?')
-    expect(out).toContain('Selected: "Postgres"')
+    expect(out).toContain('1. [q1] which db?')
   })
 
-  test('auto-appends `## Clarify Q&A` sections when tokens are not referenced in the template', () => {
+  test('appends the flat block verbatim (owns its own heading)', () => {
     const out = renderUserPrompt({
       promptTemplate: 'Please continue based on prior clarifications.',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
       clarifyContext: {
-        questionsBlock: '### Q1: which db?',
-        answersBlock: '### Q1\nSynthesis: User chose: "Postgres"',
+        flatBlock: '## Clarify Q&A\n\n1. [q1] which db?\n   Answer: Postgres',
         iteration: '1',
         remaining: '',
       },
     })
-    expect(out).toContain('## Clarify Q&A — Prior Rounds (Questions)')
-    expect(out).toContain('## Clarify Q&A — Prior Rounds (Answers)')
+    expect(out).toContain('## Clarify Q&A')
+    expect(out).toContain('Answer: Postgres')
+    // legacy round-grouped headings must never come back
+    expect(out).not.toContain('Prior Rounds (Questions)')
+    expect(out).not.toContain('Prior Rounds (Answers)')
   })
 
-  test('omits auto-append sections when blocks are empty', () => {
+  test('omits clarify sections when flat block is empty', () => {
     const out = renderUserPrompt({
       promptTemplate: 'plain run',
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      clarifyContext: { questionsBlock: '', answersBlock: '', iteration: '0', remaining: '' },
+      clarifyContext: { flatBlock: '', iteration: '0', remaining: '' },
     })
     expect(out).not.toContain('## Clarify Q&A')
   })
@@ -95,14 +98,14 @@ describe('RFC-023 prompt token substitution', () => {
   // whenever inputs looked plausible. Do not weaken these assertions without
   // re-confirming the regression (agent biased toward output instead of
   // asking back, even when the user wired a clarify channel).
-  describe('bi-modal trailing block when hasClarifyChannel=true', () => {
+  describe('bi-modal trailing block when the clarify channel is mandatory', () => {
     test('renderer emits the mandatory ask-back preamble and NO output format', () => {
       const out = renderUserPrompt({
         promptTemplate: 'do the thing',
         inputs: {},
         meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
         agentOutputs: ['design'],
-        hasClarifyChannel: true,
+        clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
       })
       expect(out).toContain('MANDATORY ASK-BACK')
       expect(out).toContain('The user wired a clarify channel')
@@ -115,7 +118,7 @@ describe('RFC-023 prompt token substitution', () => {
       expect(out.indexOf('MANDATORY ASK-BACK')).toBeLessThan(out.indexOf('Clarify format.'))
     })
 
-    test('legacy single-envelope wording is preserved when hasClarifyChannel is omitted', () => {
+    test('legacy single-envelope wording is preserved when clarifyChannel is omitted', () => {
       const out = renderUserPrompt({
         promptTemplate: 'do the thing',
         inputs: {},
@@ -139,12 +142,17 @@ describe('RFC-023 prompt.ts source-code-text grep guard', () => {
   // These are stable, externally visible token names per the RFC. Renaming any
   // of them silently is a contract break (frontend / backend / agent prompts
   // all reference the same strings). The guard makes any rename loud.
-  const required = [
-    '__clarify_questions__',
-    '__clarify_answers__',
-    '__clarify_iteration__',
-    '__clarify_remaining__',
-  ]
+  // RFC-148: the questions/answers tokens are retired with the legacy
+  // round-grouped path. The impl-gate compat fix reintroduced their NAMES
+  // into prompt.ts as the DEPRECATED_PROMPT_TOKENS set (saved templates keep
+  // launching with a warning), so a file-level "never mentions" lock is the
+  // wrong shape — the real contract is table membership: live tokens in
+  // BUILTIN_VARS, retired names ONLY in the deprecated set (locked in
+  // rfc103-validator-builtin-vars.test.ts). Here we keep the live-token
+  // anchors plus a substitution-case lock: the retired tokens must never
+  // regrow a dedicated substitution case (their rendering is the default
+  // empty-string branch).
+  const required = ['__clarify_iteration__', '__clarify_remaining__']
   const src = readFileSync(PROMPT_TS_PATH, 'utf8')
 
   for (const token of required) {
@@ -152,6 +160,10 @@ describe('RFC-023 prompt.ts source-code-text grep guard', () => {
       expect(src).toContain(token)
     })
   }
+  test('retired tokens have no dedicated substitution case', () => {
+    expect(src).not.toMatch(/case '__clarify_questions__'/)
+    expect(src).not.toMatch(/case '__clarify_answers__'/)
+  })
 })
 
 // RFC-039 — strong ask-back bias when a clarify channel is wired. The user's
@@ -167,7 +179,7 @@ describe('RFC-039 bi-modal preamble default-asks (B) and lists ask-back triggers
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
     })
     // Anchor 1 — declares mandatory ask-back mode.
     expect(out).toContain('MANDATORY ASK-BACK')
@@ -190,14 +202,14 @@ describe('RFC-039 bi-modal preamble default-asks (B) and lists ask-back triggers
       inputs: {},
       meta: { repoPath: '/r', baseBranch: 'main', taskId: 't' },
       agentOutputs: ['design'],
-      hasClarifyChannel: true,
+      clarifyChannel: { kind: 'self', directive: 'mandatory', injectStopNotice: false },
     })
     expect(out).not.toContain('Both envelopes are equally first-class')
     expect(out).not.toContain('Do NOT default to (A) just because')
   })
 
   test('non-clarify-channel path stays on the legacy single-envelope wording', () => {
-    // RFC-039 only sharpens the hasClarifyChannel=true branch. Channels that
+    // RFC-039 only sharpens the mandatory-clarify-channel branch. Channels that
     // never wired clarify must still see the original "MUST end your reply
     // with <workflow-output>" wording — otherwise non-clarify workflows would
     // suddenly see a phantom (B) option they have no way to honour.

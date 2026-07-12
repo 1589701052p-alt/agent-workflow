@@ -6,8 +6,8 @@
 // 一个提交按钮" — so it reuses the /clarify primitives wholesale (QuestionForm /
 // ClarifyQuestionHandler / Card / Dialog / EmptyState / ErrorBanner / LoadingState) and
 // only collapses the per-round submit into one. RFC-137 (用户 2026-07-03): the pane answers
-// self and cross rounds UNIFORMLY — the per-question designer↔questioner scope picker lives
-// only on the /clarify detail page; the pane never sends questionScopes.
+// self and cross rounds UNIFORMLY. RFC-162 removed the scope concept entirely — there is no
+// per-question designer↔questioner picker anywhere, and no scopes are ever sent.
 //
 // Channel = control (defer=true): each round's filled subset is POSTed to
 // `/api/clarify/:nodeRunId/answers` with `defer:true` + a `questionIds` cap, which
@@ -58,7 +58,7 @@ export interface CentralizedAnswerGroup {
  *  the P4 designer-only filter (sourceKind === 'cross') is GONE. P5-BC's self/questioner park +
  *  dispatch path means a defer-sealed self/questioner question is NO LONGER stranded — it parks
  *  its home (loadUndispatchedSelfQuestionerTargets) until board dispatch mints the continuation.
- *  Cross questions get a per-question scope picker (designer ↔ questioner) below.
+ *  RFC-162: self and cross questions render identically here — no scope picker (scope removed).
  *
  *  Excluded: manual questions (originNodeRunId null — the instruction IS the content,
  *  nothing to answer), and — RFC-128 P4/P5 (用户 2026-07-01) — any entry past the 待指派
@@ -210,13 +210,47 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
   // child effect (ref only ⇒ no re-render / loop); stale rounds are ignored (advance iterates
   // `groups`).
   const roundOrderRef = useRef<Map<string, string[]>>(new Map())
-  const registerQuestionRef = useCallback((key: string, handle: QuestionFormHandle | null) => {
-    if (handle === null) questionRefs.current.delete(key)
-    else questionRefs.current.set(key, handle)
-  }, [])
-  const reportRoundOrder = useCallback((originNodeRunId: string, questionIds: string[]) => {
-    roundOrderRef.current.set(originNodeRunId, questionIds)
-  }, [])
+  // 用户 2026-07-10 — 打开弹框即聚焦第一题（数字/Enter 热键直接可用，同 /clarify 详情页的
+  // rAF auto-focus 先例）。时序上 open → groups(tqQuery) → 每轮 detail → QuestionForm 挂载
+  // 是多段异步，单次 rAF 必抢跑，故用「一次性 pending 标志 + 事件驱动重试」：open 置位；
+  // ref 注册 / 轮序上报 / groups 就绪三个时机各试一次，首 key 的 handle 就绪即消费（focus
+  // 恰好一次，不会在后续注册时再抢焦）。关闭清位。
+  const pendingInitialFocusRef = useRef(false)
+  const tryInitialFocus = useCallback(() => {
+    if (!pendingInitialFocusRef.current) return
+    const first = flattenCentralizedNavKeys(groups, roundOrderRef.current)[0]
+    if (first === undefined) return
+    const handle = questionRefs.current.get(first)
+    if (!handle) return
+    pendingInitialFocusRef.current = false
+    // rAF: QuestionForm 刚挂载的同一 commit 里 ref 先于布局稳定，推迟一帧再落焦。
+    requestAnimationFrame(() => handle.focus())
+  }, [groups])
+  useEffect(() => {
+    // 只随 open 翻转置/清位——不得依赖 tryInitialFocus（groups 刷新会换其身份，若在此
+    // 重跑置位，已消费的 pending 会被复活、下一次 ref 注册再次抢焦）。
+    pendingInitialFocusRef.current = open
+  }, [open])
+  useEffect(() => {
+    if (open) tryInitialFocus() // 重开场景：refs/order 都已在缓存，直接消费；已消费则 no-op。
+  }, [open, tryInitialFocus])
+  const registerQuestionRef = useCallback(
+    (key: string, handle: QuestionFormHandle | null) => {
+      if (handle === null) questionRefs.current.delete(key)
+      else {
+        questionRefs.current.set(key, handle)
+        tryInitialFocus()
+      }
+    },
+    [tryInitialFocus],
+  )
+  const reportRoundOrder = useCallback(
+    (originNodeRunId: string, questionIds: string[]) => {
+      roundOrderRef.current.set(originNodeRunId, questionIds)
+      tryInitialFocus()
+    },
+    [tryInitialFocus],
+  )
   const advanceFromQuestion = useCallback(
     (originNodeRunId: string, questionId: string) => {
       const keys = flattenCentralizedNavKeys(groups, roundOrderRef.current)
@@ -256,8 +290,8 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
           if (sub.resubmitQuestionIds.length > 0) {
             body.resubmitQuestionIds = sub.resubmitQuestionIds
           }
-          // RFC-137: no questionScopes — the server resolves every fresh cross question to
-          // the default 'designer' scope (handler entry targets the designer node).
+          // RFC-162: no questionScopes exist — self and cross answers post identically; the
+          // asker's own handler entry (self/questioner) reruns to consume the answer.
           await api.post(`/api/clarify/${originNodeRunId}/answers`, body)
         }),
       )
@@ -273,6 +307,12 @@ export function CentralizedAnswerDialog({ taskId, open, onClose }: CentralizedAn
       void qc.invalidateQueries({ queryKey: ['task-questions', taskId] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'list'] })
       void qc.invalidateQueries({ queryKey: ['clarify', 'pending-count'] })
+      // RFC-161: a full seal here flips the clarify node_run awaiting_human → done, so
+      // the task-detail canvas's clarify-node click target (clarifyNavKind) changes.
+      // The defer control channel emits no answered WS event for THIS client, so
+      // invalidate node-runs locally (the backend also broadcasts node.status for other
+      // open clients — routes/clarify.ts).
+      void qc.invalidateQueries({ queryKey: ['tasks', taskId, 'node-runs'] })
       for (const g of groups) {
         void qc.invalidateQueries({ queryKey: ['clarify', 'detail', g.originNodeRunId] })
       }
@@ -351,7 +391,7 @@ interface RoundAnswerBlockProps {
   /** The answerable (待指派) question ids of this round — fresh AND re-answers (RFC-136). */
   answerableQuestionIds: string[]
   /** RFC-136 — subset of answerableQuestionIds that are RE-answers (sealed, prefilled from
-   *  the committed answer; resubmission overwrites; scope locked). */
+   *  the committed answer; resubmission overwrites). */
   resubmitQuestionIds: string[]
   disabled: boolean
   onSubmissionChange: (originNodeRunId: string, sub: RoundSubmission | null) => void
@@ -368,11 +408,10 @@ interface RoundAnswerBlockProps {
 
 /** One clarify round's answer block. Owns its local answer state + draft autosave (the
  *  SAME server draft endpoint the /clarify page uses, so drafts are shared across both
- *  entry points) and reports its filled subset up. RFC-137: a CROSS round answers uniformly
- *  with a SELF round — no per-question scope UI here. Scopes are never sent; the server
- *  resolves every fresh cross question to the default 'designer' scope, so the handler
- *  entry's target defaults to the designer node (route-level scope control lives only on
- *  the /clarify detail page). RFC-136 re-answers keep their committed scope server-side (D6). */
+ *  entry points) and reports its filled subset up. RFC-137/RFC-162: a CROSS round answers
+ *  uniformly with a SELF round — no per-question scope UI, and scope no longer exists. The
+ *  asker's own handler entry (self/questioner) reruns to consume the answer; "let the upstream
+ *  revise" is a separate manual reassign that adds a designer handler row on the board. */
 function RoundAnswerBlock({
   taskId,
   originNodeRunId,
@@ -619,9 +658,8 @@ function RoundAnswerBlock({
                   {t('taskQuestions.answerPaneResubmitHint')}
                 </p>
               )}
-              {/* RFC-137: no per-question scope UI — self and cross questions answer
-                  identically here. Scope control (designer ↔ questioner) lives only on the
-                  /clarify detail page; unsent scopes resolve to the 'designer' default. */}
+              {/* RFC-137/RFC-162: no per-question scope UI — self and cross questions answer
+                  identically here (scope removed entirely). */}
               <QuestionForm
                 ref={(h) => registerQuestionRef(`${originNodeRunId}:${q.id}`, h)}
                 question={q}

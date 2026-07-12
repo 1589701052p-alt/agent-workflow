@@ -1,5 +1,8 @@
 import { rimrafDir } from './helpers/cleanup'
 // LOCKS: RFC-066 PR-A T6 — multi-repo + wrapper-git / upload gates.
+// RFC-165: multi-repo/pre-created PATH bodies are the framework-internal face
+// now (the wire is URL-only) — bodies are cast through the internal
+// RepoSourceSpec widening; runtime behavior is byte-identical to pre-165.
 //
 // Cases covered:
 //   B13 workflow with a wrapper-git node + repos.length > 1 → 422 with code
@@ -12,13 +15,14 @@ import { rimrafDir } from './helpers/cleanup'
 //       (v1 only blocks the multi-repo combo).
 
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import type { StartTask } from '@agent-workflow/shared'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 
 import { createInMemoryDb, type DbClient } from '../src/db/client'
-import { startTask } from '../src/services/task'
+import { startTask, startTaskWithLocalRepo } from '../src/services/task'
 import { workflows } from '../src/db/schema'
 import { runGit } from '../src/util/git'
 import { ValidationError } from '../src/util/errors'
@@ -93,7 +97,7 @@ describe('RFC-066 PR-A T6 — multi-repo gates', () => {
             { repoPath: h.repos[1]!, baseBranch: 'main' },
           ],
           inputs: {},
-        },
+        } as unknown as StartTask,
         { db: h.db, appHome: h.appHome },
       )
     } catch (e) {
@@ -124,7 +128,7 @@ describe('RFC-066 PR-A T6 — multi-repo gates', () => {
             { repoPath: h.repos[1]!, baseBranch: 'main' },
           ],
           inputs: {},
-        },
+        } as unknown as StartTask,
         { db: h.db, appHome: h.appHome },
       )
     } catch (e) {
@@ -144,7 +148,7 @@ describe('RFC-066 PR-A T6 — multi-repo gates', () => {
       nodes: [{ id: 'wg-1', kind: 'wrapper-git', nodeIds: ['x'] }],
       edges: [],
     })
-    const task = await startTask(
+    const task = await startTaskWithLocalRepo(
       {
         workflowId: wfId,
         name: 't',

@@ -8,7 +8,9 @@
 import {
   AgentNameSchema,
   CreateAgentSchema,
+  rejectRetiredStartTaskKeys,
   RenameAgentSchema,
+  StartAgentTaskSchema,
   UpdateAgentSchema,
 } from '@agent-workflow/shared'
 import { z } from 'zod'
@@ -27,6 +29,9 @@ import { resolveDependsClosure, validateDependsOn } from '@/services/agentDeps'
 import { canViewResource, filterVisibleRows, requireResourceOwner } from '@/services/resourceAcl'
 import { assertNotBuiltin, excludeBuiltinAgents, isBuiltinRow } from '@/services/systemResources'
 import { assertNewRefsUsable, diffNewNames } from '@/services/resourceRefs'
+import { startAgentTask } from '@/services/agentLaunch'
+import { buildStartTaskDeps } from '@/services/startTaskDeps'
+import { resolveOpencodeCmd } from '@/util/opencode'
 import { mountAclEndpoints } from './resourceAcl'
 import { DomainError, NotFoundError, ValidationError } from '@/util/errors'
 import type { Agent } from '@agent-workflow/shared'
@@ -160,6 +165,47 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
     return c.body(null, 204)
   })
 
+  // RFC-165 §4 — launch a SINGLE-AGENT task (POST /api/agents/:name/tasks).
+  // Service-layer entry (the builtin __agent_host__ workflow would 403
+  // assertWorkflowLaunchable via /api/tasks by design); permission-wise this
+  // is a LAUNCH, gated by tasks:launch in server.ts (F15) — deliberately
+  // exempt from the agents:write method gate. The schema only ever declared
+  // modern space fields, so no raw-key gate is needed (workgroup precedent).
+  app.post('/api/agents/:name/tasks', async (c) => {
+    const name = c.req.param('name')
+    let body: unknown
+    try {
+      body = await c.req.raw.json()
+    } catch {
+      body = {}
+    }
+    // 实现门 P2 修复（F1 同型）：schema 非 strict，{scratch:true, repoPath}
+    // 会被静默剥键降级成 scratch 启动——退役键必须在 parse 前整体拒收。
+    const retired = rejectRetiredStartTaskKeys(body)
+    if (retired !== null) {
+      throw new ValidationError(
+        'start-task-path-retired',
+        `field '${retired}' was retired by RFC-165 — launch with repoUrl/repos (file:// for local repos) or scratch`,
+      )
+    }
+    const parsed = StartAgentTaskSchema.safeParse(body)
+    if (!parsed.success) {
+      throw new ValidationError('agent-launch-invalid', 'invalid agent launch payload', {
+        issues: parsed.error.issues,
+      })
+    }
+    const actor = actorOf(c)
+    const opencodeCmd = resolveOpencodeCmd(deps.configPath)
+    const task = await startAgentTask(
+      deps.db,
+      actor,
+      name,
+      parsed.data,
+      buildStartTaskDeps(deps.db, deps.configPath, actor.user.id, opencodeCmd),
+    )
+    return c.json(task, 201)
+  })
+
   app.post('/api/agents/:name/rename', async (c) => {
     const name = c.req.param('name')
     const body = await safeJson(c.req.raw)
@@ -255,6 +301,7 @@ export function mountAgentRoutes(app: Hono, deps: AppDeps): void {
           name: parsed.data.name,
           description: '',
           outputs: [],
+          inputs: [], // RFC-166
           syncOutputsOnIterate: true,
           permission: {},
           skills: [],

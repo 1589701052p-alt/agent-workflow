@@ -17,6 +17,7 @@
 // with the rest of the canvas (Chinese under zh-CN, English under en-US).
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { NODE_GLYPHS } from '../nodePalette'
 import { useTranslation } from 'react-i18next'
 import { CLARIFY_INPUT_PORT_NAME, CLARIFY_OUTPUT_PORT_NAME } from '@agent-workflow/shared'
 import { QuestionBadge } from './QuestionBadge'
@@ -44,7 +45,7 @@ export function ClarifyNode({ data, selected }: Props) {
   // to the standard data.status (e.g. node-run-coloring on the task detail
   // canvas may pass through 'done' for the answered case).
   const status: ClarifyStatus = data.statusOverlay ?? mapFallbackStatus(data.status)
-  const labelText = data.kindLabel ?? `⚡ ${t('clarifyNode.label')}`
+  const labelText = data.kindLabel ?? `${NODE_GLYPHS.clarify} ${t('clarifyNode.label')}`
   return (
     <div
       className={
@@ -53,6 +54,7 @@ export function ClarifyNode({ data, selected }: Props) {
         ` canvas-node--clarify-${status}`
       }
       data-status={status}
+      data-clarify-nav={data.clarifyNav}
     >
       <QuestionBadge data={data} />
       <Handle
@@ -69,6 +71,15 @@ export function ClarifyNode({ data, selected }: Props) {
       <div className="canvas-node__id">{data.nodeId}</div>
       {data.description !== undefined && data.description.length > 0 && (
         <div className="canvas-node__description muted">{data.description}</div>
+      )}
+      {/* RFC-161: task-detail canvas marks the click target; clicking routes to the
+          clarify page. Absent on the editor canvas + non-clickable clarify nodes. */}
+      {data.clarifyNav !== undefined && (
+        <div className="canvas-node__clarify-nav muted">
+          {data.clarifyNav === 'awaiting'
+            ? t('clarifyNode.navAwaiting')
+            : t('clarifyNode.navAnswered')}
+        </div>
       )}
       <Handle
         type="source"

@@ -17,22 +17,14 @@
 //
 // See design/RFC-120-task-question-list §2.3 / §4 / §11.
 
-import { and, eq, inArray, isNotNull, isNull, ne, notInArray } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { getTaskQuestionWriteSem } from '@/services/taskWriteLocks'
 
 import type { DbClient } from '@/db/client'
-import {
-  clarifyRounds,
-  crossClarifySessions,
-  nodeRunOutputs,
-  nodeRuns,
-  taskQuestions,
-  tasks,
-} from '@/db/schema'
+import { clarifyRounds, nodeRunOutputs, nodeRuns, taskQuestions, tasks } from '@/db/schema'
 import { dbTxSync, type DbTxSync } from '@/db/txSync'
 import { ConflictError, NotFoundError, ValidationError } from '@/util/errors'
-import { createLogger } from '@/util/log'
 import {
   canReassign,
   deriveQuestionPhase,
@@ -40,7 +32,6 @@ import {
   resolveHandlerRun,
   type ClarifyAnswer,
   type ClarifyQuestion,
-  type ClarifyQuestionScope,
   type HandlerRunView,
   type RunLineageView,
   type TaskQuestionPhase,
@@ -51,8 +42,6 @@ type ClarifyRoundRow = typeof clarifyRounds.$inferSelect
 type TaskQuestionRow = typeof taskQuestions.$inferSelect
 type NodeRunRow = typeof nodeRuns.$inferSelect
 
-const log = createLogger('task-questions')
-
 export interface TaskQuestionDTO {
   id: string
   taskId: string
@@ -62,8 +51,8 @@ export interface TaskQuestionDTO {
   questionId: string
   questionTitle: string
   sourceKind: 'self' | 'cross' | 'manual'
-  /** RFC-134: + 'echo'（改派回执——只读知会卡）。 */
-  roleKind: 'self' | 'questioner' | 'designer' | 'echo'
+  /** RFC-162: 'echo' 已删。default self/questioner；designer = 人工增派的修订 handler。 */
+  roleKind: 'self' | 'questioner' | 'designer'
   /** The node that ASKED the question (round.askingNodeId) — drives the node badge.
    *  NULL for a manual question (no source node; the board shows "手动"). */
   sourceNodeId: string | null
@@ -106,16 +95,6 @@ function parseQuestions(json: string): ClarifyQuestion[] {
   }
 }
 
-function parseScopes(json: string | null): Record<string, ClarifyQuestionScope> {
-  if (!json) return {}
-  try {
-    const v = JSON.parse(json)
-    return v && typeof v === 'object' ? (v as Record<string, ClarifyQuestionScope>) : {}
-  } catch {
-    return {}
-  }
-}
-
 function parseAnswers(json: string | null): ClarifyAnswer[] {
   if (!json) return []
   try {
@@ -126,14 +105,13 @@ function parseAnswers(json: string | null): ClarifyAnswer[] {
   }
 }
 
-/** Graph role nodes read straight off the round row (no workflow-def / find* needed):
- *  self → askingNodeId is the asking node; cross → askingNodeId is the questioner,
- *  targetConsumerNodeId is the (default) designer. */
+/** Graph role node read straight off the round row (RFC-162: reconcile only needs the ASKER —
+ *  self → askingNodeId is the asking node; cross → askingNodeId is the questioner). The graph
+ *  designer is no longer consulted by reconcile (scope deleted; designer handlers are manual). */
 function graphForRound(round: ClarifyRoundRow) {
   return {
     askingNodeId: round.kind === 'self' ? round.askingNodeId : null,
     questionerNodeId: round.kind === 'cross' ? round.askingNodeId : null,
-    designerNodeId: round.targetConsumerNodeId,
   }
 }
 
@@ -143,69 +121,20 @@ function graphForRound(round: ClarifyRoundRow) {
  *  single atomic dbTxSync (dbTxSync does not nest). Idempotent; preserves the manual
  *  overlay (override / confirmation / staged / sealed / audit) on existing rows.
  *
- *  RFC-128 P3 (designer 逐题下发) — the designer gate is now TRULY per-question: a designer
- *  entry is created for each question that is SEALED (its own task_questions `sealed_at` is
- *  set, OR the whole round is answered) AND designer-scoped. This replaces the P2-4a interim
- *  that keyed the WHOLE round (`round.status === 'answered'`); a PARTIAL seal of Q1 (designer
- *  scope) now emits Q1's designer entry while an unsealed Q2 emits none. The matching
- *  per-question dispatch (assertDesignerReady readiness exempts the dispatched origins) +
- *  injection (buildNodeQueueExternalFeedback renders a partial round) land in the same P3, so
- *  a per-question designer row is fully usable (stageable + dispatchable + injects only its
- *  own Q&A). Golden lock: a FULL seal marks every question sealed (round answered ⇒ the
- *  `roundAnswered` short-circuit below), reproducing the old whole-round behavior
- *  byte-for-byte. The questioner/self entries stay unconditional (always re-run).
- *
- *  The per-question sealed set = the round's already-stamped `sealed_at` entries (read off
- *  the GIVEN tx, so a lazy reconcile sees prior committed seals) UNION
- *  `opts.additionalSealedQuestionIds` — the in-flight seal subset sealRoundQuestions passes
- *  because its `sealed_at` stamp runs AFTER this reconcile in the same tx (the new designer
- *  entry must appear in THIS pass, before it can be stamped). */
-export function reconcileRoundEntriesTx(
-  tx: DbTxSync,
-  round: ClarifyRoundRow,
-  opts: { additionalSealedQuestionIds?: Iterable<string> } = {},
-): void {
+ *  RFC-162 归一: reconcile emits exactly ONE entry per question — the ASKER (self/questioner).
+ *  The designer-by-default gate (per-question seal + scope + directive) is DELETED; a designer
+ *  handler row is created only by a human reassign (adds an upstream/downstream reviser — see
+ *  {@link reassignTaskQuestion}) and is NEVER cleaned up by reconcile (reconcile is append-only
+ *  for the asker rows; it must not touch the manually-added designer rows). The asker rows are
+ *  UNCONDITIONAL (created lazily on first list / seal) and their `sealed_at` is stamped later by
+ *  sealRoundQuestions. */
+export function reconcileRoundEntriesTx(tx: DbTxSync, round: ClarifyRoundRow): void {
   if (round.status === 'canceled' || round.status === 'abandoned') return
   const questions = parseQuestions(round.questionsJson)
   if (questions.length === 0) return
-  // RFC-128 P3 per-question seal gate (see the doc comment): a full seal (round answered)
-  // marks every question sealed (golden lock); otherwise a question is sealed iff its own
-  // entry carries `sealed_at` OR it is in this call's in-flight seal subset.
-  const roundAnswered = round.status === 'answered'
-  const sealedIds = new Set<string>(opts.additionalSealedQuestionIds ?? [])
-  // RFC-128 P3 (Codex P2-1): the per-question `sealed_at` timestamp of each ALREADY-sealed
-  // question (from its existing questioner/self/designer row). When this reconcile is the FIRST
-  // to create a question's designer row while that question is already sealed — the lazy path on
-  // pre-P3 (P2-4a) partial-seal data, where the designer row never existed — the new row must
-  // carry `sealed_at` too, because listTaskQuestions / stageTaskQuestion judge a partial-round
-  // entry's seal state by the row's OWN `sealed_at` (a NULL would render the sealed question as
-  // unsealed → unstageable). In-flight seals (additionalSealedQuestionIds) are NOT here yet
-  // (their stamp runs in sealRoundQuestions step 4, after this reconcile) → their new rows stay
-  // NULL and step 4 stamps them (golden lock for the seal path).
-  const sealedAtByQuestion = new Map<string, number>()
-  if (!roundAnswered) {
-    const existing = tx
-      .select({ questionId: taskQuestions.questionId, sealedAt: taskQuestions.sealedAt })
-      .from(taskQuestions)
-      .where(eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId))
-      .all()
-    for (const e of existing) {
-      if (e.sealedAt !== null) {
-        sealedIds.add(e.questionId)
-        sealedAtByQuestion.set(e.questionId, e.sealedAt)
-      }
-    }
-  }
-  const questionSealed: Record<string, boolean> = {}
-  for (const q of questions) questionSealed[q.id] = roundAnswered || sealedIds.has(q.id)
   const desired = reconcileDesiredEntries({
     kind: round.kind,
     questions,
-    questionSealed,
-    // RFC-120 T9 (Codex H2): a directive='stop' round intentionally skips the
-    // designer rerun → no designer entry (else a deferred task parks forever on it).
-    directive: round.directive,
-    scopes: parseScopes(round.questionScopesJson),
     graph: graphForRound(round),
   })
   const now = Date.now()
@@ -222,11 +151,7 @@ export function reconcileRoundEntriesTx(
         iteration: round.iteration,
         loopIter: round.loopIter,
         defaultTargetNodeId: d.defaultTargetNodeId,
-        // Codex P2-1: a NEW row for an ALREADY-sealed question inherits that question's
-        // `sealed_at` so a lazily-created designer row is consistently sealed (see above). Rows
-        // for in-flight / unsealed questions stay NULL. onConflictDoUpdate below never touches
-        // `sealed_at`, so an existing row's seal stamp is preserved.
-        sealedAt: sealedAtByQuestion.get(d.questionId) ?? null,
+        sealedAt: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -239,47 +164,6 @@ export function reconcileRoundEntriesTx(
           updatedAt: now,
         },
       })
-      .run()
-  }
-
-  // RFC-128 P3 (Codex P2-2) — reconcile UNDISPATCHED designer rows DOWN to `desired` (reconcile
-  // is otherwise append-only). The only way `desired` drops a designer question it previously
-  // emitted is a 'stop' FINALIZE (reconcileDesiredEntries suppresses ALL designer rows for a
-  // stop round) or the question being removed from the round. A stale designer row from an
-  // earlier continue partial-seal would otherwise stay visible + dispatchable on a now-stopped
-  // round and mint a designer rerun the stop forbids. Constraints (Codex P2-2): (1) ONLY
-  // role='designer' rows — questioner/self are unconditional, never cleaned; (2) ONLY
-  // dispatched_at IS NULL — an already-dispatched rerun is a fait accompli, not recalled here;
-  // (3) idempotent — a continue round's designer questions ARE in `desired`, so notInArray
-  // matches none → nothing deleted (golden lock); (4) RFC-126 safe — an answered CONTINUE round
-  // keeps its designer rows (still desired); only a stop round's UNDISPATCHED designer rows go.
-  //
-  // (5) Codex P2 re-gate — run ONLY when the round is FINALIZED (`roundAnswered`). The directive
-  // is a FINALIZE-only decision: a PARTIAL defer-seal does NOT persist `directive` (clarifySeal
-  // gates `directiveSet` on fullySealed), yet it DOES feed reconcile the TRANSIENT in-memory
-  // directive. So a partial seal carrying `directive:'stop'` (e.g. seal q2=stop while q1 is
-  // sealed+staged and q3 is still open) makes `desired` drop designer rows even though the
-  // round's persisted directive is still null/continue. Without this gate the cleanup would
-  // delete q1's UNDISPATCHED designer row — losing its human overlay (staged / override) — and
-  // the lazy path (reading the persisted null→continue directive) would recreate it un-staged.
-  // A designer row may only be cleaned once the round actually answers with stop, so partial
-  // rounds (round still awaiting_human) skip cleanup entirely; their designer rows + overlays
-  // are preserved until the directive is finalized.
-  if (roundAnswered) {
-    const desiredDesignerIds = desired
-      .filter((d) => d.roleKind === 'designer')
-      .map((d) => d.questionId)
-    tx.delete(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, round.intermediaryNodeRunId),
-          eq(taskQuestions.roleKind, 'designer'),
-          isNull(taskQuestions.dispatchedAt),
-          ...(desiredDesignerIds.length > 0
-            ? [notInArray(taskQuestions.questionId, desiredDesignerIds)]
-            : []),
-        ),
-      )
       .run()
   }
 }
@@ -938,17 +822,14 @@ export async function confirmTaskQuestion(
   actor: TaskQuestionActor,
 ): Promise<void> {
   const entry = await loadEntry(db, entryId)
-  // RFC-134 D3：回执（echo）是只读知会卡——**任意相位**可 confirm（人「已知悉」即收卡）；
-  // confirm 只收看板卡、不撤销投递（注入选取层不读 confirmation——投递撤销语义在任何条目上
-  // 都不存在，老化是唯一出队方式）。其余角色保持仅 awaiting_confirm 可确认（guard 不变）。
-  if (entry.roleKind !== 'echo') {
-    const phase = await deriveEntryPhase(db, entry)
-    if (phase !== 'awaiting_confirm') {
-      throw new ConflictError(
-        'task-question-not-awaiting-confirm',
-        `task question is '${phase}', not awaiting_confirm`,
-      )
-    }
+  // Only an awaiting_confirm entry may be confirmed (已处理待确认 → 完成). (RFC-162: the echo
+  // any-phase exemption is gone — echo deleted.)
+  const phase = await deriveEntryPhase(db, entry)
+  if (phase !== 'awaiting_confirm') {
+    throw new ConflictError(
+      'task-question-not-awaiting-confirm',
+      `task question is '${phase}', not awaiting_confirm`,
+    )
   }
   await db
     .update(taskQuestions)
@@ -962,19 +843,25 @@ export async function confirmTaskQuestion(
     .where(and(eq(taskQuestions.id, entryId), eq(taskQuestions.confirmation, 'open')))
 }
 
-/** RFC-138 — what a reassign actually did: 'override' = the regular re-target write;
- *  'collapsed-to-questioner' = a cross designer entry re-targeted to its round's ASKING
- *  node degenerated into scope='questioner' (entry deleted, scope flipped — see below).
- *  RFC-140 W1 — 'collapsed-to-designer' = the MIRROR: a cross questioner entry re-targeted
- *  to its round's DESIGNER (targetConsumerNodeId) degenerated into scope='designer'. */
-export type ReassignTaskQuestionAction =
-  | 'override'
-  | 'collapsed-to-questioner'
-  | 'collapsed-to-designer'
+/** RFC-162 — what a reassign actually did:
+ *  - 'added-designer'   = a clarify question gained (or re-targeted) an upstream/downstream
+ *                          designer handler row (target ≠ the asking node). The asker's own
+ *                          self/questioner entry is UNTOUCHED (single-card model keeps the
+ *                          asker in the handler group). This is「让上游/下游修订」.
+ *  - 'removed-designer' = the designer handler row was removed (target == the asking node, i.e.
+ *                          "back to single card"); no-op when none existed.
+ *  - 'moved-manual'     = a MANUAL question's handler was re-targeted (override move — manual
+ *                          rows have no asker, so they still MOVE rather than add a sibling). */
+export type ReassignTaskQuestionAction = 'added-designer' | 'removed-designer' | 'moved-manual'
 
-/** Re-target (改派) an entry's handler to a workflow agent node. RFC-127 T4: ANY role
- *  (self/questioner via 借壳顶替, designer/manual via the original swap) is reassignable;
- *  the only constraint is the target must be a workflow agent node (Codex F5). */
+/** Re-target (改派) a task question's handler to a workflow agent node.
+ *
+ *  RFC-162 归一: a clarify question is NEVER moved — reassign EDITS its designer handler group:
+ *  targeting an upstream/downstream agent node ENSURES a `roleKind='designer'` handler row on
+ *  that node (keeping the asker's self/questioner entry, so the asker always reruns + gets the
+ *  Q&A — no strand, no echo); targeting the asking node itself REMOVES that designer row (back
+ *  to the single default card). A MANUAL question (no asker) still MOVES via override. The only
+ *  constraint is the target must be a workflow agent node (Codex F5). */
 export async function reassignTaskQuestion(
   db: DbClient,
   entryId: string,
@@ -989,435 +876,145 @@ export async function reassignTaskQuestion(
       `cannot reassign '${entry.roleKind}' entry to '${targetNodeId}' (target must be a workflow agent node)`,
     )
   }
-  // Codex impl gate F3: don't re-target a terminal entry — the work is closed and
-  // an override there only records moot intent / risks confusing the resolution.
+
+  // ---- MANUAL question: MOVE its handler (override target). Manual rows have no asker, so
+  //      there is no single-card default to keep — a reassign genuinely re-targets the one row.
+  if (entry.sourceKind === 'manual') {
+    // Codex impl gate F3: don't re-target a terminal (confirmed) entry.
+    const phase = await deriveEntryPhase(db, entry)
+    if (phase === 'done') {
+      throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
+    }
+    // RFC-120 §15 (Codex re-gate): a manual question reruns its handler, so the handler must
+    // have run at least once (else the §18 park gate parks it on a target dispatch can never mint).
+    if (!(await taskNodeHasRun(db, entry.taskId, targetNodeId))) {
+      throw new ValidationError(
+        'manual-question-target-never-run',
+        `cannot assign a manual question to '${targetNodeId}': it has no prior node_run (a manual question reruns its handler, so the handler must have run at least once)`,
+      )
+    }
+    // Once dispatched the entry is committed for execution — CAS on `dispatched_at IS NULL` so a
+    // concurrent dispatch that won leaves this a 0-row no-op → reject (reopen's job post-dispatch).
+    let updated = false
+    dbTxSync(db, (tx) => {
+      const stillOpen = tx
+        .select({ id: taskQuestions.id })
+        .from(taskQuestions)
+        .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
+        .all()
+      if (stillOpen.length === 0) return
+      tx.update(taskQuestions)
+        .set({
+          overrideTargetNodeId: targetNodeId,
+          lastReassignedBy: actor.userId,
+          lastReassignedAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+        .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
+        .run()
+      updated = true
+    })
+    if (!updated) {
+      throw new ConflictError(
+        'task-question-already-dispatched',
+        `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
+      )
+    }
+    return 'moved-manual'
+  }
+
+  // ---- CLARIFY question (self/cross): EDIT the designer handler group of (origin, question).
+  // Codex impl gate F3: don't edit a terminal (confirmed → 'done') question — it is closed and
+  // adding/removing a handler there only records moot intent.
   const phase = await deriveEntryPhase(db, entry)
   if (phase === 'done') {
-    // RFC-126: 'closed' removed (no terminal-abandon); only 'done' (confirmed) is terminal.
     throw new ConflictError('task-question-terminal', `cannot reassign a '${phase}' question`)
   }
-  // RFC-120 §15 (Codex re-gate): a MANUAL question has NO graph default to fall back to, so
-  // its handler must ALWAYS be a node that has run (else the §18 park gate parks it on a
-  // target dispatch can never mint → stranded awaiting_human). Require a run node here too,
-  // matching createManualTaskQuestion. The clarify-designer override path is intentionally
-  // NOT gated here: it keeps the shipped §18 design (reassign records intent, dispatch's
-  // assertSafeFrontierTarget rejects a never-run frontier; the run graph-default is the
-  // recoverable fallback — locked by the "never-run override target → rejected" test).
-  if (entry.sourceKind === 'manual' && !(await taskNodeHasRun(db, entry.taskId, targetNodeId))) {
-    throw new ValidationError(
-      'manual-question-target-never-run',
-      `cannot assign a manual question to '${targetNodeId}': it has no prior node_run (a manual question reruns its handler, so the handler must have run at least once)`,
-    )
-  }
-  // RFC-138 — collapse 分支：cross 轮 designer 行改派到**该轮提问节点**时，写 override 会双跑
-  // ——questioner 行恒 mint 续跑（cause 'cross-clarify-questioner-rerun'）+ 本行再 mint 修订
-  // rerun（cause 'cross-clarify-answer'），两 cause 互斥（auto-split + in-flight 门 + 双账本
-  // 守卫）强制串行成两条 rerun、同一 Q&A 处理两遍。RFC-134 只定义了「承接≠提问节点→echo
-  // 补投」的半边不变量；承接==提问节点的去重合并在此补上：语义等价于「把该题 scope 事后改为
-  // questioner」——两表 question_scopes_json 翻转 + 删本行，该题只剩 questioner 行（本就指向
-  // 提问节点）→ 天然一条续跑、单份投递，并顺带脱离 dispatch 的整轮单目标 409。round 缺失 /
-  // kind≠cross / 目标≠提问节点 ⇒ 回落常规 override 路径（golden-lock 逐字不变）。
-  if (entry.sourceKind === 'cross' && entry.roleKind === 'designer') {
-    const round = (
-      await db
-        .select()
-        .from(clarifyRounds)
-        .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
-        .limit(1)
-    )[0]
-    if (round !== undefined && round.kind === 'cross' && targetNodeId === round.askingNodeId) {
-      return collapseDesignerEntryToQuestioner(db, entry, round, actor)
-    }
-  }
-  // RFC-140 W1 — the MIRROR collapse: a cross questioner entry re-targeted to its round's
-  // DESIGNER (targetConsumerNodeId). Writing an override here would leave the question with TWO
-  // rows on ONE node carrying mutually-exclusive causes (questioner-rerun + designer-answer) —
-  // the auto-split then forces two serial reruns processing the SAME Q&A twice (QMGP5 2026-07-03
-  // 16:21, deferredEntryCount=5), and the questioner-rerun's inline-resume semantics don't even
-  // apply to the designer node. Semantically this reassign IS "flip the question's scope to
-  // 'designer' after the fact": the designer row (which already targets the designer) becomes the
-  // question's ONLY handler; the asking node keeps visibility via an echo receipt (RFC-134 — the
-  // asymmetry vs RFC-138: there the SURVIVOR itself points at the asking node, here it doesn't).
-  // round missing / kind≠cross / target≠designer ⇒ fall through to the regular override path.
-  if (entry.sourceKind === 'cross' && entry.roleKind === 'questioner') {
-    const round = (
-      await db
-        .select()
-        .from(clarifyRounds)
-        .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
-        .limit(1)
-    )[0]
-    if (
-      round !== undefined &&
-      round.kind === 'cross' &&
-      round.targetConsumerNodeId !== null &&
-      targetNodeId === round.targetConsumerNodeId
-    ) {
-      return collapseQuestionerEntryToDesigner(db, entry, round, actor)
-    }
-  }
-  // RFC-120 §18 (model A, corrected): once dispatched (`dispatched_at` set), the
-  // entry is committed for execution — the upstream-frontier rerun was minted and the
-  // scheduler cascade will bind + inject it; a late reassign would silently re-target
-  // work in flight. Post-dispatch retargeting is reopen's job. dispatchTaskQuestions
-  // claims under `dispatched_at IS NULL` inside a dbTxSync, so a concurrent dispatch
-  // can stamp between loadEntry and here; do the override write as a CAS on the SAME
-  // column so the two race cleanly — if a dispatch won (dispatched_at is no longer
-  // NULL), affect 0 rows and reject. (Non-deferred tasks never set dispatched_at, so
-  // this is byte-for-byte for them — the CAS always matches.)
-  let updated = false
-  dbTxSync(db, (tx) => {
-    const stillOpen = tx
-      .select({ id: taskQuestions.id })
-      .from(taskQuestions)
-      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
-      .all()
-    if (stillOpen.length === 0) return // dispatched concurrently (or already) → no write
-    tx.update(taskQuestions)
-      .set({
-        overrideTargetNodeId: targetNodeId,
-        lastReassignedBy: actor.userId,
-        lastReassignedAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-      .where(and(eq(taskQuestions.id, entryId), isNull(taskQuestions.dispatchedAt)))
-      .run()
-    updated = true
-  })
-  if (!updated) {
+  const round = (
+    await db
+      .select()
+      .from(clarifyRounds)
+      .where(eq(clarifyRounds.intermediaryNodeRunId, entry.originNodeRunId))
+      .limit(1)
+  )[0]
+  if (round === undefined) {
     throw new ConflictError(
-      'task-question-already-dispatched',
-      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
+      'task-question-round-missing',
+      `cannot reassign question ${entryId}: its clarify round is gone`,
     )
   }
-  return 'override'
-}
+  const askingNodeId = round.askingNodeId
 
-/** RFC-138 — the collapse tx: flip the question's scope to 'questioner' on BOTH scope
- *  tables（clarify_rounds 是 reconcile 的 SoT；cross_clarify_sessions 按 RFC-058 lockstep
- *  双写，镜像 sealRoundQuestions 的纪律）并删除该题仍未下发的 designer 行。CAS 在
- *  dispatched_at 同列上（与 override 路径同语义——并发 dispatch 赢者恒胜 → 409）；round 行
- *  在 tx 内重读后 merge（绝不用 tx 外快照，防并发 seal 的 merge 写丢键）。questioner 行
- *  零改动——它本就指向提问节点，collapse 后成为该题唯一承接。不产生 override 审计戳
- *  （行已删除，不在残留行上伪造）；可见性走审计 log + 路由响应 action 字段（D4）。 */
-function collapseDesignerEntryToQuestioner(
-  db: DbClient,
-  entry: TaskQuestionRow,
-  round: ClarifyRoundRow,
-  actor: TaskQuestionActor,
-): ReassignTaskQuestionAction {
-  let collapsed = false
-  let dispatchedElsewhere: string | null = null
+  // Target == the asking node → "back to single card": remove the designer handler row (if any).
+  if (targetNodeId === askingNodeId) {
+    let dispatched = false
+    dbTxSync(db, (tx) => {
+      const existing = tx
+        .select({ id: taskQuestions.id, dispatchedAt: taskQuestions.dispatchedAt })
+        .from(taskQuestions)
+        .where(
+          and(
+            eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
+            eq(taskQuestions.questionId, entry.questionId),
+            eq(taskQuestions.roleKind, 'designer'),
+          ),
+        )
+        .all()[0]
+      if (existing === undefined) return // nothing to remove (already single card)
+      if (existing.dispatchedAt !== null) {
+        dispatched = true
+        return
+      }
+      tx.delete(taskQuestions).where(eq(taskQuestions.id, existing.id)).run()
+    })
+    if (dispatched) {
+      throw new ConflictError(
+        'task-question-already-dispatched',
+        `cannot remove a dispatched designer handler (dispatched_at is set) — use reopen after dispatch`,
+      )
+    }
+    return 'removed-designer'
+  }
+
+  // Target ≠ asking node → ENSURE a designer handler row targeting it (add, or re-target an
+  // existing UNDISPATCHED one). The asker's self/questioner entry is never touched.
+  // RFC-163 note — this is deliberately allowed on a DISPATCHED asker too:「答完/重跑后让上游
+  // 修订」is a first-class flow (the quick channel auto-dispatches the asker on answer, so by
+  // the time a user decides an upstream revision is needed the asker is usually dispatched).
+  // The new undispatched designer row simply becomes its own 待指派 single card (the board's
+  // grouping only merges UNDISPATCHED siblings — groupBoardEntries case-4), and dispatching it
+  // later reruns the asker via the normal cascade (a revision pass, not an out-of-order bug).
+  let dispatched = false
+  const now = Date.now()
   dbTxSync(db, (tx) => {
-    // Re-read the entry INSIDE the tx (Codex impl-gate round-2 P2): a sealRoundQuestions commit
-    // between the caller's loadEntry and this tx stamps the questioner row's sealed_at — deciding
-    // the survivor/echo seal from the STALE pre-tx snapshot would delete that freshly-sealed row
-    // and leave the new rows unsealed forever (no later seal call comes; selectAgentQueue filters
-    // unsealed rows → the echo receipt would never inject). The tx read sees every committed seal.
-    const curEntry = tx
-      .select({ id: taskQuestions.id, sealedAt: taskQuestions.sealedAt })
-      .from(taskQuestions)
-      .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
-      .all()[0]
-    if (curEntry === undefined) return // dispatched concurrently (or already) → no write
-    // RFC-140 遗留修复（用户 2026-07-05 裁决）— 幸存 questioner 行三分支（镜像 RFC-140 W1 的
-    // survivor 处理）：既存行可能带旧第三节点 override（曾被改派到 X）。塌缩语义是「该题让提
-    // 问节点自己消化」，幸存行必须真的指回提问节点：
-    //   - 已下发且 effective ≠ 提问节点（在 X 上执行）→ 409 拒塌缩（已提交执行不可改目标，
-    //     reopen 的职责）；
-    //   - 已下发且 effective == 提问节点 → 塌缩照做、幸存行零改动（义务已在正轨）；
-    //   - 未下发带旧 override → 归一化清 override + 改派审计戳（effective 回落提问节点）。
-    const existingQuestioner = tx
+    const existing = tx
       .select()
       .from(taskQuestions)
       .where(
         and(
           eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
           eq(taskQuestions.questionId, entry.questionId),
-          eq(taskQuestions.roleKind, 'questioner'),
-        ),
-      )
-      .all()[0]
-    if (existingQuestioner !== undefined && existingQuestioner.dispatchedAt !== null) {
-      const effective =
-        existingQuestioner.overrideTargetNodeId ?? existingQuestioner.defaultTargetNodeId
-      if (effective !== round.askingNodeId) {
-        dispatchedElsewhere = effective
-        return // survivor already dispatched to a third node — committed work, reopen's job
-      }
-      // dispatched AND already on the asking node → collapse proceeds, survivor untouched.
-    }
-    const cur = tx
-      .select({
-        questionScopesJson: clarifyRounds.questionScopesJson,
-        status: clarifyRounds.status,
-      })
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, round.id))
-      .all()[0]
-    const merged = { ...parseScopes(cur?.questionScopesJson ?? null) }
-    merged[entry.questionId] = 'questioner'
-    const scopesJson = JSON.stringify(merged)
-    tx.update(clarifyRounds)
-      .set({ questionScopesJson: scopesJson })
-      .where(eq(clarifyRounds.id, round.id))
-      .run()
-    // RFC-058 dual-write — the cross round's legacy session row shares the SAME id.
-    tx.update(crossClarifySessions)
-      .set({ questionScopesJson: scopesJson })
-      .where(eq(crossClarifySessions.id, round.id))
-      .run()
-    tx.delete(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
-          eq(taskQuestions.questionId, entry.questionId),
           eq(taskQuestions.roleKind, 'designer'),
-          isNull(taskQuestions.dispatchedAt),
         ),
       )
-      .run()
-    // Codex impl-gate P2（两轮）— 幸存 questioner 行必须「存在且可被 park/渲染」，collapse
-    // 事务内自足保证，不依赖事后 reconcile：
-    //   (a) insert-if-missing：异常形态下（懒建/损坏数据只物化了 designer 行）questioner 行
-    //       缺席——事后 listTaskQuestions 会按 answered 轮补建但 sealed_at=NULL，照样被 park
-    //       源滤掉。此处按 reconcile 同形补建（唯一索引 origin+question+role 上
-    //       onConflictDoNothing，常规路径已有行 ⇒ 零写）。
-    //   (b) seal 行戳归一化（镜像 RFC-134 §3.1）：legacy answered 轮懒建行无逐行 sealed_at，
-    //       而 self/questioner park 源 (fetchSelfQuestionerParkEntries) 以 `sealed_at IS NOT
-    //       NULL` 过滤——designer 行（原 park 锚点）删除后，未补戳的 questioner 行会被滤掉
-    //       → 调度不再驻留、该题续跑永不 mint（投递丢失）。继承被删行的戳，无则取 now；
-    //       sealed_by 保持 NULL（「answered 轮证据落戳」审计语义，非人工 seal）；已有戳不改写。
-    const now = Date.now()
-    const survivorSealedAt = entry.sealedAt ?? now
-    tx.insert(taskQuestions)
-      .values({
-        id: ulid(),
-        taskId: entry.taskId,
-        originNodeRunId: entry.originNodeRunId,
-        questionId: entry.questionId,
-        questionTitle: entry.questionTitle,
-        sourceKind: 'cross',
-        roleKind: 'questioner',
-        iteration: entry.iteration,
-        loopIter: entry.loopIter,
-        defaultTargetNodeId: round.askingNodeId,
-        sealedAt: survivorSealedAt,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoNothing({
-        target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
-      })
-      .run()
-    tx.update(taskQuestions)
-      .set({ sealedAt: survivorSealedAt, updatedAt: now })
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
-          eq(taskQuestions.questionId, entry.questionId),
-          eq(taskQuestions.roleKind, 'questioner'),
-          isNull(taskQuestions.sealedAt),
-        ),
-      )
-      .run()
-    // RFC-140 遗留修复 — 未下发幸存行的旧 override 归一化（CAS 在 dispatched_at 同列，与
-    // dispatch 竞争时输者零写；已下发同目标的分支在上方判定为零改动，不会到达这里的写）。
-    if (
-      existingQuestioner !== undefined &&
-      existingQuestioner.dispatchedAt === null &&
-      existingQuestioner.overrideTargetNodeId !== null
-    ) {
+      .all()[0]
+    if (existing !== undefined) {
+      if (existing.dispatchedAt !== null) {
+        dispatched = true
+        return
+      }
       tx.update(taskQuestions)
         .set({
+          defaultTargetNodeId: targetNodeId,
           overrideTargetNodeId: null,
           lastReassignedBy: actor.userId,
           lastReassignedAt: now,
           updatedAt: now,
         })
-        .where(and(eq(taskQuestions.id, existingQuestioner.id), isNull(taskQuestions.dispatchedAt)))
+        .where(eq(taskQuestions.id, existing.id))
         .run()
+      return
     }
-    collapsed = true
-  })
-  if (dispatchedElsewhere !== null) {
-    throw new ConflictError(
-      'task-question-already-dispatched',
-      `cannot collapse: this question's questioner entry is already dispatched to '${dispatchedElsewhere}' — retargeting committed work is reopen's job`,
-    )
-  }
-  if (!collapsed) {
-    throw new ConflictError(
-      'task-question-already-dispatched',
-      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
-    )
-  }
-  log.info('designer entry collapsed to questioner scope', {
-    taskId: entry.taskId,
-    entryId: entry.id,
-    originNodeRunId: entry.originNodeRunId,
-    questionId: entry.questionId,
-    askingNodeId: round.askingNodeId,
-    actorUserId: actor.userId,
-  })
-  return 'collapsed-to-questioner'
-}
-
-/** RFC-140 W1 — the MIRROR collapse tx (see collapseDesignerEntryToQuestioner above for the
- *  shared discipline: dispatched_at CAS, tx-inner scope re-read + merge, lockstep dual-write).
- *  Differences forced by the direction:
- *   - The SURVIVOR is the designer row (may not exist — a question whose scope was 'questioner'
- *     never reconciled one) → insert-if-missing + seal normalization + staged_at inheritance
- *     (the user's staging intent transfers with the question).
- *   - Survivor three-branch (Codex design-gate P2, two rounds): an EXISTING designer row that is
- *     already DISPATCHED is committed work — if its effective target IS the designer, collapse
- *     proceeds with the survivor untouched (RFC-138 D6 mirror: the revision is already on the
- *     right track, zero new mint); if it points at a THIRD node, the user's "give it to the
- *     designer" intent cannot be met without retargeting committed work → 409 (reopen's job).
- *     An existing UNDISPATCHED survivor with a stale third-node override is normalized back to
- *     the designer (override cleared + reassign audit stamp).
- *   - ECHO materialization (the RFC-134 invariant, the key asymmetry vs RFC-138): the survivor
- *     does NOT point at the asking node, so the asking node would lose this question's Q&A
- *     delivery entirely — insert an 'echo' receipt row (dispatched immediately, zero-mint,
- *     idempotent on the (origin, question, role) unique key). Rendering reads the round's
- *     answers_json at inject time, so a pre-answer collapse is safe (the asking node gets no
- *     new rerun before the answers dispatch anyway). */
-function collapseQuestionerEntryToDesigner(
-  db: DbClient,
-  entry: TaskQuestionRow,
-  round: ClarifyRoundRow,
-  actor: TaskQuestionActor,
-): ReassignTaskQuestionAction {
-  const designerNodeId = round.targetConsumerNodeId
-  if (designerNodeId === null) return 'override' // caller guards; defensive
-  let collapsed = false
-  let dispatchedElsewhere: string | null = null
-  dbTxSync(db, (tx) => {
-    // Re-read the entry INSIDE the tx (Codex impl-gate round-2 P2): a sealRoundQuestions commit
-    // between the caller's loadEntry and this tx stamps the questioner row's sealed_at — deciding
-    // the survivor/echo seal from the STALE pre-tx snapshot would delete that freshly-sealed row
-    // and leave the new rows unsealed forever (no later seal call comes; selectAgentQueue filters
-    // unsealed rows → the echo receipt would never inject). The tx read sees every committed seal.
-    const curEntry = tx
-      .select({ id: taskQuestions.id, sealedAt: taskQuestions.sealedAt })
-      .from(taskQuestions)
-      .where(and(eq(taskQuestions.id, entry.id), isNull(taskQuestions.dispatchedAt)))
-      .all()[0]
-    if (curEntry === undefined) return // dispatched concurrently (or already) → no write
-    // Survivor three-branch: read the question's existing designer row FIRST — a dispatched
-    // survivor pointing away from the designer aborts the whole collapse (no partial write).
-    const existingDesigner = tx
-      .select()
-      .from(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
-          eq(taskQuestions.questionId, entry.questionId),
-          eq(taskQuestions.roleKind, 'designer'),
-        ),
-      )
-      .all()[0]
-    if (existingDesigner !== undefined && existingDesigner.dispatchedAt !== null) {
-      const effective =
-        existingDesigner.overrideTargetNodeId ?? existingDesigner.defaultTargetNodeId
-      if (effective !== designerNodeId) {
-        dispatchedElsewhere = effective
-        return // dispatched to a third node — committed work, cannot retarget here
-      }
-      // dispatched AND already on the designer → collapse proceeds, survivor untouched (D6 mirror).
-    }
-    const cur = tx
-      .select({
-        questionScopesJson: clarifyRounds.questionScopesJson,
-        status: clarifyRounds.status,
-      })
-      .from(clarifyRounds)
-      .where(eq(clarifyRounds.id, round.id))
-      .all()[0]
-    const merged = { ...parseScopes(cur?.questionScopesJson ?? null) }
-    merged[entry.questionId] = 'designer'
-    const scopesJson = JSON.stringify(merged)
-    tx.update(clarifyRounds)
-      .set({ questionScopesJson: scopesJson })
-      .where(eq(clarifyRounds.id, round.id))
-      .run()
-    // RFC-058 dual-write — the cross round's legacy session row shares the SAME id.
-    tx.update(crossClarifySessions)
-      .set({ questionScopesJson: scopesJson })
-      .where(eq(crossClarifySessions.id, round.id))
-      .run()
-    tx.delete(taskQuestions)
-      .where(
-        and(
-          eq(taskQuestions.originNodeRunId, entry.originNodeRunId),
-          eq(taskQuestions.questionId, entry.questionId),
-          eq(taskQuestions.roleKind, 'questioner'),
-          isNull(taskQuestions.dispatchedAt),
-        ),
-      )
-      .run()
-    const now = Date.now()
-    // Seal inheritance MUST NOT fabricate answer evidence (Codex impl-gate P1): a questioner row
-    // exists BEFORE its answer is submitted (unlike RFC-138's designer rows, which reconcile only
-    // post-seal), so an unconditional `?? now` would stamp an UNANSWERED question as sealed — the
-    // stage gate / dispatch would then inject an entry with no answers_json content, and the real
-    // answer's seal would hit the already-sealed path. Only an ANSWERED round justifies the
-    // RFC-138-style backfill (the answer provably exists); otherwise inherit verbatim (possibly
-    // NULL — the real seal later stamps ALL of the question's rows: sealRoundQuestions step (4)
-    // keys (origin, questionId) + IS NULL with NO role filter, so the survivor + echo get their
-    // stamps then).
-    const survivorSealedAt =
-      cur?.status === 'answered' ? (curEntry.sealedAt ?? now) : curEntry.sealedAt
-    if (existingDesigner === undefined) {
-      // insert-if-missing (scope was 'questioner' → reconcile never built a designer row);
-      // staged_at inherited so the user's staging intent survives the flip.
-      tx.insert(taskQuestions)
-        .values({
-          id: ulid(),
-          taskId: entry.taskId,
-          originNodeRunId: entry.originNodeRunId,
-          questionId: entry.questionId,
-          questionTitle: entry.questionTitle,
-          sourceKind: 'cross',
-          roleKind: 'designer',
-          iteration: entry.iteration,
-          loopIter: entry.loopIter,
-          defaultTargetNodeId: designerNodeId,
-          sealedAt: survivorSealedAt,
-          stagedAt: entry.stagedAt,
-          stagedBy: entry.stagedBy,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoNothing({
-          target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
-        })
-        .run()
-    } else if (existingDesigner.dispatchedAt === null) {
-      // Normalize the undispatched survivor: clear a stale third-node override (Codex P2) +
-      // reassign audit stamp; inherit seal / staged only where the survivor lacks them.
-      tx.update(taskQuestions)
-        .set({
-          ...(existingDesigner.overrideTargetNodeId !== null
-            ? {
-                overrideTargetNodeId: null,
-                lastReassignedBy: actor.userId,
-                lastReassignedAt: now,
-              }
-            : {}),
-          ...(existingDesigner.sealedAt === null && survivorSealedAt !== null
-            ? { sealedAt: survivorSealedAt }
-            : {}),
-          ...(existingDesigner.stagedAt === null && entry.stagedAt !== null
-            ? { stagedAt: entry.stagedAt, stagedBy: entry.stagedBy }
-            : {}),
-          updatedAt: now,
-        })
-        .where(eq(taskQuestions.id, existingDesigner.id))
-        .run()
-    }
-    // Echo receipt for the asking node (RFC-134 shape, mirrored from the dispatch-tx echo
-    // materialization: dispatched immediately, zero-mint, unique-key idempotent).
     tx.insert(taskQuestions)
       .values({
         id: ulid(),
@@ -1425,15 +1022,31 @@ function collapseQuestionerEntryToDesigner(
         originNodeRunId: entry.originNodeRunId,
         questionId: entry.questionId,
         questionTitle: entry.questionTitle,
-        sourceKind: 'cross',
-        roleKind: 'echo',
-        iteration: entry.iteration,
-        loopIter: entry.loopIter,
-        defaultTargetNodeId: round.askingNodeId,
-        overrideTargetNodeId: null,
-        dispatchedAt: now,
-        dispatchedBy: actor.userId,
-        sealedAt: survivorSealedAt,
+        sourceKind: entry.sourceKind,
+        roleKind: 'designer',
+        iteration: round.iteration,
+        loopIter: round.loopIter,
+        // The designer handler's stable node IS the reassign target (default, no override). The
+        // asker keeps its own self/questioner entry — this is an ADDITIONAL group member.
+        defaultTargetNodeId: targetNodeId,
+        // Inherit the ASKER's actual seal state (Codex impl-gate P1): keying only on whole-round
+        // status strands a designer added after a PARTIAL (per-question) seal — RFC-128 P1 lets a
+        // question be individually sealed (entry.sealedAt set) while the round stays
+        // 'awaiting_human' (clarifySeal.ts:22), and no later seal re-includes an already-sealed
+        // question, so a `null` here would leave the designer unstageable forever. Inherit the
+        // source asker entry's sealedAt (covers both whole-round-answered and per-question seal);
+        // fall back to the answered-round timestamp only when the asker row itself carries none.
+        sealedAt:
+          entry.sealedAt ?? (round.status === 'answered' ? (round.answeredAt ?? now) : null),
+        // Inherit the ASKER's staged state too (用户 2026-07-10 bug:在待下发里改派，新 designer
+        // 行生成即 pending → 组内混态 → RFC-163 分组卡被防御逻辑保守落回待指派、按钮却显示
+        // 「移出待下发」)。stage 是组级动作（RFC-163）——在待下发的问题增派处理节点，新成员
+        // 天然随组进待下发；asker.staged 必经 stage gate ⇒ 必 sealed ⇒ 上面的 sealedAt 继承
+        // 非空，二者自洽。pending asker ⇒ 继承 null，行为不变。
+        stagedAt: entry.stagedAt,
+        stagedBy: entry.stagedBy,
+        lastReassignedBy: actor.userId,
+        lastReassignedAt: now,
         createdAt: now,
         updatedAt: now,
       })
@@ -1441,30 +1054,14 @@ function collapseQuestionerEntryToDesigner(
         target: [taskQuestions.originNodeRunId, taskQuestions.questionId, taskQuestions.roleKind],
       })
       .run()
-    collapsed = true
   })
-  if (dispatchedElsewhere !== null) {
+  if (dispatched) {
     throw new ConflictError(
       'task-question-already-dispatched',
-      `cannot collapse: this question's designer entry is already dispatched to '${dispatchedElsewhere}' — retargeting committed work is reopen's job`,
+      `cannot re-target a dispatched designer handler (dispatched_at is set) — use reopen after dispatch`,
     )
   }
-  if (!collapsed) {
-    throw new ConflictError(
-      'task-question-already-dispatched',
-      `cannot reassign a dispatched question (dispatched_at is set) — use reopen to re-target after dispatch`,
-    )
-  }
-  log.info('questioner entry collapsed to designer scope', {
-    taskId: entry.taskId,
-    entryId: entry.id,
-    originNodeRunId: entry.originNodeRunId,
-    questionId: entry.questionId,
-    designerNodeId,
-    askingNodeId: round.askingNodeId,
-    actorUserId: actor.userId,
-  })
-  return 'collapsed-to-designer'
+  return 'added-designer'
 }
 
 /** RFC-128 §11 (D5) — is this entry's answer sealed? The SAME predicate the DTO's
@@ -1515,7 +1112,7 @@ export async function stageTaskQuestion(
   await getTaskQuestionWriteSem(entry.taskId).run(async () => {
     if (staged) {
       // RFC-134 D10（Codex R2-F4 + R3-F7 + 实现 gate fold）——已下发行不可 stage：dispatch 后
-      // 条目已「提交执行」，stage 只会留下脏戳（生来已下发的 echo 回执同理）。守卫是**单条条件
+      // 条目已「提交执行」，stage 只会留下脏戳。守卫是**单条条件
       // 更新**（语句级原子）+ 受影响行数判定——没有任何先查后改窗口：并发 dispatch 在同列上
       // stamp `dispatched_at`，输掉 CAS 的一方恰得 0 行 → Conflict、零脏写。changes 非数字按 0
       // 处理（fail-closed：误报冲突可重试，静默脏戳不可挽回；驱动实际恒返 ChangeStats，同

@@ -21,6 +21,13 @@ export interface RepairTaskRow {
   id: string
   status: string
   workflowSnapshot: string
+  /** RFC-165 (F13-r4): non-null ⟹ workgroup host task — execution-reviving
+   *  repair options are refused for TURN-ENGINE modes (list unavailable +
+   *  apply 422). RFC-167: dynamic_workflow tasks are runScope-backed and
+   *  generically repairable — the guard reads the mode off the config. */
+  workgroupId: string | null
+  /** Raw workgroup config JSON — the mode discriminator for the RFC-167 carve-out. */
+  workgroupConfigJson: string | null
 }
 
 export interface RepairNodeRunRow {

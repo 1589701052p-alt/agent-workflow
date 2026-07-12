@@ -8,10 +8,14 @@
 // Events drive the Distill Jobs table; for `distill.done` we additionally
 // invalidate the memory candidate queries so new candidates appear in the
 // approval queue without a manual refresh.
+//
+// RFC-152 — thin wrapper over the useWsInvalidation rules table (the old
+// `type.startsWith('distill.')` guard becomes the exhaustive table).
 
-import { useQueryClient } from '@tanstack/react-query'
+import type { QueryKey } from '@tanstack/react-query'
 import type { MemoryDistillJobWsMessage } from '@agent-workflow/shared'
-import { useWebSocket } from './useWebSocket'
+import { WS_PATHS } from '@agent-workflow/shared'
+import { useWsInvalidation, type WsInvalidationRules } from './useWsInvalidation'
 import { MEMORY_QUERY_KEYS } from './useMemoryWs'
 
 export interface UseMemoryDistillJobWsOpts {
@@ -23,24 +27,22 @@ export const DISTILL_JOB_QUERY_KEYS = {
   detail: (id: string) => ['memory-distill-jobs', 'detail', id] as const,
 }
 
+function jobSurface(jobId: string): QueryKey[] {
+  return [DISTILL_JOB_QUERY_KEYS.list, DISTILL_JOB_QUERY_KEYS.detail(jobId)]
+}
+
+const RULES: WsInvalidationRules<MemoryDistillJobWsMessage> = {
+  'distill.queued': (msg) => jobSurface(msg.jobId),
+  'distill.started': (msg) => jobSurface(msg.jobId),
+  // distill.done means a fresh candidate row likely appeared.
+  'distill.done': (msg) => [
+    ...jobSurface(msg.jobId),
+    MEMORY_QUERY_KEYS.pendingCount,
+    MEMORY_QUERY_KEYS.candidates,
+  ],
+  'distill.failed': (msg) => jobSurface(msg.jobId),
+}
+
 export function useMemoryDistillJobWs({ enabled = true }: UseMemoryDistillJobWsOpts = {}): void {
-  const qc = useQueryClient()
-  useWebSocket({
-    path: '/ws/memory-distill-jobs',
-    enabled,
-    onMessage: (raw) => {
-      if (typeof raw !== 'object' || raw === null) return
-      const msg = raw as MemoryDistillJobWsMessage & { type?: string }
-      if (typeof msg.type !== 'string' || !msg.type.startsWith('distill.')) return
-      void qc.invalidateQueries({ queryKey: DISTILL_JOB_QUERY_KEYS.list })
-      if ('jobId' in msg && typeof msg.jobId === 'string') {
-        void qc.invalidateQueries({ queryKey: DISTILL_JOB_QUERY_KEYS.detail(msg.jobId) })
-      }
-      // distill.done means a fresh candidate row likely appeared.
-      if (msg.type === 'distill.done') {
-        void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.pendingCount })
-        void qc.invalidateQueries({ queryKey: MEMORY_QUERY_KEYS.candidates })
-      }
-    },
-  })
+  useWsInvalidation<MemoryDistillJobWsMessage>(enabled ? WS_PATHS.memoryDistillJobs : null, RULES)
 }

@@ -3,6 +3,7 @@
 // imports. Mirrors design.md §7.2.
 
 import type { AgentOutputKindsMap } from './schemas/agent'
+import { PROMPT_INJECTED_PORT_NAMES } from './systemChannelPorts'
 import type { FailureCode } from './schemas/task'
 import {
   ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE,
@@ -66,33 +67,23 @@ export interface ReviewPromptContext {
  * shared/clarify.ts so this module stays a pure substitution engine.
  *
  * Builtin tokens populated from this context:
- *   {{__clarify_questions__}}  ← questionsBlock (markdown listing of what the agent asked)
- *   {{__clarify_answers__}}    ← answersBlock   (markdown listing of user answers + synthesis)
  *   {{__clarify_iteration__}}  ← iteration      (string form of the clarify generation)
  *   {{__clarify_remaining__}}  ← remaining      (string; "max - current" when inside a
  *                                                wrapper-loop with a cap, "" otherwise)
  *
- * Templates that don't reference these tokens get framework-auto-appended
- * sections at the tail of the user prompt — same auto-append pattern as the
- * RFC-005 review context.
+ * RFC-148 (RFC-132 收尾): the legacy round-grouped fields
+ * (questionsBlock / answersBlock / directive / currentRoundOnly) are GONE —
+ * the flat `## Clarify Q&A` block is the only injection surface, exactly what
+ * the scheduler has produced since RFC-132 PR-C.
  */
 export interface ClarifyPromptContext {
   /**
    * RFC-132 (PR-C): the single flat `## Clarify Q&A` block (built by
-   * `renderFlatClarifyQueue` via `buildClarifyQueueContext`). When SET,
-   * `renderUserPrompt` emits it VERBATIM and SKIPS the legacy round-grouped
-   * `questionsBlock` / `answersBlock` auto-append sections (and, since the
-   * scheduler no longer passes a `crossClarifyContext` in the flat path, the
-   * designer's Q&A rides this same block — §5 ②b). ADDITIVE: when UNSET, the
-   * renderer's behavior is byte-for-byte the legacy round-grouped path (the
-   * frontend preview + prompt-injection tests stay green). The block already
-   * carries its own `## Clarify Q&A` heading, so it is appended raw.
+   * `renderFlatClarifyQueue` via `buildClarifyQueueContext`). Emitted
+   * VERBATIM — the block already carries its own heading. The designer's
+   * cross-clarify Q&A rides this same block (§5 ②b).
    */
   flatBlock?: string
-  /** Markdown listing of the last-round questions. */
-  questionsBlock?: string
-  /** Markdown listing of user answers (incl. deterministic synthesis line per question). */
-  answersBlock?: string
   /** Current clarifyIteration as string. '0' means first asking-back; '1' means
    *  first answers-received run; '2' means second ask-then-answer, etc. */
   iteration?: string
@@ -100,90 +91,17 @@ export interface ClarifyPromptContext {
    *  String(max_iterations - current iteration). Agent reads this to know how
    *  many ask-back rounds it has left before the framework exhausts the loop. */
   remaining?: string
-  /** RFC-023 directive iteration: 'stop' means the runner MUST NOT append the
-   *  `<workflow-clarify>` protocol block for this rerun, regardless of the
-   *  agent node's clarify channel wiring. Not consumed by `renderUserPrompt`
-   *  directly — it is read by the scheduler to override `hasClarifyChannel`
-   *  before calling the runner. `undefined` (default) preserves legacy
-   *  behaviour: the channel is gated purely on the workflow definition. */
-  directive?: 'continue' | 'stop'
   /**
    * RFC-026: which clarify session mode emitted this context. Defaults to
    * `'isolated'` (treats missing / undefined the same as RFC-023 behavior).
    *
    * When `'inline'`, the runner has spawned opencode with `--session <id>`
    * and the prior rounds' Q&A + protocol blocks already live in opencode's
-   * session memory. `renderUserPrompt` then:
-   *   1. Skips the prior-rounds questions / answers auto-append sections
-   *      (replaced by a single "User Answers (Current Round)" section,
-   *      because `answersBlock` carries only the freshly submitted answers).
-   *   2. Replaces the trailing protocol block(s) with a short inline
-   *      reminder via `buildClarifyInlineReminder()` — re-emitting the
-   *      full bi-modal preamble + format block would just burn tokens
-   *      duplicating context the session already has.
+   * session memory. `renderUserPrompt` then skips port-content substitution
+   * and auto-append sections and swaps the trailing protocol block for a
+   * short inline reminder (`buildClarifyInlineReminder()`).
    */
   mode?: 'isolated' | 'inline'
-  /**
-   * RFC-026: when `true` (always true under `mode === 'inline'`), the
-   * `answersBlock` represents ONLY the most-recent round, NOT the
-   * cumulative multi-round dump. The renderer uses this flag to pick the
-   * correct section title ("User Answers (Current Round)" vs the legacy
-   * "Prior Rounds (Answers)"). Kept as a separate boolean — rather than
-   * implied from `mode === 'inline'` — so future modes can mix-and-match
-   * without conflating semantics.
-   */
-  currentRoundOnly?: boolean
-}
-
-/**
- * RFC-056 cross-clarify-driven re-run context (designer side).
- *
- * Filled when an agent is being re-spawned because the cross-clarify scheduler
- * has aggregated submitted answers from one or more downstream questioner
- * nodes and is now triggering the designer rerun. All fields are pre-rendered
- * strings — the structured-to-markdown serialization lives in
- * shared/clarify-cross.ts so this module stays a pure substitution engine.
- *
- * Builtin tokens populated from this context:
- *   {{__external_feedback__}}            ← block (markdown body produced by
- *                                          buildExternalFeedbackBlock)
- *   {{__external_feedback_iteration__}}  ← iteration (string form of
- *                                          designer's clarifyIteration when
- *                                          triggered by external feedback)
- *   {{__external_feedback_sources__}}    ← sourcesCsv (comma-separated source
- *                                          questioner node ids, dictionary order)
- *
- * Templates that don't reference these tokens get framework-auto-appended
- * sections at the tail of the user prompt — same auto-append pattern as the
- * RFC-005 review context and RFC-023 clarify context.
- */
-export interface CrossClarifyPromptContext {
-  /** Pre-rendered markdown body listing every source's Q&A for this batch
-   *  (dictionary-sorted by source questioner nodeId — see
-   *  `buildExternalFeedbackBlock`). */
-  block?: string
-  /** Designer's current `clarifyIteration` as string (when triggered by an
-   *  external feedback round — runtime API unchanged after RFC-064). '0' means
-   *  the designer has never been triggered by external feedback; '1' is the
-   *  first answers-received rerun; '2' is the second, etc. */
-  iteration?: string
-  /** Comma-separated list of source questioner nodeIds the current batch
-   *  drew Q&A from. Lets agent templates reference "you are being reviewed
-   *  by {{__external_feedback_sources__}} this round". */
-  sourcesCsv?: string
-  /**
-   * RFC-056 §6 update mode (2026-05-22 amendment): pre-rendered markdown body
-   * of the designer's last done output (one `### <port_name>` section per
-   * declared output port). When present, `shared/prompt.ts` emits a
-   * `## Prior Output (to update or regenerate)` section AND a `## Update Directive`
-   * section so the agent knows to update the prior draft rather than
-   * regenerate. The scheduler populates this only when the rerun was
-   * triggered by a cross-clarify submit (NOT for fresh first-time runs).
-   *
-   * Empty string OR undefined means "no prior output to update" — emit
-   * neither section (legacy regenerate-from-inputs behaviour).
-   */
-  priorOutputBlock?: string
 }
 
 /**
@@ -195,13 +113,77 @@ export interface CrossClarifyPromptContext {
  * `## Prior Output` + directive section pair — the update variant on an output
  * round, the ask-back variant (RFC-141) when mandatory ask-back is active.
  *
- * Mutually exclusive with `crossClarifyContext.priorOutputBlock` — the scheduler
- * sets at most one, and `renderUserPrompt` suppresses this when cross-clarify is
- * already rendering its prior output. Empty / undefined `block` ⇒ no sections.
+ * Empty / undefined `block` ⇒ no sections. (RFC-148: the historical mutual
+ * exclusion with the dead RFC-056 designer-context prior output is gone —
+ * this is the only prior-output surface.)
  */
 export interface PriorOutputUpdateContext {
   block?: string
 }
+
+/**
+ * RFC-148 — clarify-channel state for one dispatch, as ONE discriminated
+ * value instead of four scattered booleans (hasClarifyChannel /
+ * clarifyStopped / clarifyStopNotice / clarifyMode). The axes are
+ * deliberately orthogonal:
+ *   - `kind` is the WIRING family — it alone drives the envelope parser's
+ *     question cap (cross lifts the RFC-023 max), independent of whether
+ *     ask-back is mandatory this run (a review rerun keeps `kind:'cross'`
+ *     with `directive:'suppressed'`).
+ *   - `directive` is this run's enforcement:
+ *       'mandatory'  — genuine clarify round; the ONLY valid reply is
+ *                      `<workflow-clarify>` (RFC-100 gate);
+ *       'suppressed' — channel wired but not enforced (review reject /
+ *                      iterate re-production; voluntary clarify accepted);
+ *       'stopped'    — user ended clarification; a disobedient
+ *                      `<workflow-clarify>` is rejected (RFC-123).
+ *   - `injectStopNotice` — inject the standalone `### User directive:
+ *     STOP CLARIFYING` trailer (RFC-122; stop rounds with no prior clarify
+ *     content to carry it).
+ * Illegal states (stopped/suppressed with no wiring) are unrepresentable.
+ */
+export type ClarifyChannel =
+  | { kind: 'none' }
+  | {
+      kind: 'self' | 'cross'
+      /**
+       * RFC-165 (F12) adds 'optional': the clarify channel is OFFERED, not
+       * enforced — the agent may reply with EITHER a `<workflow-clarify>`
+       * envelope (opens a round) or a `<workflow-output>` (finalizes), and
+       * every rerun of the node (initial / retry / post-answer) stays
+       * optional. Runner enforcement: 'optional' trips NEITHER the
+       * clarify-required gate NOR the clarify-forbidden gate. Precedence
+       * when the scheduler composes the value: stopped > optional >
+       * mandatory/suppressed.
+       */
+      directive: 'mandatory' | 'suppressed' | 'stopped' | 'optional'
+      injectStopNotice: boolean
+    }
+
+/** RFC-049 structured port-validation failure (followup payload item). */
+export interface PortValidationFailure {
+  port: string
+  kind: string
+  subReason: string
+  detail?: string
+}
+
+/**
+ * RFC-148 — how the runner renders this dispatch's user prompt, as ONE
+ * discriminated value instead of the four scattered envelopeFollowup*
+ * fields. The `followup` arm carries `resumeSessionId` (D2): a follow-up
+ * nudge is only meaningful inside the resumed session that already holds
+ * the original prompt — "followup without a session" is unrepresentable.
+ */
+export type PromptMode =
+  | { kind: 'initial' }
+  | {
+      kind: 'followup'
+      resumeSessionId: string
+      reason: EnvelopeFollowupReason
+      clarifyDirective?: 'continue' | 'stop'
+      portValidations?: ReadonlyArray<PortValidationFailure>
+    }
 
 export interface RenderPromptInput {
   /** Node-level prompt template. May be undefined or empty. */
@@ -251,26 +233,33 @@ export interface RenderPromptInput {
    * (legacy behaviour — no extra wording).
    */
   agentOutputKinds?: AgentOutputKindsMap
+  /**
+   * RFC-164: when set, the trailing protocol block is REPLACED by this
+   * workgroup-generated block (leader/worker/fc variants) — the agent's own
+   * `outputs` declaration does not apply inside a workgroup task (design §5).
+   * Never concatenated with buildProtocolBlock; mandatory ask-back still wins
+   * (a workgroup member run is dispatched with directive 'suppressed', so in
+   * practice the mandatory branch never fires for workgroup runs).
+   */
+  workgroupProtocolBlock?: string
   /** RFC-005 review-driven re-run context. Absent for normal first-time runs. */
   reviewContext?: ReviewPromptContext
   /** RFC-023 clarify-driven re-run context. Absent for first runs and runs
    *  where the agent's clarify channel is wired but it hasn't yet asked. */
   clarifyContext?: ClarifyPromptContext
-  /** RFC-056 cross-clarify-driven designer re-run context. Absent for first
-   *  runs and runs that were not triggered by a cross-clarify submit batch. */
-  crossClarifyContext?: CrossClarifyPromptContext
   /**
-   * RFC-023 / RFC-039 / RFC-100: the scheduler's effectiveHasClarifyChannel —
-   * true ⟺ a clarify channel is wired AND the user has not clicked "Stop
-   * clarifying". When true, renderUserPrompt emits the RFC-100 mandatory
-   * ask-back preamble + clarify-only format and NO `<workflow-output>` format,
-   * so the agent must ask back and cannot finalize. When undefined / false
-   * (stop round, or no clarify channel), the single-envelope output protocol
-   * block is emitted unchanged. RFC-141: the same signal also selects the
-   * prior-output directive variant (ask-back wording vs update wording), so
-   * the directive can never contradict the trailing protocol.
+   * RFC-148: the clarify-channel state for this dispatch (one discriminated
+   * value; see `ClarifyChannel`). The renderer consumes two projections:
+   *   - `directive === 'mandatory'` ⟺ the historical
+   *     effectiveHasClarifyChannel — emits the RFC-100 mandatory ask-back
+   *     preamble + clarify-only format (no `<workflow-output>` format) and
+   *     selects the RFC-141 ask-back prior-output wording;
+   *   - `injectStopNotice` — the RFC-122 standalone STOP CLARIFYING trailer.
+   * Absent / kind:'none' / 'suppressed' / 'stopped' all render the single-
+   * envelope output protocol unchanged (the enforcement differences live in
+   * the runner's parse layer, not in prompt bytes).
    */
-  hasClarifyChannel?: boolean
+  clarifyChannel?: ClarifyChannel
   /**
    * RFC-119 / RFC-141: prior-output context for a NON-cross-clarify rerun. When
    * set (and cross-clarify is not already owning the prior-output block, and
@@ -280,19 +269,6 @@ export interface RenderPromptInput {
    * first-time runs and any run with no prior captured output.
    */
   priorOutputUpdate?: PriorOutputUpdateContext
-  /**
-   * RFC-122: the scheduler set the per-(task, asking-node) clarify directive to
-   * `stop` for THIS dispatch AND there is no prior-rounds `clarifyContext` whose
-   * `answersBlock` already carries the trailer (i.e. a first run / a run with no
-   * answered clarify round). When true the renderer injects the
-   * `### User directive: STOP CLARIFYING` trailer right before the trailing
-   * output protocol so the agent is told to proceed without asking even on its
-   * very first run. `hasClarifyChannel` is already false by construction (the
-   * scheduler forced ask-back off), so the output protocol is what trails.
-   * Undefined / false (the override is absent or `continue`, or the trailer is
-   * already inside `clarifyContext.answersBlock`) ⇒ byte-for-byte unchanged.
-   */
-  clarifyStopNotice?: boolean
 }
 
 const TEMPLATE_RE = /\{\{(\w+)\}\}/g
@@ -325,8 +301,6 @@ export const BUILTIN_VARS = new Set([
   // RFC-023 clarify context tokens. Stable names; renaming is a contract
   // break — see packages/backend/tests/clarify-prompt-injection.test.ts
   // for the source-code-text grep regression guard.
-  '__clarify_questions__',
-  '__clarify_answers__',
   '__clarify_iteration__',
   '__clarify_remaining__',
   // RFC-056 cross-clarify context tokens. Stable names; renaming is a
@@ -334,9 +308,6 @@ export const BUILTIN_VARS = new Set([
   // for the grep guard on `CROSS_CLARIFY_EXTERNAL_FEEDBACK_BLOCK_TITLE` +
   // packages/backend/tests/cross-clarify-prompt-injection-rfc056.test.ts
   // for the per-token presence guard.
-  '__external_feedback__',
-  '__external_feedback_iteration__',
-  '__external_feedback_sources__',
   // RFC-066 multi-repo placeholders. Single-repo runs render
   // `__repo_names__` as the empty string (length-1 array, worktreeDirName='');
   // `__repos__` becomes the single worktreePath; `__repo_count__` is '1'.
@@ -348,20 +319,37 @@ export const BUILTIN_VARS = new Set([
 ])
 
 /**
+ * RFC-148 — retired clarify/cross-clarify tokens. Their render paths were
+ * deleted with the RFC-132 finish (zero producers), and substitution now
+ * falls through to the default branch which renders '' — byte-identical to
+ * what these tokens produced for years. They are OUT of BUILTIN_VARS (new
+ * templates should not use them) but the validator recognizes them as a
+ * DEPRECATION WARNING instead of a `prompt-template-unresolved` error, so
+ * a saved workflow whose template still references one keeps launching
+ * (impl-gate high: consumer compatibility is not the producer's deadness).
+ */
+export const DEPRECATED_PROMPT_TOKENS: ReadonlySet<string> = new Set([
+  '__clarify_questions__',
+  '__clarify_answers__',
+  '__external_feedback__',
+  '__external_feedback_iteration__',
+  '__external_feedback_sources__',
+])
+
+/**
  * System ports the framework injects via DEDICATED prompt sections instead of
  * the generic `## ${port_name}` auto-append loop. They appear in
  * `definition.edges` as system-channel targets (RFC-023 clarify channel /
  * RFC-056 cross-clarify channel) so the canvas can render handles + the
  * scheduler can track wiring, but the actual prompt content arrives via the
- * `## Clarify Q&A — Prior Rounds` / `## External Feedback` blocks rendered
- * below. Skipping these here keeps the auto-append from emitting empty,
+ * flat `## Clarify Q&A` block rendered below (RFC-132/148). Skipping these
+ * here keeps the auto-append from emitting empty,
  * misleading `## __port_name__` headers that make the human reader (and
  * the agent) think the cross-channel content is missing.
  */
-const SYSTEM_PORT_NAMES = new Set<string>([
-  '__clarify_response__', // RFC-023 self-clarify answers target
-  '__external_feedback__', // RFC-056 cross-clarify designer feedback target
-])
+// RFC-147: the private 2-port set moved to the shared system-channel-port
+// registry — PROMPT_INJECTED_PORT_NAMES is the registry's promptInjected
+// projection (today: __clarify_response__ + __external_feedback__).
 
 /**
  * Compose the user-prompt string sent to opencode for one node invocation:
@@ -372,11 +360,23 @@ const SYSTEM_PORT_NAMES = new Set<string>([
  *      its `<workflow-output>` reply.
  */
 export function renderUserPrompt(input: RenderPromptInput): string {
+  // RFC-148 projections of the clarify-channel ADT (see ClarifyChannel):
+  // mandatory ask-back drives preamble/trailing/prior-output wording; the
+  // stop notice is the standalone RFC-122 trailer. Every other directive
+  // renders identically to "no channel" — enforcement lives in the runner.
+  const channel = input.clarifyChannel
+  const mandatoryAskBack =
+    channel !== undefined && channel.kind !== 'none' && channel.directive === 'mandatory'
+  // RFC-165 (F12): optional ask-back renders the DUAL-envelope protocol —
+  // both formats, agent's choice; enforcement stays off in the runner.
+  const optionalAskBack =
+    channel !== undefined && channel.kind !== 'none' && channel.directive === 'optional'
+  const stopNotice =
+    channel !== undefined && channel.kind !== 'none' && channel.injectStopNotice === true
   const tpl = input.promptTemplate ?? ''
   const referenced = new Set<string>()
   const rc = input.reviewContext
   const cc = input.clarifyContext
-  const xcc = input.crossClarifyContext
   // RFC-026: inline-mode clarify reruns send opencode a SECOND message in an
   // already-loaded session. The original first-round user prompt — template
   // body + every input port value — is already in opencode's transcript and
@@ -420,20 +420,10 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return rc?.iterateTargetPort ?? ''
         case '__sibling_outputs__':
           return rc?.siblingOutputs ?? ''
-        case '__clarify_questions__':
-          return cc?.questionsBlock ?? ''
-        case '__clarify_answers__':
-          return cc?.answersBlock ?? ''
         case '__clarify_iteration__':
           return cc?.iteration ?? ''
         case '__clarify_remaining__':
           return cc?.remaining ?? ''
-        case '__external_feedback__':
-          return xcc?.block ?? ''
-        case '__external_feedback_iteration__':
-          return xcc?.iteration ?? ''
-        case '__external_feedback_sources__':
-          return xcc?.sourcesCsv ?? ''
         case '__repos__':
           return (input.meta.repos ?? []).map((r) => r.worktreePath).join('\n')
         case '__repo_names__':
@@ -442,6 +432,13 @@ export function renderUserPrompt(input: RenderPromptInput): string {
           return String((input.meta.repos ?? []).length)
       }
     }
+    // RFC-148: retired tokens render '' unconditionally — historically their
+    // substitution cases returned empty (zero producers), and they must NOT
+    // fall through to the input lookup: a saved workflow with an inbound
+    // port that happens to share the retired name (validator only warns)
+    // would otherwise render upstream content where years of prompts had
+    // an empty string (impl-gate re-review high).
+    if (DEPRECATED_PROMPT_TOKENS.has(name)) return ''
     // RFC-026: drop input port values from inline-mode reruns (see comment
     // above the inlineMode declaration).
     if (inlineMode) return ''
@@ -456,13 +453,12 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     // reason input substitution above drops to ''.
     if (inlineMode) continue
     // System ports (`__clarify_response__`, `__external_feedback__`, etc.)
-    // are framework-injected via dedicated prompt blocks below
-    // (`## Clarify Q&A — Prior Rounds (Answers)` / `## External Feedback`),
-    // not via real edge dataflow. Rendering them as `## __port_name__`
+    // are framework-injected via the flat `## Clarify Q&A` block below
+    // (RFC-132/148), not via real edge dataflow. Rendering them as `## __port_name__`
     // sections produces empty / misleading headers that imply the
     // cross-clarify or self-clarify content is missing when it's actually
     // present further down. Skip the auto-append entry for them.
-    if (SYSTEM_PORT_NAMES.has(name)) continue
+    if (PROMPT_INJECTED_PORT_NAMES.has(name)) continue
     sections += `\n\n## ${name}\n${content}`
   }
 
@@ -501,84 +497,21 @@ export function renderUserPrompt(input: RenderPromptInput): string {
     }
   }
 
-  // RFC-023 / RFC-026: auto-append the clarify Q&A sections at the prompt
-  // tail when the author's template did not explicitly reference the tokens.
-  //
-  // Inline mode (RFC-026): opencode session memory already holds prior
-  // rounds. Skip the "Prior Rounds (Questions)" section; emit a single
-  // "User Answers (Current Round)" carrying just the freshly submitted
-  // answers. The questions block is suppressed entirely in inline mode —
-  // re-rendering questions the agent already saw burns tokens and re-anchors
-  // it to the prior wording. (Authors who explicitly reference
-  // `{{__clarify_questions__}}` still get substitution above — that path is
-  // a deliberate template choice.)
+  // RFC-023/026/132 clarify injection — the flat `## Clarify Q&A` block is
+  // the single surface (RFC-148 removed the legacy round-grouped sections;
+  // inline mode needs no special title because the block is round-agnostic).
   if (cc?.flatBlock !== undefined && cc.flatBlock.trim().length > 0) {
-    // RFC-132 (PR-C): the unified flat `## Clarify Q&A` block supersedes the
-    // round-grouped questions/answers sections below (self / questioner /
-    // designer all render as equal peers inside it — §5). Emit it verbatim (it
-    // owns its own heading) and SKIP the legacy sections. The block is
-    // round-agnostic, so inline mode needs no separate "current round" title.
+    // RFC-132 (PR-C): the unified flat `## Clarify Q&A` block — self /
+    // questioner / designer all render as equal peers inside it (§5). Emit
+    // it verbatim (it owns its own heading). The block is round-agnostic, so
+    // inline mode needs no separate "current round" title. RFC-148: the
+    // legacy round-grouped else-branch that used to follow is deleted — the
+    // scheduler has produced flatBlock-only contexts since RFC-132 PR-C.
     sections += `\n\n${cc.flatBlock}`
-  } else if (cc !== undefined) {
-    if (
-      !inlineMode &&
-      cc.questionsBlock !== undefined &&
-      cc.questionsBlock.trim().length > 0 &&
-      !referenced.has('__clarify_questions__')
-    ) {
-      sections += `\n\n## Clarify Q&A — Prior Rounds (Questions)\n${cc.questionsBlock}`
-    }
-    if (
-      cc.answersBlock !== undefined &&
-      cc.answersBlock.trim().length > 0 &&
-      !referenced.has('__clarify_answers__')
-    ) {
-      const heading =
-        inlineMode || cc.currentRoundOnly === true
-          ? 'Clarify Q&A — User Answers (Current Round)'
-          : 'Clarify Q&A — Prior Rounds (Answers)'
-      sections += `\n\n## ${heading}\n${cc.answersBlock}`
-    }
-  }
-
-  // RFC-056: auto-append the External Feedback section when the designer's
-  // template didn't reference `{{__external_feedback__}}` directly. Placed
-  // after RFC-023 self-clarify auto-append so a designer that has BOTH
-  // sources of feedback in the same rerun shows them in stable order:
-  //   ## Self Clarify Q&A (RFC-023, if any)
-  //   ## Prior Output (to update or regenerate) (RFC-056 update mode, if any)
-  //   ## External Feedback (RFC-056, if any)
-  //   ## Update Directive (RFC-056 update mode, if any)
-  // A single `clarifyIteration` counter covers both self-clarify and
-  // cross-clarify rounds via RFC-064 unification (the `kind` column on
-  // `clarify_rounds` is the only "self vs cross" discriminator the runtime
-  // needs); see RFC-064 design.md §3 + RFC-056 design.md §6.3.
-  if (xcc !== undefined) {
-    // §6 update-mode prior-output section (renders BEFORE External Feedback
-    // so the agent reads "here's the draft you're updating" → "here's what
-    // the user wants changed" in that order).
-    if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n${PRIOR_OUTPUT_BLOCK_TITLE}\n${xcc.priorOutputBlock}`
-    }
-    if (
-      xcc.block !== undefined &&
-      xcc.block.trim().length > 0 &&
-      !referenced.has('__external_feedback__')
-    ) {
-      sections += `\n\n## External Feedback\n${xcc.block}`
-    }
-    // §6 update-mode directive (renders AFTER External Feedback so it's the
-    // last instruction before the protocol block — primes the agent's
-    // "what do I do this round" mental model on update-mode terms).
-    if (xcc.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) {
-      sections += `\n\n${UPDATE_DIRECTIVE_BLOCK_TITLE}\n${UPDATE_DIRECTIVE_TEXT}`
-    }
   }
 
   // RFC-119 / RFC-141: generalized rerun prior-output. Emits ONLY when:
   //   - the scheduler set priorOutputUpdate.block (a prior run captured output), AND
-  //   - cross-clarify is NOT already rendering its own prior output (mutual
-  //     exclusion — never inject two prior-output blocks in one prompt), AND
   //   - NOT an inline session resume (the resumed session already holds the prior
   //     output — re-injecting wastes tokens and re-anchors on stale text).
   // RFC-141: a mandatory ask-back round now ALSO renders it — with the
@@ -588,13 +521,8 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // is selected off the SAME hasClarifyChannel signal that picks the trailing
   // protocol below, so wording and protocol can never disagree.
   const pou = input.priorOutputUpdate
-  if (
-    pou?.block !== undefined &&
-    pou.block.trim().length > 0 &&
-    !(xcc?.priorOutputBlock !== undefined && xcc.priorOutputBlock.trim().length > 0) &&
-    !inlineMode
-  ) {
-    if (input.hasClarifyChannel === true) {
+  if (pou?.block !== undefined && pou.block.trim().length > 0 && !inlineMode) {
+    if (mandatoryAskBack) {
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_BLOCK_TITLE}\n${pou.block}`
       sections += `\n\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_BLOCK_TITLE}\n${ASKBACK_PRIOR_OUTPUT_DIRECTIVE_TEXT}`
     } else {
@@ -609,16 +537,16 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   // ask-back off), so the agent gets the output protocol below; this section
   // makes the user's "stop clarifying" decision explicit so the agent doesn't
   // re-ask out of its own bias. When a prior round exists the scheduler routes
-  // the trailer through `clarifyContext.answersBlock` instead (via
-  // buildPromptContext's directiveOverride) and leaves this flag false — never
+  // the trailer through the flat clarify block instead and leaves this flag
+  // false — never
   // both, so the STOP CLARIFYING trailer appears exactly once.
-  if (input.clarifyStopNotice === true && input.hasClarifyChannel !== true) {
+  if (stopNotice && !mandatoryAskBack) {
     sections += `\n\n${renderClarifyDirectiveTrailer('stop')}`
   }
 
   // Trailing protocol selection (RFC-100 — mandatory ask-back).
   //
-  // `input.hasClarifyChannel` here is the scheduler's effectiveHasClarifyChannel:
+  // `mandatoryAskBack` here is the scheduler's historical effectiveHasClarifyChannel:
   // true ⟺ a clarify channel is wired AND the user has not clicked "Stop
   // clarifying" (directive !== 'stop'). Call that state clarifyActive.
   //
@@ -634,10 +562,22 @@ export function renderUserPrompt(input: RenderPromptInput): string {
   //     is the first time it must be emitted. Routing inline-stop to the
   //     reminder (as pre-RFC-100 did) would leave the agent with no port list.
   let trailing: string
-  if (input.hasClarifyChannel === true) {
+  if (mandatoryAskBack) {
     trailing = inlineMode
       ? buildClarifyInlineReminder()
       : buildMandatoryClarifyPreamble() + buildClarifyProtocolBlock()
+  } else if (optionalAskBack) {
+    // RFC-165 (F12): optional ask-back — the agent sees BOTH envelope
+    // formats and picks one. Inline (post-answer / same-session) rounds get
+    // a short dual-choice reminder; the full formats already live in the
+    // session transcript from the first round.
+    trailing = inlineMode
+      ? buildOptionalClarifyInlineReminder()
+      : buildOptionalClarifyPreamble() +
+        buildOptionalDualProtocolBlock(input.agentOutputs, input.agentOutputKinds)
+  } else if (input.workgroupProtocolBlock !== undefined) {
+    // RFC-164: workgroup runs replace (never extend) the agent-outputs block.
+    trailing = input.workgroupProtocolBlock
   } else {
     trailing = buildProtocolBlock(input.agentOutputs, input.agentOutputKinds)
   }
@@ -753,13 +693,9 @@ export function buildMandatoryClarifyPreamble(): string {
  * has no way to finalize until the user stops clarifying. Returns a leading
  * `\n\n` so callers can concatenate without injecting their own separator.
  */
-export function buildClarifyProtocolBlock(): string {
-  return `
-
----
-**Clarify format.** Emit exactly one <workflow-clarify> block and nothing else — no <workflow-output> anywhere in the reply. Asking back is the expected outcome of this round.
-
-Format:
+/** RFC-023 — the clarify envelope format example (shared by the mandatory and
+ *  optional protocol blocks so the two renderings can never drift). */
+export const CLARIFY_FORMAT_EXAMPLE = `Format:
 <workflow-clarify>
 {
   "questions": [
@@ -778,15 +714,25 @@ Format:
     }
   ]
 }
-</workflow-clarify>
+</workflow-clarify>`
 
-Hard rules — violation is treated as a malformed reply and the node will fail / retry:
-- Your reply MUST contain exactly one <workflow-clarify> block and NO <workflow-output> — emitting <workflow-output> is rejected until the user stops clarifying. Defer all output ports to a later round; do not output partial data.
-- Limits: at most 5 questions, each question 2–4 options — any option beyond the 4th is silently dropped, so cap each question at 4. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
+/** RFC-023 — the structural clarify rules shared by both directive modes
+ *  (question/option caps, labels, legacy form, Q&A echo semantics). */
+export const CLARIFY_STRUCTURAL_RULES = `- Limits: at most 5 questions, each question 2–4 options — any option beyond the 4th is silently dropped, so cap each question at 4. Do NOT add a "free text / other" option — the framework appends a user-input row automatically.
 - Each option needs a non-empty "label". The other three fields are optional but strongly recommended: "description" (always render an explanation of what picking this option means), and — when "recommended" is true — "recommendationReason" (why this is your pick).
 - Mark at most a couple of options across the whole envelope as "recommended": true. Recommended options sort to the top of the picker for the user.
 - Legacy form is also accepted: \`"options": ["a", "b", "c"]\` — strings are lifted into \`{label, description:"", recommended:false, recommendationReason:""}\`. Prefer the structured form for new emissions.
 - Once the user submits answers, you will receive every question answered so far in the next prompt under "## Clarify Q&A" — a single flat list where each question is an equal peer with the user's answer (a deterministic synthesis line). Treat every listed answer as an already-resolved decision.`
+
+export function buildClarifyProtocolBlock(): string {
+  return (
+    `\n\n---\n` +
+    '**Clarify format.** Emit exactly one <workflow-clarify> block and nothing else — no <workflow-output> anywhere in the reply. Asking back is the expected outcome of this round.\n\n' +
+    CLARIFY_FORMAT_EXAMPLE +
+    '\n\nHard rules — violation is treated as a malformed reply and the node will fail / retry:\n' +
+    '- Your reply MUST contain exactly one <workflow-clarify> block and NO <workflow-output> — emitting <workflow-output> is rejected until the user stops clarifying. Defer all output ports to a later round; do not output partial data.\n' +
+    CLARIFY_STRUCTURAL_RULES
+  )
 }
 
 /**
@@ -813,6 +759,72 @@ export function buildClarifyInlineReminder(): string {
     'This node stays in MANDATORY ask-back mode until the user clicks "Stop clarifying" — your next reply MUST be another `<workflow-clarify>` envelope. ' +
     'Do not emit `<workflow-output>`; it will be rejected. ' +
     'The full clarify format and asking-back rules from earlier in this session still apply and have not been re-emitted.'
+  )
+}
+
+/**
+ * RFC-165 (F12) — the OPTIONAL ask-back preamble. Unlike the mandatory
+ * variant it explicitly offers BOTH outcomes and is followed by BOTH format
+ * blocks (clarify + output); the agent must pick exactly one envelope.
+ * Returns a leading `\n\n` like its mandatory sibling.
+ */
+export function buildOptionalClarifyPreamble(): string {
+  return (
+    '\n\n---\n' +
+    '**This node has an OPTIONAL clarify channel.** If anything material to doing this task correctly is unclear — scope, contracts, naming, acceptance criteria, unfamiliar terms — ask the user FIRST by replying with a `<workflow-clarify>` envelope (format below). If the task is already unambiguous, skip asking and produce the final `<workflow-output>` directly.\n\n' +
+    '- Reply with EXACTLY ONE envelope: either `<workflow-clarify>` or `<workflow-output>`, never both.\n' +
+    '- Prefer asking over assuming: an unstated detail you cannot resolve from the inputs / repository yourself is worth a question, not a guess.\n' +
+    '- Do not pad with low-stakes confirmations — if you ask, ask only the decisions that change the outcome.\n' +
+    '- Ask in the same language as the inputs / the user.'
+  )
+}
+
+/**
+ * RFC-165 (F12, implementation-gate P1 fix) — the OPTIONAL dual-envelope
+ * protocol block. The naive composition (mandatory clarify block + mandatory
+ * output block) issued CONTRADICTORY commands — "reply MUST be clarify, no
+ * output anywhere" followed by "you MUST end with output". This builder
+ * renders the two formats as an explicit either/or: Option A (ask) with the
+ * clarify format + its structural rules, Option B (finalize) with the port
+ * protocol re-headed for choice. Returns a leading `\n\n`.
+ */
+export function buildOptionalDualProtocolBlock(
+  agentOutputs: string[],
+  agentOutputKinds?: AgentOutputKindsMap,
+): string {
+  const optionA =
+    `\n\n---\n` +
+    '**Option A — ask the user (reply with ONE `<workflow-clarify>` block and nothing else).**\n\n' +
+    `FORMAT_PLACEHOLDER\n\n` +
+    'Rules if you choose Option A — violation is treated as a malformed reply:\n' +
+    '- The reply must contain exactly one <workflow-clarify> block and NO <workflow-output> — you finalize in a LATER round, after the user answers.\n' +
+    `RULES_PLACEHOLDER`
+
+  const MANDATORY_HEAD =
+    'You MUST end your reply with a `<workflow-output>` block listing these ports:'
+  const OPTIONAL_HEAD =
+    '**Option B — finalize (reply with ONE `<workflow-output>` block).** If you choose to finalize instead of asking, end your reply with a `<workflow-output>` block listing these ports:'
+  const outputBlock = buildProtocolBlock(agentOutputs, agentOutputKinds)
+  // The head swap is locked by tests; if the mandatory head ever changes,
+  // fall back to prefixing so the choice framing is never silently lost.
+  const optionB = outputBlock.includes(MANDATORY_HEAD)
+    ? outputBlock.replace(MANDATORY_HEAD, OPTIONAL_HEAD)
+    : `\n\n---\n${OPTIONAL_HEAD}${outputBlock}`
+
+  return optionA + optionB
+}
+
+/**
+ * RFC-165 (F12) — the optional-mode inline (same-session) reminder: the user
+ * answered the previous round; the agent may ask again OR finalize now. The
+ * full formats from the first round still stand in the session transcript.
+ */
+export function buildOptionalClarifyInlineReminder(): string {
+  return (
+    '\n\n---\n' +
+    'The user has answered your previous `<workflow-clarify>` round (see "Clarify Q&A — User Answers (Current Round)" above). ' +
+    'This node remains in OPTIONAL ask-back mode: if something material is still unclear, reply with another `<workflow-clarify>` envelope; otherwise produce the final `<workflow-output>` now. ' +
+    'Reply with exactly one of the two envelopes — the formats from earlier in this session still apply and have not been re-emitted.'
   )
 }
 
@@ -937,6 +949,13 @@ export interface EnvelopeFollowupInput {
    * this field even if a backend bug threads it through.
    */
   perKindRepairBlocks?: ReadonlyArray<string>
+  /**
+   * RFC-165 (F12, implementation-gate P2 fix): true when the clarify channel
+   * is OPTIONAL — the correction round must keep BOTH envelopes on the table
+   * (the mandatory-only bullets would forbid a perfectly valid output-only
+   * recovery). Only meaningful when `hasClarifyChannel` is true.
+   */
+  clarifyOptional?: boolean
 }
 
 export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): string {
@@ -1001,8 +1020,14 @@ export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): stri
   // is always to re-emit `<workflow-output>` with the failing ports corrected.
   // It therefore uses the output-oriented bullets regardless of channel.
   // ---------------------------------------------------------------------------
+  const optional = hasClarify && input.clarifyOptional === true
   let bullets: string
-  if (isPortValidation || reason === 'envelope-port-malformed' || !hasClarify) {
+  if (optional && !isPortValidation && reason !== 'envelope-port-malformed') {
+    bullets =
+      '- This node has an OPTIONAL clarify channel: reply with EXACTLY ONE envelope — either a `<workflow-clarify>` block (if something material is still unclear) or a `<workflow-output>` block (if you are ready to finalize), using the formats previously specified in this session.\n' +
+      '- Never emit both, and do not emit anything after the closing tag of whichever envelope you pick.\n' +
+      '- If you were mid-investigation, finish it first, then pick one envelope.'
+  } else if (isPortValidation || reason === 'envelope-port-malformed' || !hasClarify) {
     bullets =
       '- If you have finished the requested work, end your NEXT reply with a `<workflow-output>` block using the EXACT format previously specified in this session (the same port list, the same `<port name="...">...</port>` shape). Do not summarize, do not omit the block.\n' +
       '- If you were not finished, complete the remaining work first, THEN emit the `<workflow-output>` block. The envelope is mandatory either way.\n' +
@@ -1031,8 +1056,9 @@ export function renderEnvelopeFollowupPrompt(input: EnvelopeFollowupInput): stri
   // ---------------------------------------------------------------------------
   let trailer = ''
   if (hasClarify && input.clarifyDirective === 'continue') {
-    trailer =
-      '\n\nThe user clicked "Keep clarifying" — this node remains in mandatory ask-back mode, so your reply MUST be another `<workflow-clarify>` envelope. `<workflow-output>` is not an option until the user clicks "Stop clarifying".'
+    trailer = optional
+      ? '\n\nThe user answered your previous questions. This node remains in OPTIONAL ask-back mode — ask again with `<workflow-clarify>` if something material is still unclear, or finalize now with `<workflow-output>`.'
+      : '\n\nThe user clicked "Keep clarifying" — this node remains in mandatory ask-back mode, so your reply MUST be another `<workflow-clarify>` envelope. `<workflow-output>` is not an option until the user clicks "Stop clarifying".'
   }
 
   // ---------------------------------------------------------------------------

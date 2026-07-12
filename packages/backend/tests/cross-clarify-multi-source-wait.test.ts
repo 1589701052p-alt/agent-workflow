@@ -33,11 +33,38 @@ import {
   createCrossClarifySession,
   evaluateDesignerRerunReadiness,
 } from '../src/services/crossClarify'
+import { listTaskQuestions, reassignTaskQuestion } from '../src/services/taskQuestions'
+import { dispatchTaskQuestions } from '../src/services/taskQuestionDispatch'
 import { resetBroadcastersForTests } from '../src/ws/broadcaster'
 
 const MIGRATIONS = resolve(import.meta.dir, '..', 'db', 'migrations')
 
 const actor = { userId: 'u1', role: 'owner' as const }
+
+// RFC-162: designer-by-default is DELETED — answering a cross round no longer auto-creates a
+// designer entry. The N:1 multi-source designer aggregation this file locks is now driven by
+// reassigning EACH answered sibling round's questioner card to the shared graph designer node
+// (ADDS a roleKind='designer' handler row), then dispatching all the designer entries in ONE
+// batch — the readiness gate (all siblings answered) passes and mints ONE designer rerun that
+// aggregates every source. The park/pending assertions before all siblings answer are unchanged
+// (a not-yet-answered sibling still keeps the designer parked in evaluateDesignerRerunReadiness).
+async function reassignAllThenDispatchDesigner(
+  db: DbClient,
+  taskId: string,
+  crossClarifyNodeRunIds: string[],
+) {
+  for (const origin of crossClarifyNodeRunIds) {
+    const questioner = (await listTaskQuestions(db, taskId)).find(
+      (e) => e.roleKind === 'questioner' && e.originNodeRunId === origin,
+    )
+    if (!questioner) throw new Error(`no questioner entry for round ${origin}`)
+    await reassignTaskQuestion(db, questioner.id, 'designer', actor)
+  }
+  const designerIds = (await listTaskQuestions(db, taskId))
+    .filter((e) => e.roleKind === 'designer' && crossClarifyNodeRunIds.includes(e.originNodeRunId!))
+    .map((e) => e.id)
+  return dispatchTaskQuestions(db, taskId, designerIds, actor)
+}
 
 function makeQ(id: string): ClarifyQuestion {
   return {
@@ -292,8 +319,8 @@ describe('RFC-056 C3 — multi-source wait', () => {
     void taskId
   })
 
-  test('3/3 answered → the LAST answer mints the designer rerun aggregating all 3 sources', async () => {
-    const { db, sec, ux, perf } = await buildHarness()
+  test('3/3 answered → dispatching the designer entries mints ONE rerun aggregating all 3 sources', async () => {
+    const { db, taskId, sec, ux, perf } = await buildHarness()
     await autoDispatchClarifyRound({
       db,
       originNodeRunId: sec,
@@ -306,15 +333,17 @@ describe('RFC-056 C3 — multi-source wait', () => {
       answers: [makeAns('q1')],
       actor,
     })
-    const ret = await autoDispatchClarifyRound({
+    await autoDispatchClarifyRound({
       db,
       originNodeRunId: perf,
       answers: [makeAns('q1')],
       actor,
     })
-    // ONE designer rerun, carrying every sibling's designer entry (the legacy
-    // sourceCount=3 → the rerun's dispatched entry batch spans all 3 rounds).
-    const designerRerun = ret.dispatch.reruns.find((r) => r.targetNodeId === 'designer')
+    // RFC-162: reassign all 3 answered rounds to the shared designer + dispatch the batch. ONE
+    // designer rerun, carrying every sibling's designer entry (the legacy sourceCount=3 → the
+    // rerun's dispatched entry batch spans all 3 rounds).
+    const disp = await reassignAllThenDispatchDesigner(db, taskId, [sec, ux, perf])
+    const designerRerun = disp.reruns.find((r) => r.targetNodeId === 'designer')
     expect(designerRerun).toBeDefined()
     expect(designerRerun!.entryIds).toHaveLength(3)
   })
@@ -339,6 +368,8 @@ describe('RFC-056 C3 — multi-source wait', () => {
       answers: [makeAns('q1')],
       actor,
     })
+    // RFC-162: the designer rerun is minted by dispatching the reassigned designer entries.
+    await reassignAllThenDispatchDesigner(db, taskId, [sec, ux, perf])
     const elevatedDesigner = await db
       .select()
       .from(nodeRuns)

@@ -6,9 +6,13 @@
 // Only ReviewDecisionInfo handled 'superseded'; the other two silently fell
 // back to gray. One table, semantic StatusChip kinds only.
 
+import type { DocVersionDecision } from '@agent-workflow/shared'
 import type { StatusChipKind } from '@/components/StatusChip'
 
-export type ReviewDecisionView = 'pending' | 'approved' | 'rejected' | 'iterated' | 'superseded'
+// RFC-149: the view union IS the shared wire enum (`DOC_VERSION_DECISION`) —
+// re-exported under the existing name so call sites keep compiling and a new
+// decision value shows up here as a compile error instead of a silent-neutral.
+export type ReviewDecisionView = DocVersionDecision
 
 export const DECISION_CHIP_KIND: Record<ReviewDecisionView, StatusChipKind> = {
   pending: 'neutral',
