@@ -1,4 +1,6 @@
 import { rimrafDir } from './helpers/cleanup'
+import { testDelay, testTolerance } from './helpers/slow-runner'
+import { waitForTraceEvent } from './helpers/trace-poll'
 // RFC-098 B1 REGRESSION LOCK — commit&push moved OUT of the dispatch loop
 // (audit S-17 second half + adversarial-review revision #2,
 // design/RFC-098-scheduler-closeout/design.md §B1.4).
@@ -235,133 +237,142 @@ describe('RFC-098 B1 — auto commit&push runs as a synthetic in-flight entry, n
   })
   afterEach(() => h.cleanup())
 
-  test('ready downstream node is dispatched WHILE the slow commit session runs (n2.start < first commit end)', async () => {
-    const taskId = await seedTask(h)
+  test(
+    'ready downstream node is dispatched WHILE the slow commit session runs (n2.start < first commit end)',
+    async () => {
+      const taskId = await seedTask(h)
 
-    // n1 completes instantly leaving a dirty worktree → its commit session
-    // (callIndex 0) sleeps 600ms. n2 then becomes ready; under the synthetic
-    // in-flight design the loop dispatches it immediately. n2's own
-    // completion triggers a SECOND commit session (callIndex 1) — give it a
-    // LONGER sleep so the first session deterministically commits+pushes
-    // first and the second finds nothing left to commit (its outcome is not
-    // asserted; commit failures never break task execution).
-    await withEnv(
-      {
-        CP_STATE_DIR: h.stateDir,
-        CP_WRITE_FILE_FOR_n1: 'change.txt',
-        CP_COMMIT_DELAYS: JSON.stringify([600, 1500]),
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', h.shimPath],
+      // n1 completes instantly leaving a dirty worktree → its commit session
+      // (callIndex 0) sleeps 600ms. n2 then becomes ready; under the synthetic
+      // in-flight design the loop dispatches it immediately. n2's own
+      // completion triggers a SECOND commit session (callIndex 1) — give it a
+      // LONGER sleep so the first session deterministically commits+pushes
+      // first and the second finds nothing left to commit (its outcome is not
+      // asserted; commit failures never break task execution).
+      await withEnv(
+        {
+          CP_STATE_DIR: h.stateDir,
+          CP_WRITE_FILE_FOR_n1: 'change.txt',
+          CP_COMMIT_DELAYS: JSON.stringify([testDelay(600), testDelay(1500)]),
+        },
+        () =>
+          runTask({
+            taskId,
+            db: h.db,
+            appHome: h.appHome,
+            opencodeCmd: ['bun', 'run', h.shimPath],
+          }),
+      )
+
+      const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+      expect(t?.status).toBe('done')
+
+      const trace = readTrace(h.stateDir)
+      const n1End = trace.find((e) => e.agent === 'n1' && e.phase === 'end')
+      const n2Start = trace.find((e) => e.agent === 'n2' && e.phase === 'start')
+      const commit0Start = trace.find(
+        (e) => e.agent === COMMIT_AGENT_NAME && e.callIndex === 0 && e.phase === 'start',
+      )
+      const commit0End = trace.find(
+        (e) => e.agent === COMMIT_AGENT_NAME && e.callIndex === 0 && e.phase === 'end',
+      )
+      expect(n1End).toBeDefined()
+      expect(n2Start).toBeDefined()
+      expect(commit0Start).toBeDefined()
+      expect(commit0End).toBeDefined()
+
+      // Sanity: the commit session was triggered by n1's completion.
+      expect(commit0Start!.t).toBeGreaterThanOrEqual(n1End!.t)
+
+      // HEADLINE (flipped semantics vs the pre-B1 synchronous await): n2 was
+      // SPAWNED while the first commit session was still sleeping — the
+      // dispatch loop did not freeze. Pre-B1, n2.start >= commit0.end held
+      // structurally. ~600ms structural margin, no millisecond racing.
+      expect(n2Start!.t).toBeLessThan(commit0End!.t)
+
+      // The commit landed for real: n1's commit container row is done & pushed,
+      // and the remote got the branch tip.
+      const rows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+      const commitRow = rows.find(
+        (r) => r.nodeId === commitPushNodeId('n1') && r.commitPushJson !== null,
+      )
+      expect(commitRow).toBeDefined()
+      expect(commitRow!.status).toBe('done')
+      const meta = JSON.parse(commitRow!.commitPushJson!) as CommitPushMeta
+      expect(meta.pushOutcome).toBe('pushed')
+
+      // Drain determinism on the OK path: nothing is left un-settled after
+      // runTask returns (the synthetics resolved inside the race set).
+      expect(rows.filter((r) => r.status === 'running' || r.status === 'pending').length).toBe(0)
+    },
+    testDelay(20_000),
+  )
+
+  test(
+    'cancel mid-commit: synthetics are drained — task lands canceled with every row settled, no orphaned commit session',
+    async () => {
+      const taskId = await seedTask(h)
+
+      const controller = new AbortController()
+      const runP = withEnv(
+        {
+          CP_STATE_DIR: h.stateDir,
+          CP_WRITE_FILE_FOR_n1: 'change.txt',
+          // n2 sleeps long enough to be mid-run when the abort fires; the
+          // commit session sleeps 800ms so the abort lands mid-commit too.
+          // RFC-W003: delays scaled via testDelay (AW_TEST_DELAY_MULTIPLIER).
+          CP_DELAY_MS_FOR_n2: String(testDelay(5000)),
+          CP_COMMIT_DELAYS: JSON.stringify([testDelay(800)]),
+        },
+        () =>
+          runTask({
+            taskId,
+            db: h.db,
+            appHome: h.appHome,
+            opencodeCmd: ['bun', 'run', h.shimPath],
+            signal: controller.signal,
+          }),
+      )
+
+      // Deterministic trip point: wait until BOTH the commit session and n2
+      // have reached their spawn (trace 'start'), i.e. the commit is in flight
+      // and the downstream node is running — then cancel.
+      // RFC-W003: waitForTraceEvent formalizes the poll (deadline scaled via
+      // testTolerance so a slow runner slower spawns still get observed).
+      await Promise.all([
+        waitForTraceEvent(h.stateDir, COMMIT_AGENT_NAME, 'start', {
+          timeoutMs: testTolerance(10_000),
         }),
-    )
+        waitForTraceEvent(h.stateDir, 'n2', 'start', { timeoutMs: testTolerance(10_000) }),
+      ])
+      controller.abort()
 
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('done')
+      // Drain proof #1: runTask RESOLVES (a leaked/awaited-forever commit
+      // synthetic would hang here until the test timeout).
+      await runP
 
-    const trace = readTrace(h.stateDir)
-    const n1End = trace.find((e) => e.agent === 'n1' && e.phase === 'end')
-    const n2Start = trace.find((e) => e.agent === 'n2' && e.phase === 'start')
-    const commit0Start = trace.find(
-      (e) => e.agent === COMMIT_AGENT_NAME && e.callIndex === 0 && e.phase === 'start',
-    )
-    const commit0End = trace.find(
-      (e) => e.agent === COMMIT_AGENT_NAME && e.callIndex === 0 && e.phase === 'end',
-    )
-    expect(n1End).toBeDefined()
-    expect(n2Start).toBeDefined()
-    expect(commit0Start).toBeDefined()
-    expect(commit0End).toBeDefined()
+      const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
+      expect(t?.status).toBe('canceled')
 
-    // Sanity: the commit session was triggered by n1's completion.
-    expect(commit0Start!.t).toBeGreaterThanOrEqual(n1End!.t)
+      // Drain proof #2: every node_runs row is settled — the canceled exits
+      // awaited the commit synthetic before returning, so neither the commit
+      // container nor its opencode-session child row is stranded mid-flight
+      // past runTask's finally (where the write-lock registry gc runs).
+      const rows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
+      expect(rows.length).toBeGreaterThan(0)
+      expect(rows.filter((r) => r.status === 'running' || r.status === 'pending')).toEqual([])
 
-    // HEADLINE (flipped semantics vs the pre-B1 synchronous await): n2 was
-    // SPAWNED while the first commit session was still sleeping — the
-    // dispatch loop did not freeze. Pre-B1, n2.start >= commit0.end held
-    // structurally. ~600ms structural margin, no millisecond racing.
-    expect(n2Start!.t).toBeLessThan(commit0End!.t)
-
-    // The commit landed for real: n1's commit container row is done & pushed,
-    // and the remote got the branch tip.
-    const rows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    const commitRow = rows.find(
-      (r) => r.nodeId === commitPushNodeId('n1') && r.commitPushJson !== null,
-    )
-    expect(commitRow).toBeDefined()
-    expect(commitRow!.status).toBe('done')
-    const meta = JSON.parse(commitRow!.commitPushJson!) as CommitPushMeta
-    expect(meta.pushOutcome).toBe('pushed')
-
-    // Drain determinism on the OK path: nothing is left un-settled after
-    // runTask returns (the synthetics resolved inside the race set).
-    expect(rows.filter((r) => r.status === 'running' || r.status === 'pending').length).toBe(0)
-  }, 20_000)
-
-  test('cancel mid-commit: synthetics are drained — task lands canceled with every row settled, no orphaned commit session', async () => {
-    const taskId = await seedTask(h)
-
-    const controller = new AbortController()
-    const runP = withEnv(
-      {
-        CP_STATE_DIR: h.stateDir,
-        CP_WRITE_FILE_FOR_n1: 'change.txt',
-        // n2 sleeps long enough to be mid-run when the abort fires; the
-        // commit session sleeps 800ms so the abort lands mid-commit too.
-        CP_DELAY_MS_FOR_n2: '5000',
-        CP_COMMIT_DELAYS: JSON.stringify([800]),
-      },
-      () =>
-        runTask({
-          taskId,
-          db: h.db,
-          appHome: h.appHome,
-          opencodeCmd: ['bun', 'run', h.shimPath],
-          signal: controller.signal,
-        }),
-    )
-
-    // Deterministic trip point: wait until BOTH the commit session and n2
-    // have reached their spawn (trace 'start'), i.e. the commit is in flight
-    // and the downstream node is running — then cancel.
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
-      const tr = readTrace(h.stateDir)
-      const commitStarted = tr.some((e) => e.agent === COMMIT_AGENT_NAME && e.phase === 'start')
-      const n2Started = tr.some((e) => e.agent === 'n2' && e.phase === 'start')
-      if (commitStarted && n2Started) break
-      await Bun.sleep(20)
-    }
-    controller.abort()
-
-    // Drain proof #1: runTask RESOLVES (a leaked/awaited-forever commit
-    // synthetic would hang here until the test timeout).
-    await runP
-
-    const t = (await h.db.select().from(tasks).where(eq(tasks.id, taskId)))[0]
-    expect(t?.status).toBe('canceled')
-
-    // Drain proof #2: every node_runs row is settled — the canceled exits
-    // awaited the commit synthetic before returning, so neither the commit
-    // container nor its opencode-session child row is stranded mid-flight
-    // past runTask's finally (where the write-lock registry gc runs).
-    const rows = await h.db.select().from(nodeRuns).where(eq(nodeRuns.taskId, taskId))
-    expect(rows.length).toBeGreaterThan(0)
-    expect(rows.filter((r) => r.status === 'running' || r.status === 'pending')).toEqual([])
-
-    // The commit container settled to a terminal status with its meta
-    // persisted (the killed message-gen session degrades to the fallback
-    // message — never to an abandoned row).
-    const commitRow = rows.find(
-      (r) => r.nodeId === commitPushNodeId('n1') && r.commitPushJson !== null,
-    )
-    expect(commitRow).toBeDefined()
-    expect(['done', 'failed']).toContain(commitRow!.status)
-  }, 20_000)
+      // The commit container settled to a terminal status with its meta
+      // persisted (the killed message-gen session degrades to the fallback
+      // message — never to an abandoned row).
+      const commitRow = rows.find(
+        (r) => r.nodeId === commitPushNodeId('n1') && r.commitPushJson !== null,
+      )
+      expect(commitRow).toBeDefined()
+      expect(['done', 'failed']).toContain(commitRow!.status)
+    },
+    testDelay(20_000),
+  )
 
   test("source guard: the synthetic key is non-node ('commitpush:<nodeId>:<iter>') and BOTH canceled exits drain before returning", () => {
     const src = readFileSync(
