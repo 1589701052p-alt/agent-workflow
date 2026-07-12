@@ -21,7 +21,7 @@ import { mkdtempSync } from 'node:fs'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { StartTaskSchema } from '@agent-workflow/shared'
@@ -108,7 +108,16 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     expect(r1.disabled).toBe(0)
 
     const p = await rawPayload(id)
-    expect(p['repoUrl']).toBe(pathToFileURL(realpathSync(repo)).href)
+    // RFC-W001: compare via realpathSync on both sides. The production heal
+    // stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes from
+    // `git rev-parse --show-toplevel` (forward-slash, long name); on a Windows
+    // runner realpathSync is form-sensitive (backslash long-name input -> 8.3
+    // short name like RUNNER~1, forward-slash -> long), so the stored URL's path
+    // form can differ from pathToFileURL(realpathSync(repo)).href even though
+    // they resolve to the same file. Round-tripping the stored URL through
+    // fileURLToPath -> realpathSync normalizes both sides to the same canonical
+    // realpath. No-op on POSIX (no 8.3 names).
+    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(repo))
     expect(p['ref']).toBe('main')
     expect('repoPath' in p).toBe(false)
     expect('baseBranch' in p).toBe(false)
@@ -310,7 +319,10 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     expect(r.converted).toBe(1)
     expect(r.disabled).toBe(0)
     const p = await rawPayload(id)
-    expect(p['repoUrl']).toBe(pathToFileURL(realpathSync(bare)).href)
+    // RFC-W001: see H1 - round-trip the stored URL through fileURLToPath +
+    // realpathSync so the short/long-name form on Windows doesn't cause a
+    // spurious mismatch. No-op on POSIX.
+    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(bare))
     expect('repoPath' in p).toBe(false)
     rimrafDir(tmp)
   })
@@ -333,7 +345,16 @@ describe('RFC-165 T4 — scheduled payload heal + tolerant repair', () => {
     const r = await healScheduledLaunchPayloads(db)
     expect(r.converted).toBe(1)
     const p = await rawPayload(id)
-    expect(p['repoUrl']).toBe(pathToFileURL(realpathSync(repo)).href)
+    // RFC-W001: compare via realpathSync on both sides. The production heal
+    // stores pathToFileURL(realpathSync(gitRoot)).href where gitRoot comes from
+    // `git rev-parse --show-toplevel` (forward-slash, long name); on a Windows
+    // runner realpathSync is form-sensitive (backslash long-name input -> 8.3
+    // short name like RUNNER~1, forward-slash -> long), so the stored URL's path
+    // form can differ from pathToFileURL(realpathSync(repo)).href even though
+    // they resolve to the same file. Round-tripping the stored URL through
+    // fileURLToPath -> realpathSync normalizes both sides to the same canonical
+    // realpath. No-op on POSIX (no 8.3 names).
+    expect(realpathSync(fileURLToPath(p['repoUrl'] as string))).toBe(realpathSync(repo))
     rimrafDir(tmp)
   })
 
