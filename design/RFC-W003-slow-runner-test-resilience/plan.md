@@ -1,15 +1,10 @@
 # RFC-W003 - 任务分解
 
-状态：Draft（待用户批准）。批准后按 PR 顺序执行。每 PR 走分支 + PR 到 main（CLAUDE.md branch workflow），commit 前缀 `fix(test): RFC-W003 ...`。
+状态：Approved（用户 2026-07-12 批准「单 PR 全做」）。在本分支 `rfc-W003-slow-runner-test-resilience` 上一次性实现，commit 前缀 `fix(test): RFC-W003 ...`，docs 落档 commit 前缀 `docs(rfc): RFC-W003 ...`。
 
-## PR 拆分建议
+## PR 策略
 
-scope 较大（4 类根因 ~25 文件），拆 2 个 PR 平衡 review 体积与回归隔离：
-
-- **PR-1（确认 flaky 修复）**：T1（C1 helper）+ T2（lifecycle-property 实锤 flaky：C1 + C3）+ T3（rfc098-commitpush 实锤 flaky：C2 + C4 helper）+ T6（C1 源码锁）。锁住用户已看到的 2 条 flaky。
-- **PR-2（同类硬化扫荡）**：T4（C1 剩余 12 文件扫荡）+ T5（C2 剩余 s17/fanout-concurrency）+ T7（C4 全量 delay 经缩放）+ T8（CI 设 `AW_TEST_DELAY_MULTIPLIER`）。
-
-若 PR-1 review 后发现 scope 应收窄，PR-2 可延后或拆更细。
+用户批准**单 PR 全做**（4 类根因 ~25 文件一次性闭环，不分阶段）。执行顺序仍按依赖：T1（helper 基建）-> T3-helper（trace-poll + slow-runner）-> T2 + T3（两条确认 flaky）-> T4（C1 扫荡）-> T5（C2 剩余）-> T7（C4 全量）-> T6（源码锁置 0）-> T8（CI 设缩放）。原 2-PR 拆分作废。
 
 ---
 
