@@ -433,6 +433,13 @@ jobs:
         # state (the S-RFC074 mirage). 60s covers tests AND beforeEach/afterEach
         # hooks; fast unit tests are unaffected. See setDefaultTimeout notes in
         # clarify-review-combination-scenarios.test.ts.
+        # RFC-W003: scale every testDelay()/testTolerance() value by 2 on the slower
+        # Windows runner so timing-sensitive suites (RFC-053 property, RFC-098
+        # commitpush, scheduler fanout) keep adequate wall-clock margins - delay +
+        # budget scale 1:1 so the ratio is preserved under any multiplier. Default
+        # 1 = dev-box baseline; CI Windows uses 2 (tune if a suite still flakes).
+        env:
+          AW_TEST_DELAY_MULTIPLIER: '2'
         run: bun test --timeout 60000
 
   e2e:
