@@ -9841,6 +9841,15 @@ mark.comment-anchor[data-active='true'] {
   font-size: var(--font-sm);
 }
 
+/* RFC-W002 fix - preserve the reviewer's original line breaks in the timeline
+ * comment body. Without `white-space: pre-wrap` a multi-line comment collapses
+ * onto a single line (newlines fold to spaces), diverging from the live review
+ * bubble's `.comment-bubble__body` (white-space: pre-wrap + word-break). */
+.task-timeline__review-comment-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .task-timeline__review-author {
   font-size: var(--font-xs);
 }
