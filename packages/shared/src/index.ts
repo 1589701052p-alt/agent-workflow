@@ -44,6 +44,7 @@ export * from './diagnose-repair'
 export * from './node-kind-behavior'
 export * from './workflow-sync-diff' // RFC-109
 export * from './task-questions' // RFC-120
+export * from './interactionFeed' // RFC-W002
 // RFC-060 PR-E: removed `./sharding` (was RFC-055 agent-multi sharding strategy
 // helpers — agent-multi NodeKind has been removed in favor of wrapper-fanout).
 export * from './kindParser'

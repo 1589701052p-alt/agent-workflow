@@ -3,11 +3,12 @@
 // doesn't stall the node-run progress feed.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoute, Link } from '@tanstack/react-router'
+import { createRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type {
   Agent,
   ClarifyDirective,
+  InteractionJumpTarget,
   NodeRun,
   StructuralDiff,
   Task,
@@ -25,6 +26,7 @@ import { StuckTaskBanner } from '@/components/tasks/StuckTaskBanner'
 import { WorkflowSyncBanner } from '@/components/tasks/WorkflowSyncBanner'
 import { TaskFeedbackList } from '@/components/tasks/TaskFeedbackList'
 import { TaskQuestionList, type TaskQuestionEntry } from '@/components/tasks/TaskQuestionList'
+import { TaskTimeline } from '@/components/tasks/TaskTimeline'
 import { TaskMembersDialogButton } from '@/components/tasks/TaskMembersPanel'
 import { NodeDetailDrawer } from '@/components/NodeDetailDrawer'
 import { Dialog } from '@/components/Dialog'
@@ -98,6 +100,32 @@ function TaskDetailPage() {
     canvasRef.current?.clearSelection()
     setSelectedNodeRunId(null)
   }
+
+  // RFC-W002: 评论区 timeline jump handler. session -> select the run + switch
+  // to the canvas tab (drawer opens to its Session sub-tab); clarify / review
+  // -> route navigation (mirrors NodeRunsTable's Review/Clarify jump Links).
+  const navigate = useNavigate()
+  const handleTimelineJump = useCallback(
+    (target: InteractionJumpTarget) => {
+      if (target.kind === 'session') {
+        if (target.nodeRunId !== undefined) setSelectedNodeRunId(target.nodeRunId)
+        setTab('workflow-status')
+        return
+      }
+      if (target.kind === 'clarify' && target.nodeRunId !== undefined) {
+        void navigate({ to: '/clarify/$nodeRunId', params: { nodeRunId: target.nodeRunId } })
+        return
+      }
+      if (target.kind === 'review' && target.nodeRunId !== undefined) {
+        void navigate({
+          to: '/reviews/$nodeRunId',
+          params: { nodeRunId: target.nodeRunId },
+          search: {},
+        })
+      }
+    },
+    [navigate],
+  )
 
   const task = useQuery<Task>({
     queryKey: ['tasks', id],
@@ -611,6 +639,10 @@ function TaskDetailPage() {
             focusTargetNode={focusTargetNode}
           />
         </div>
+        {/* RFC-W002: 评论区 interaction timeline. */}
+        <div className="task-detail__pane" hidden={tab !== 'timeline'}>
+          <TaskTimeline taskId={id} onJump={handleTimelineJump} />
+        </div>
       </div>
     </div>
   )
@@ -636,6 +668,8 @@ function tabLabel(t: (key: string) => string, k: TaskDetailTab): string {
       return t('tasks.tabFeedback')
     case 'task-questions':
       return t('tasks.tabQuestions')
+    case 'timeline':
+      return t('tasks.tabTimeline')
   }
 }
 

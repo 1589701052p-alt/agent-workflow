@@ -274,6 +274,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { method: 'GET', path: '/api/tasks/:id/structural-diff' },
   { method: 'GET', path: '/api/tasks/:id/call-targets' },
   { method: 'GET', path: '/api/tasks/:id/node-runs' },
+  // RFC-W002: 评论区 interaction timeline (read-only chronological feed).
+  { method: 'GET', path: '/api/tasks/:id/interaction-feed' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/events' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/inventory' },
   { method: 'GET', path: '/api/tasks/:id/node-runs/:nodeRunId/session' },

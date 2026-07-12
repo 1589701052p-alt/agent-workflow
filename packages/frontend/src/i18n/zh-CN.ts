@@ -1232,6 +1232,7 @@ export interface Resources {
     structWalkthroughMore: string
     tabFeedback: string
     tabQuestions: string
+    tabTimeline: string
     worktreeFilesEmpty: string
     worktreeFilesNoWorktree: string
     worktreeFilesOversized: string
@@ -2298,6 +2299,28 @@ export interface Resources {
     submitError: string
     loadError: string
     submittedJustNow: string
+  }
+  taskTimeline: {
+    title: string
+    filterAll: string
+    filterHumanInput: string
+    filterNodeOutput: string
+    filterClarify: string
+    filterReview: string
+    empty: string
+    loadError: string
+    truncated: string
+    jumpSession: string
+    jumpClarify: string
+    jumpReview: string
+    kindHumanInput: string
+    kindNodeOutput: string
+    kindClarifyQuestion: string
+    kindClarifyAnswer: string
+    kindReviewDecision: string
+    actorHuman: string
+    unansweredHint: string
+    noReason: string
   }
   // RFC-041 PR4: "Memories" sub-tab embedded into resource detail pages.
   detail: {
@@ -3767,6 +3790,7 @@ export const zhCN: Resources = {
     structWalkthroughMore: '还有 {{n}} 处',
     tabFeedback: '留言',
     tabQuestions: '问题',
+    tabTimeline: '评论区',
     worktreeFilesEmpty: '从左侧选择一个文件以预览。',
     worktreeFilesNoWorktree: '该任务没有可用的工作目录。',
     worktreeFilesOversized: '文件过大（{{size}}），超过 {{limit}} 阈值，未预览。',
@@ -4864,6 +4888,28 @@ export const zhCN: Resources = {
     submitError: '提交失败',
     loadError: '加载留言失败',
     submittedJustNow: '刚刚',
+  },
+  taskTimeline: {
+    title: '评论区',
+    filterAll: '全部',
+    filterHumanInput: '需求',
+    filterNodeOutput: '输出',
+    filterClarify: '反问/回答',
+    filterReview: '评审',
+    empty: '暂无交互记录',
+    loadError: '加载交互时间线失败',
+    truncated: '仅显示最近 {{n}} 条交互',
+    jumpSession: '查看完整会话',
+    jumpClarify: '查看反问详情',
+    jumpReview: '查看评审详情',
+    kindHumanInput: '人输入',
+    kindNodeOutput: '节点输出',
+    kindClarifyQuestion: '反问',
+    kindClarifyAnswer: '人回答',
+    kindReviewDecision: '评审决定',
+    actorHuman: '人',
+    unansweredHint: '待回答',
+    noReason: '（未填写理由）',
   },
   detail: {
     memories: '记忆',

@@ -33,6 +33,7 @@ import { mountSkillRoutes } from '@/routes/skills'
 import { mountSkillSourceRoutes } from '@/routes/skill-sources'
 import { mountClarifyRoutes } from '@/routes/clarify'
 import { mountTaskQuestionRoutes } from '@/routes/taskQuestions'
+import { mountInteractionFeedRoutes } from '@/routes/interactionFeed'
 import { mountTaskClarifyDirectiveRoutes } from '@/routes/taskClarifyDirective'
 import { mountFusionRoutes } from '@/routes/fusions'
 import { mountReviewRoutes } from '@/routes/reviews'
@@ -187,6 +188,7 @@ export function createApp(deps: AppDeps): Hono {
   mountReviewRoutes(app, deps)
   mountClarifyRoutes(app, deps)
   mountTaskQuestionRoutes(app, deps)
+  mountInteractionFeedRoutes(app, deps)
   mountTaskClarifyDirectiveRoutes(app, deps)
   mountFusionRoutes(app, deps)
   mountMemoryRoutes(app, deps)

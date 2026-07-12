@@ -17,6 +17,9 @@ export type TaskDetailTab =
   | 'feedback'
   // RFC-120: task question list / 任务中心 board.
   | 'task-questions'
+  // RFC-W002: 评论区 interaction timeline (read-only chronological feed of
+  // human input / node outputs / clarify Q&A / review decisions).
+  | 'timeline'
 
 /** Canonical left-to-right tab order shown in the page tab bar.
  *  RFC-128 (用户 2026-06-29): the task-question board moves to SECOND (right after
@@ -30,6 +33,8 @@ export const TAB_ORDER: readonly TaskDetailTab[] = [
   'workflow-status',
   // RFC-120 task-question board, RFC-128 hoisted to second for prominence.
   'task-questions',
+  // RFC-W002: 评论区 interaction timeline, grouped with the interaction views.
+  'timeline',
   'node-runs',
   'details',
   'outputs',
