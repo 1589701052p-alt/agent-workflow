@@ -9,8 +9,9 @@
 //
 // This lock greps backend tests/ for any surviving `'/usr/bin/env'` opencodeCmd
 // usage so a future refactor can't silently reintroduce the POSIX-only path.
-// While the sweep (T4) is in progress the count is tracked here; T6 sets it
-// to 0. If you added a new test and this went red, switch to noopOpencodeCmd().
+// The T4 sweep migrated all 26 sites (11 files, T1 baseline) to noopOpencodeCmd()
+// / stubCmd(writeStubOpencode(...)); this assertion locks the count at 0. If a new
+// test turns it red, switch that opencodeCmd to noopOpencodeCmd() / stubCmd(...).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -60,10 +61,9 @@ function countPosixEnvOpencodeCmd(): {
 describe('RFC-W003 C1 - no POSIX-only /usr/bin/env opencodeCmd in backend tests', () => {
   it('zero surviving /usr/bin/env opencodeCmd usages (T4 sweep complete)', () => {
     const { total, byFile } = countPosixEnvOpencodeCmd()
-    // T1 baseline: 26 across 11 files. T4 sweep migrates each to
-    // noopOpencodeCmd() / stubCmd(writeStubOpencode(...)). This assertion is
-    // flipped to 0 once T4 lands; while sweeping it stays at the in-progress
-    // count so the delta is visible. Update the expected value as you migrate.
+    // Locked at 0: T1 baseline was 26 across 11 files; the T4 sweep migrated
+    // every site to noopOpencodeCmd() / stubCmd(writeStubOpencode(...)). Any
+    // non-zero value is a regression - do not bump this; fix the offending site.
     expect(total).toBe(0)
     // If red, these files still use /usr/bin/env as opencodeCmd:
     if (total > 0) {
