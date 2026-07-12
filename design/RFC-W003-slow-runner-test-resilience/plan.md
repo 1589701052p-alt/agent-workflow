@@ -1,6 +1,6 @@
 # RFC-W003 - 任务分解
 
-状态：Approved（用户 2026-07-12 批准「单 PR 全做」）。在本分支 `rfc-W003-slow-runner-test-resilience` 上一次性实现，commit 前缀 `fix(test): RFC-W003 ...`，docs 落档 commit 前缀 `docs(rfc): RFC-W003 ...`。
+状态：**Done**（2026-07-12 实现 + CI 连续 2 轮验收达成，PR #8 全绿）。用户 2026-07-12 批准「单 PR 全做」；在本分支 `rfc-W003-slow-runner-test-resilience` 上一次性实现，commit 前缀 `fix(test): RFC-W003 ...`，docs 落档 commit 前缀 `docs(rfc): RFC-W003 ...`。
 
 ## PR 策略
 
@@ -75,4 +75,8 @@ PR-2：T4 -> T5 -> T7 -> T8 -> T6 置 0
 
 **门禁**（2026-07-12，rebase 到含 PR#6 upstream-sync 的 origin/main 后）：typecheck×3 全绿 / lint 全绿 / `format:check` 全绿 / 源码锁 0 / 2 目标 flaky 本机连过 / scheduler vs baseline 零回归。本机 git 依赖测试（loop / wrapper-git / retries）预存失败（temp worktree 非真 git repo，baseline 同形、非本 RFC 引入），由 CI Windows gate 验。
 
-**待验收**：CI `check-windows` 连续 2 轮 `bun test --timeout 60000` 0 flaky（plan T8 验收门槛）-> 通过后 STATE.md / plan.md RFC 索引标 Done。
+**✅ CI 验收达成**（2026-07-12，PR #8）：全 17 检查全绿（ubuntu/macOS 全后端套件 + 3 OS single-binary build + 4 Playwright e2e shard + Static scans/Perf/Markdown）。`check-windows` **连续 2 轮** `bun test --timeout 60000`（`AW_TEST_DELAY_MULTIPLIER=2`）success：run #1（job 86630952033）+ run #2（job 86631324252），5239 测试 0 fail。2 目标 flaky（RFC-053 / RFC-098）CI 全 pass。
+
+**修复中暴露并修的 1 个 helper bug**：`rfc-w003-helpers.test.ts` 的 "default multiplier 1 = identity" 在 Windows CI（`AW_TEST_DELAY_MULTIPLIER=2`）下 fail - `slow-runner.ts` 的 `MULT` 在模块加载时捕获一次（race-free），但测试运行时 `delete process.env` 对已捕获 `MULT` 无效（dead code）。修法：断言改相对缩放契约 `testDelay(ms) === ms * testDelayMultiplier`，去掉 env mutation；dev(MULT=1) 与 CI(MULT=2) 均过。Windows gate run #1 唯一 fail 即此，修后 run #1' 全绿。
+
+**RFC-W003 状态：Done。** STATE.md 进行中 -> 已完成；plan.md RFC 索引 In Progress -> Done。
