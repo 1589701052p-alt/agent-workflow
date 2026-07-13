@@ -70,6 +70,18 @@ import {
   isValidCrossClarifyQuestioner,
   questionerHasExistingClarifyChannel,
 } from './crossClarifyDragHelper'
+import {
+  applyToAgentAnswererDrag,
+  applyToAgentQuestionerReverseDrag,
+  cascadeRemoveToAgentChannel,
+  classifyToAgentConnection,
+  clearToAgentEdgesForRemovedNodes,
+  isStrayToAgentChannelDrop,
+  isValidToAgentEndpoint,
+  questionerHasExistingToAgentChannel,
+  toAgentHasAnswererEdge,
+  toAgentHasAttachedQuestioner,
+} from './toAgentClarifyDragHelper'
 import { existingInputPorts, nextFreeInputPort } from './dropTarget'
 import { getNodeBoxes, resolveDropTarget } from './connectResolve'
 import { buildControlFlowEdgeIds, CONTROL_FLOW_EDGE_CLASS } from './controlFlowEdge'
@@ -77,6 +89,7 @@ import { nodeTitle } from './nodeTitle'
 import { ConnectDropHint, type ConnectPreviewTarget } from './ConnectDropHint'
 import { ClarifyNode } from './nodes/ClarifyNode'
 import { CrossClarifyNode } from './nodes/CrossClarifyNode'
+import { ToAgentClarifyNode } from './nodes/ToAgentClarifyNode'
 import { applyConnectionForReviewOutput, applyDisconnectForReviewOutput } from './connectionSync'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { InputNode } from './nodes/InputNode'
@@ -117,7 +130,7 @@ const NODE_TYPES = {
   // RFC-W004 PR-1: to-agent temporarily renders as a cross-clarify node
   // (same 1-in/2-out leaf shape) so the canvas compiles + renders. T7 ships
   // the dedicated ToAgentClarifyNode with the answerer-side port styling.
-  'clarify-to-agent': CrossClarifyNode,
+  'clarify-to-agent': ToAgentClarifyNode,
 } satisfies Record<NodeKind, ComponentType<never>>
 
 export interface WorkflowCanvasProps {
@@ -283,6 +296,12 @@ function CanvasInner({
         // cleanly tears down the channel. The `designer` half is a single
         // edge with no sibling and is intentionally not cascaded here.
         staged = cascadeRemoveCrossClarifyChannel(staged, deleted)
+        // RFC-W004 mirror of the RFC-023/056 cascade: deleting one half of
+        // the to-agent ask/ans pair on its own would leave a half-wired
+        // questioner channel. Sweep the sibling so single-edge delete cleanly
+        // tears down the channel. The `answerer` half is a single edge with no
+        // sibling and is intentionally not cascaded here.
+        staged = cascadeRemoveToAgentChannel(staged, deleted)
       }
       const synced = syncInputDefs(staged.inputs ?? [], staged.nodes)
       if (synced !== (staged.inputs ?? [])) staged = { ...staged, inputs: synced }
@@ -626,6 +645,29 @@ function CanvasInner({
         if (next !== definition) commitChange(next)
         return
       }
+      // RFC-W004 to-agent drops. Two shapes (mirrors RFC-056, kind-disjoint):
+      //   - questioner-reverse: reverse-drag onto to-agent.questions -> 2 edges
+      //     (B.__clarify__ -> to-agent.questions / to-agent.to_questioner ->
+      //     B.__clarify_response__).
+      //   - answerer-forward: forward-drag to-agent.to_answerer -> A -> 1 edge
+      //     with target on the synthetic __clarify_request__ port.
+      const toAgentDrop = classifyToAgentConnection(definition, conn)
+      if (toAgentDrop !== null) {
+        let next = definition
+        if (toAgentDrop.kind === 'questioner-reverse') {
+          next = applyToAgentQuestionerReverseDrag(definition, {
+            questionerNodeId: toAgentDrop.questionerNodeId,
+            toAgentNodeId: toAgentDrop.toAgentNodeId,
+          })
+        } else {
+          next = applyToAgentAnswererDrag(definition, {
+            toAgentNodeId: toAgentDrop.toAgentNodeId,
+            answererNodeId: toAgentDrop.answererNodeId,
+          })
+        }
+        if (next !== definition) commitChange(next)
+        return
+      }
       // RFC-007: distinguish "dropped on catch-all left strip" from "dropped
       // on a specific named handle" BEFORE translateInboundConnection rewrites
       // targetHandle.
@@ -930,6 +972,30 @@ function CanvasInner({
         if (crossClarifyHasDesignerEdge(definition, crossDrop.crossClarifyNodeId)) return false
         return true
       }
+      // RFC-W004 to-agent pre-flight (kind-disjoint from cross-clarify above).
+      // Mirrors the RFC-056 path: fail-fast on self-loops, non-agent-single
+      // endpoints, and already-wired channels; xyflow draws red dashed reject
+      // UI on `return false`. The `to_answerer` forward drop is NOT blocked by
+      // a "one answerer per A" rule - design §3.4 explicitly allows multiple
+      // to-agent nodes to share one answerer A (multi-source aggregation).
+      const toAgentDrop = classifyToAgentConnection(definition, guardConn)
+      if (toAgentDrop !== null) {
+        if (toAgentDrop.kind === 'questioner-reverse') {
+          if (toAgentDrop.questionerNodeId === toAgentDrop.toAgentNodeId) return false
+          const q = definition.nodes.find((n) => n.id === toAgentDrop.questionerNodeId)
+          if (!isValidToAgentEndpoint(q)) return false
+          if (questionerHasExistingToAgentChannel(definition, toAgentDrop.questionerNodeId))
+            return false
+          if (toAgentHasAttachedQuestioner(definition, toAgentDrop.toAgentNodeId)) return false
+          return true
+        }
+        // answerer-forward
+        if (toAgentDrop.toAgentNodeId === toAgentDrop.answererNodeId) return false
+        const a = definition.nodes.find((n) => n.id === toAgentDrop.answererNodeId)
+        if (a === undefined || a.kind !== 'agent-single') return false
+        if (toAgentHasAnswererEdge(definition, toAgentDrop.toAgentNodeId)) return false
+        return true
+      }
       // Merged defensive guard for BOTH RFC-023 + RFC-056 clarify-channel
       // system port handles. Runs only AFTER both classifiers had a chance
       // to match; if a drop is still carrying any channel handle name, it's a
@@ -939,7 +1005,7 @@ function CanvasInner({
       // (incl. `__clarify_response__` + `__clarify__`, the false-root incident
       // ports) lives in the pure `isStrayClarifyChannelDrop` so it is
       // unit-testable and stays symmetric.
-      if (isStrayClarifyChannelDrop(guardConn)) {
+      if (isStrayClarifyChannelDrop(guardConn) || isStrayToAgentChannelDrop(guardConn)) {
         return false
       }
       // RFC-007 task-detail iterate lock.
@@ -1028,6 +1094,9 @@ function CanvasInner({
     // three edge half-shapes (ask / ans / designer) that referenced a
     // removed node.
     nextDef = clearCrossClarifyEdgesForRemovedNodes(nextDef, [...removedNodes])
+    // RFC-W004: same cascade for to-agent nodes - drops any of the three edge
+    // half-shapes (ask / ans / answerer) that referenced a removed node.
+    nextDef = clearToAgentEdgesForRemovedNodes(nextDef, [...removedNodes])
     commitChange(nextDef)
     setSelection({ nodes: [], edges: [] })
     // Tell the parent route to drop its selection too — otherwise

@@ -2307,6 +2307,9 @@ export interface Resources {
   crossClarifyNode: {
     label: string
   }
+  clarifyToAgentNode: {
+    label: string
+  }
   errors: Record<string, string>
   // RFC-023 clarify feature (PR-C).
   clarify: {
@@ -2412,6 +2415,30 @@ export interface Resources {
       paletteHint: string
       handleLabel: { toQuestioner: string; toDesigner: string }
       error: { targetNotAgentSingle: string; designerNotAgentSingle: string }
+    }
+  }
+  clarifyToAgent: {
+    inspector: {
+      title: string
+      sessionModeForAnswerer: string
+      sessionModeIsolated: string
+      sessionModeInline: string
+      sessionModeHint: string
+      fieldLinkedQuestioner: string
+      linkedQuestionerMissing: string
+      linkedQuestionerHint: string
+      fieldLinkedAnswerer: string
+      linkedAnswererMissing: string
+      linkedAnswererHint: string
+      fieldInLoop: string
+      inLoopYes: string
+      inLoopNo: string
+    }
+    canvas: {
+      paletteLabel: string
+      paletteHint: string
+      handleLabel: { toQuestioner: string; toAnswerer: string }
+      error: { targetNotAgentSingle: string; answererNotAgentSingle: string }
     }
   }
   sidebar: {
@@ -5177,6 +5204,9 @@ export const zhCN: Resources = {
   crossClarifyNode: {
     label: '跨代理反问',
   },
+  clarifyToAgentNode: {
+    label: '反问上游 agent',
+  },
   // Error codes thrown by the backend (DomainError family + transport).
   errors: {
     'http-401': '未授权 — 请重新登录并粘贴 token。',
@@ -5342,6 +5372,38 @@ export const zhCN: Resources = {
       error: {
         targetNotAgentSingle: '跨 agent 反问节点的输入端只能连 agent-single（v1 限制）。',
         designerNotAgentSingle: 'to_designer 必须连到 agent-single 节点。',
+      },
+    },
+  },
+  clarifyToAgent: {
+    inspector: {
+      title: '反问上游 agent',
+      sessionModeForAnswerer: '回答者重跑 session',
+      sessionModeIsolated: '隔离（全新）',
+      sessionModeInline: '内联（续接）',
+      sessionModeHint:
+        '内联让回答者 A 重跑复用上一个 opencode session；auth/session 错误时回退隔离。',
+      fieldLinkedQuestioner: '关联提问者（B）',
+      linkedQuestionerMissing: '尚未关联提问者 - 从输入把手拖到提问 agent（B）以接线。',
+      linkedQuestionerHint: '反问 A 的 agent（B）；每个 to-agent 节点只允许一个提问者。',
+      fieldLinkedAnswerer: '关联回答者（A）',
+      linkedAnswererMissing:
+        '尚未关联回答者 - 从 to_answerer 把手拖到上游回答 agent（A）；不接则 A 永不被触发回答。',
+      linkedAnswererHint: '回答 B 的上游 agent（A）；通常是 B 的拓扑上游祖先。',
+      fieldInLoop: '是否在 loop 内',
+      inLoopYes: '✔ 在 wrapper-loop 内 - 反问轮次受 max_iterations 封顶。',
+      inLoopNo: '⚠ 不在 wrapper-loop 内 - B 可能无限反问；建议包进一个。',
+    },
+    canvas: {
+      paletteLabel: '反问上游 agent',
+      paletteHint: '拖到提问 agent（B）上；再连 to_answerer -> 上游回答 agent（A）。',
+      handleLabel: {
+        toQuestioner: '-> B',
+        toAnswerer: '-> A',
+      },
+      error: {
+        targetNotAgentSingle: '提问者（B）必须是 agent-single 节点。',
+        answererNotAgentSingle: 'to_answerer 必须连到 agent-single 节点（A）。',
       },
     },
   },

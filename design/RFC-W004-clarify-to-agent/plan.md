@@ -66,13 +66,15 @@ deliverable：
 
 ### T7 frontend 节点 + inspector + palette
 依赖：T1, T2。
+**状态：✅ 完成（PR-1）**。
 deliverable：
 - `packages/frontend/src/components/canvas/nodes/ToAgentClarifyNode.tsx`：画布节点渲染（复用 ClarifyNode/CrossClarifyNode 视觉风格，RFC-035 公共组件）。
 - `packages/frontend/src/components/canvas/inspector/ToAgentClarifyEdit.tsx`：inspector（title / description / linked questioner B 只读 / linked answerer A 只读 / in-loop 状态只读 / `sessionModeForAnswerer` Segmented isolated|inline）。
 - palette 登记 to-agent 节点（与 clarify/cross-clarify 并列）；canvas drag 接线（反向拖动建 2 自动边 + 手动拖 to_answerer 动态注册 `__clarify_request__`）。
 - i18n zh-CN/en-US。
+- `toAgentClarifyDragHelper.ts`：classify/apply/cascade 三件套（kind-disjoint 自 cross-clarify）；onConnect 三分流 + isValidConnection 预检 + commitChange cascade + 节点删除 cascade + `isStrayToAgentChannelDrop` 并入 merged 守卫。动态 `__clarify_request__` 经 computePorts 边派生 input pass 自动注册（零 computePorts 改动）。
 测试：
-- `tests/frontend/to-agent-node.test.tsx`：节点渲染 + inspector 字段 + sessionMode Segmented + 反向拖动建边 + 动态注册 `__clarify_request__` 端口（≥ 6 case）。
+- `tests/frontend/to-agent-node.test.tsx`：节点渲染 + inspector 字段 + sessionMode Segmented + 反向拖动建边 + 动态注册 `__clarify_request__` 端口（24 case：含 reverse-drag 2 边 / to_answerer 1 边 / cascade sibling / 多源汇总允许〔§3.4〕 / classifier kind-disjoint / computePorts ±edge / 源码锁 onConnect+cascade 顺序 / 节点 testid+双 handle 标签 / inspector linked B/A+sessionMode toggle）。
 
 ### T8 backend 运行时 stub 守卫（防 PR-1 落跑）
 依赖：T6。

@@ -769,6 +769,46 @@ export function findToAgentNodeForQuestioner(
 }
 
 /**
+ * RFC-W004: resolve the QUESTIONER (B) NodeId attached to a to-agent node via
+ * the auto-edge `B.__clarify__ -> newNode.questions`. Mirrors
+ * `findQuestionerNodeForCrossClarify`. Used by the to-agent inspector's
+ * read-only "linked questioner" field.
+ */
+export function findQuestionerNodeForToAgent(
+  definition: WorkflowDefinition,
+  toAgentNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.target.nodeId === toAgentNodeId &&
+      e.target.portName === TO_AGENT_CLARIFY_INPUT_PORT_NAME &&
+      e.source.portName === CLARIFY_SOURCE_PORT_NAME,
+  )
+  return edge?.source.nodeId
+}
+
+/**
+ * RFC-W004: resolve the ANSWERER (A) NodeId attached to a to-agent node via the
+ * manual edge `newNode.to_answerer -> A.__clarify_request__`. Mirrors
+ * `findDesignerNodeForCrossClarify`. Used by the to-agent inspector's read-only
+ * "linked answerer" field.
+ */
+export function findAnswererNodeForToAgent(
+  definition: WorkflowDefinition,
+  toAgentNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const edge = edges.find(
+    (e) =>
+      e.source.nodeId === toAgentNodeId &&
+      e.source.portName === TO_AGENT_OUT_TO_ANSWERER_PORT &&
+      e.target.portName === TO_AGENT_CLARIFY_REQUEST_PORT,
+  )
+  return edge?.target.nodeId
+}
+
+/**
  * RFC-W004: helper for the canvas reverse-drag interaction. Returns the two
  * auto-edges to splice into definition.edges when the user drags from a
  * to-agent node's input handle onto questioner agent B. The two edges mirror
