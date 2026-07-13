@@ -162,11 +162,12 @@ export const PALETTE_DESCRIPTORS = {
   },
   'clarify-to-agent': {
     section: 'human',
-    glyph: '💬',
+    glyph: '⚡',
     // RFC-W004 to-agent node - questioner B reverse-drag + manual to_answerer
-    // wire to answerer A. i18n labels live under `clarifyToAgent.canvas.*`
-    // (T7 wires real copy; until then the palette falls back to cross-clarify
-    // strings so it renders text, not empty).
+    // wire to answerer A. i18n labels live under `clarifyToAgent.canvas.*`.
+    // Glyph ⚡ keeps the clarify family (RFC-023 self / RFC-056 cross / W004
+    // to-agent) visually uniform in the palette sidebar - palette-icon-coverage
+    // gates the leading glyph to the eight kind-icons set.
     labelKey: 'clarifyToAgent.canvas.paletteLabel',
     descKey: 'clarifyToAgent.canvas.paletteHint',
     idPrefix: 'to_agent_clarify',

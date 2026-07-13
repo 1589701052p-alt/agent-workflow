@@ -5395,7 +5395,7 @@ export const zhCN: Resources = {
       inLoopNo: '⚠ 不在 wrapper-loop 内 - B 可能无限反问；建议包进一个。',
     },
     canvas: {
-      paletteLabel: '反问上游 agent',
+      paletteLabel: '反问上游代理',
       paletteHint: '拖到提问 agent（B）上；再连 to_answerer -> 上游回答 agent（A）。',
       handleLabel: {
         toQuestioner: '-> B',
