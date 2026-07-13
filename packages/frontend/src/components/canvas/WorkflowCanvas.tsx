@@ -114,6 +114,10 @@ const NODE_TYPES = {
   review: ReviewNode,
   clarify: ClarifyNode,
   'clarify-cross-agent': CrossClarifyNode,
+  // RFC-W004 PR-1: to-agent temporarily renders as a cross-clarify node
+  // (same 1-in/2-out leaf shape) so the canvas compiles + renders. T7 ships
+  // the dedicated ToAgentClarifyNode with the answerer-side port styling.
+  'clarify-to-agent': CrossClarifyNode,
 } satisfies Record<NodeKind, ComponentType<never>>
 
 export interface WorkflowCanvasProps {

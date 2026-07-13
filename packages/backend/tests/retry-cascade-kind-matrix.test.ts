@@ -42,6 +42,7 @@ const DOWNSTREAM_KINDS_SKIP = [
   'review',
   'clarify',
   'clarify-cross-agent',
+  'clarify-to-agent',
   'output',
   'input',
 ] as const satisfies readonly NodeKind[]
@@ -110,6 +111,12 @@ async function seedTaskWithEdge(
         // 1-in / 2-out node here just exercises the dispatch path; the
         // upstream agent's retry never spawns a placeholder on it.
         return { id: downstreamNodeId, kind: 'clarify-cross-agent' }
+      case 'clarify-to-agent':
+        // RFC-W004 - to-agent mirrors cross-clarify's non-process retry-cascade
+        // behaviour (skip placeholder mint). The 1-in / 2-out node exercises
+        // the dispatch path; the upstream agent's retry never spawns a
+        // placeholder on it.
+        return { id: downstreamNodeId, kind: 'clarify-to-agent' }
       case 'wrapper-fanout':
         // RFC-060 — fanout wrapper shares the wrapper-* retry-cascade row
         // (mint placeholder on upstream retry). The minimal viable shape

@@ -146,6 +146,18 @@ export const NODE_KIND_BEHAVIORS = {
     isAgent: false,
     settlesWithoutRow: true,
   },
+  // RFC-W004 - clarify-to-agent mirrors cross-clarify in this cross-cutting
+  // table (framework leaf, no process, settles without its own node_run row
+  // driven by the answerer A's rerun). The distinct runtime semantics (A
+  // answers via <workflow-clarify-answer>, awaiting_answer state, escalation
+  // to human via RFC-023 self-clarify) live in services/toAgentClarify.ts and
+  // the scheduler hook, not here.
+  'clarify-to-agent': {
+    retryCascade: 'skip',
+    isProcess: false,
+    isAgent: false,
+    settlesWithoutRow: true,
+  },
   input: {
     retryCascade: 'skip',
     isProcess: false,

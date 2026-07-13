@@ -26,18 +26,25 @@ const edge = (sourcePort: string, targetPort: string, targetNode = 'T') => ({
 })
 
 describe('SYSTEM_CHANNEL_PORTS — 表值锁', () => {
-  test('恰好 5 端口，逐行 side/promptInjected/dataflow', () => {
+  test('恰好 7 端口，逐行 side/promptInjected/dataflow', () => {
     expect(SYSTEM_CHANNEL_PORTS).toEqual({
       __clarify__: { side: 'source', promptInjected: false, dataflow: 'unless-target-clarify' },
       __clarify_response__: { side: 'target', promptInjected: true, dataflow: 'never' },
       __external_feedback__: { side: 'target', promptInjected: true, dataflow: 'never' },
       to_designer: { side: 'source', promptInjected: false, dataflow: 'never' },
       to_questioner: { side: 'source', promptInjected: false, dataflow: 'never' },
+      // RFC-W004 clarify-to-agent pair (mirrors cross-clarify's to_designer /
+      // __external_feedback__): to_answerer is the manual-edge source to A;
+      // __clarify_request__ is A's target-side inbound, prompt-injected via
+      // the ## Clarify Request block.
+      to_answerer: { side: 'source', promptInjected: false, dataflow: 'never' },
+      __clarify_request__: { side: 'target', promptInjected: true, dataflow: 'never' },
     })
   })
 
-  test('派生集一致性：PROMPT_INJECTED = {response, feedback}', () => {
+  test('派生集一致性：PROMPT_INJECTED = {response, feedback, clarify_request}', () => {
     expect([...PROMPT_INJECTED_PORT_NAMES].sort()).toEqual([
+      '__clarify_request__',
       '__clarify_response__',
       '__external_feedback__',
     ])
@@ -45,11 +52,13 @@ describe('SYSTEM_CHANNEL_PORTS — 表值锁', () => {
 })
 
 describe('家族 A — isSystemChannelEdge 分侧成员判（= isClarifyChannelEdge）', () => {
-  test('五端口按侧命中', () => {
+  test('七端口按侧命中', () => {
     expect(isSystemChannelEdge(edge('__clarify__', 'questions'))).toBe(true)
     expect(isSystemChannelEdge(edge('answers', '__clarify_response__'))).toBe(true)
     expect(isSystemChannelEdge(edge('to_designer', '__external_feedback__'))).toBe(true)
     expect(isSystemChannelEdge(edge('to_questioner', '__clarify_response__'))).toBe(true)
+    // RFC-W004 to-agent pair: to_answerer source-side, __clarify_request__ target-side.
+    expect(isSystemChannelEdge(edge('to_answerer', '__clarify_request__'))).toBe(true)
     expect(isSystemChannelEdge(edge('out', 'in'))).toBe(false)
   })
 
@@ -119,7 +128,7 @@ describe('家族 D — channelEdgeDataflowSkip nuanced 语义格（先钉后收�
     expect(channelEdgeDataflowSkip(edge('__clarify__', 'in', 'GONE'), kindOf({}))).toBe(false)
   })
 
-  test('target 侧注入口（response/feedback）：一律跳', () => {
+  test('target 侧注入口（response/feedback/clarify_request）：一律跳', () => {
     expect(
       channelEdgeDataflowSkip(
         edge('answers', '__clarify_response__', 'A'),
@@ -132,11 +141,26 @@ describe('家族 D — channelEdgeDataflowSkip nuanced 语义格（先钉后收�
         kindOf({ D: 'agent-single' }),
       ),
     ).toBe(true)
+    // RFC-W004 __clarify_request__ target port is prompt-injected, never dataflow.
+    expect(
+      channelEdgeDataflowSkip(
+        edge('to_answerer', '__clarify_request__', 'A'),
+        kindOf({ A: 'agent-single' }),
+      ),
+    ).toBe(true)
   })
 
-  test('source 侧 to_designer / to_questioner：一律跳', () => {
+  test('source 侧 to_designer / to_questioner / to_answerer：一律跳', () => {
     expect(channelEdgeDataflowSkip(edge('to_designer', 'in', 'D'), kindOf({}))).toBe(true)
     expect(channelEdgeDataflowSkip(edge('to_questioner', 'in', 'Q'), kindOf({}))).toBe(true)
+    // RFC-W004 to_answerer is a never-dataflow channel source (A's rerun is
+    // triggered out-of-band by services/toAgentClarify.ts).
+    expect(
+      channelEdgeDataflowSkip(
+        edge('to_answerer', '__clarify_request__', 'A'),
+        kindOf({ A: 'agent-single' }),
+      ),
+    ).toBe(true)
   })
 
   test('普通数据边：保留', () => {
@@ -161,8 +185,10 @@ describe('RFC-147 — 注册表 ↔ declaredPorts 漂移互锁（设计门 high 
       __clarify__: { kind: 'agent-single', group: 'systemOutputs' },
       __clarify_response__: { kind: 'agent-single', group: 'systemInputs' },
       __external_feedback__: { kind: 'agent-single', group: 'systemInputs' },
+      to_answerer: { kind: 'clarify-to-agent', group: 'systemOutputs' },
       to_designer: { kind: 'clarify-cross-agent', group: 'systemOutputs' },
       to_questioner: { kind: 'clarify-cross-agent', group: 'systemOutputs' },
+      __clarify_request__: { kind: 'agent-single', group: 'systemInputs' },
     }
     for (const port of Object.keys(SYSTEM_CHANNEL_PORTS)) {
       const owner = OWNERS[port]

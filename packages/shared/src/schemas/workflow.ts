@@ -39,6 +39,7 @@ export const NODE_KIND = [
   'review', // RFC-005: human-in-the-loop review gate
   'clarify', // RFC-023: agent-initiated clarification questions
   'clarify-cross-agent', // RFC-056: downstream questioner reverse-feeds upstream designer via human gate
+  'clarify-to-agent', // RFC-W004: downstream questioner reverse-asks upstream agent; upstream answers directly, escalates to human only if it also doesn't know
 ] as const
 // RFC-060 PR-E: 'agent-multi' was the M3 fan-out kind; superseded by
 // wrapper-fanout (RFC-060). Its node_runs / row shape are no longer minted by
@@ -373,6 +374,69 @@ export const CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT = 'to_questioner' as const
  *  / DB. The validator adds it to the agent's inbound port set so edges
  *  validate cleanly. */
 export const CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT = '__external_feedback__' as const
+
+// --- RFC-W004 Clarify-to-Agent node ------------------------------------------
+//
+// Leaf node, 1 input port ('questions') + 2 output ports ('to_answerer'
+// manual / 'to_questioner' auto). Wired by reverse-drag from the input
+// handle onto a downstream agent-single questioner B (auto-mints two edges
+// using B's `__clarify__` + `__clarify_response__` system ports - same
+// mechanism as RFC-023 / RFC-056). The third edge - newNode.to_answerer
+// -> answererA.__clarify_request__ - is wired MANUALLY by the user to an
+// agent-single upstream ancestor A (the answerer agent). A's
+// `__clarify_request__` is a system-injected target port (only visible on
+// the canvas while ≥1 to-agent manual-edge points to it; never in
+// agent.outputs / DB).
+//
+// Difference from RFC-056 cross-clarify: there the designer merely CONSUMES
+// the human's answers (reruns its output); here A is the ANSWERER - it
+// produces a `<workflow-clarify-answer>` envelope in response to B's
+// questions, and that answer flows back to B. A escalates to a human only
+// when it also doesn't know (via its own RFC-023 self-clarify channel).
+
+/** Hard-coded port names on the to-agent node. Do not rename without
+ *  coordinating with packages/shared/src/clarify.ts + the canvas drag
+ *  helper. */
+export const TO_AGENT_CLARIFY_INPUT_PORT_NAME = 'questions' as const
+export const TO_AGENT_OUT_TO_ANSWERER_PORT = 'to_answerer' as const
+export const TO_AGENT_OUT_TO_QUESTIONER_PORT = 'to_questioner' as const
+
+/** Agent-side system port synthesised when a to-agent manual-edge lands on
+ *  an answerer agent A. Mirrors the RFC-056 `__external_feedback__` pattern:
+ *  the port exists only in workflow.definition.edges, never in agent.outputs
+ *  / DB. The validator adds it to the agent's inbound port set so edges
+ *  validate cleanly. */
+export const TO_AGENT_CLARIFY_REQUEST_PORT = '__clarify_request__' as const
+
+/**
+ * RFC-W004: opencode session reuse mode for the ANSWERER (agent A) rerun
+ * triggered when B asks and A answers. RFC-026 semantics: isolated = fresh
+ * process every rerun; inline = `--session <id>`. Missing field resolves to
+ * `'isolated'` via the helper in shared/clarify.ts (`resolveToAgentSessionMode`).
+ */
+export const ClarifyToAgentSessionModeSchema = z.enum(['isolated', 'inline'])
+export type ClarifyToAgentSessionMode = z.infer<typeof ClarifyToAgentSessionModeSchema>
+
+export const ClarifyToAgentNodeSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.literal('clarify-to-agent'),
+    position: XYSchema.optional(),
+    /** Display title in the canvas / inspector. */
+    title: z.string().default(''),
+    /** Free-form description for canvas authors; not used at runtime. */
+    description: z.string().default(''),
+    /** Reserved for future per-user assignment; UI does not expose it in v1. */
+    assignee: z.string().optional(),
+    /**
+     * RFC-W004 + RFC-026: opencode session reuse mode for the ANSWERER agent
+     * A's rerun triggered when B asks it a question. Optional; missing field
+     * resolves to `'isolated'`.
+     */
+    sessionModeForAnswerer: ClarifyToAgentSessionModeSchema.optional(),
+  })
+  .passthrough()
+export type ClarifyToAgentNode = z.infer<typeof ClarifyToAgentNodeSchema>
 
 /**
  * RFC-056: opencode session reuse mode for the QUESTIONER rerun (reject +

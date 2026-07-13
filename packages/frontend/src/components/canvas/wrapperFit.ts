@@ -25,6 +25,8 @@ export const DEFAULT_NODE_SIZE_BY_KIND: Record<NodeKind, { width: number; height
   // RFC-056 — cross-clarify shares clarify's default footprint (1 input + 2
   // outputs but visually compact like its sibling).
   'clarify-cross-agent': { width: 240, height: 160 },
+  // RFC-W004 - to-agent shares cross-clarify's footprint (same 1-in/2-out leaf).
+  'clarify-to-agent': { width: 240, height: 160 },
   'wrapper-git': { width: 240, height: 160 },
   'wrapper-loop': { width: 240, height: 160 },
   // RFC-060 — wrapper-fanout matches sibling wrapper container footprint.

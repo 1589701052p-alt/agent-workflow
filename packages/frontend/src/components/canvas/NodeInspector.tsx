@@ -58,6 +58,10 @@ const KIND_INSPECTORS = {
   review: ReviewEdit,
   clarify: ClarifyEdit,
   'clarify-cross-agent': CrossClarifyEdit,
+  // RFC-W004 PR-1: to-agent temporarily reuses the cross-clarify inspector
+  // (same 1-in/2-out shape + sessionMode segmented). T7 ships the dedicated
+  // ToAgentClarifyEdit with answerer-side labeling (to_answerer / A).
+  'clarify-to-agent': CrossClarifyEdit,
 } as const satisfies Record<NodeKind, FC<EditProps>>
 
 export function NodeInspector({ definition, selectedNodeId, agents, onChange, onClose }: Props) {

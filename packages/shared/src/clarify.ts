@@ -16,6 +16,8 @@ import type {
   ClarifyCrossAgentSessionMode,
   ClarifyNode,
   ClarifySessionMode,
+  ClarifyToAgentNode,
+  ClarifyToAgentSessionMode,
   WorkflowDefinition,
   WorkflowEdge,
 } from './schemas/workflow'
@@ -28,6 +30,10 @@ import {
   CROSS_CLARIFY_INPUT_PORT_NAME,
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+  TO_AGENT_CLARIFY_INPUT_PORT_NAME,
+  TO_AGENT_CLARIFY_REQUEST_PORT,
+  TO_AGENT_OUT_TO_ANSWERER_PORT,
+  TO_AGENT_OUT_TO_QUESTIONER_PORT,
 } from './schemas/workflow'
 import { isSystemChannelEdge } from './systemChannelPorts'
 import {
@@ -575,6 +581,15 @@ export function resolveCrossClarifySessionMode(
 }
 
 /**
+ * RFC-W004 + RFC-026: resolve the ANSWERER (agent A) rerun's opencode session
+ * mode off a to-agent node. Missing field resolves to `'isolated'` (preserves
+ * the default behavior byte-for-byte; matches RFC-056's resolver pattern).
+ */
+export function resolveToAgentSessionMode(node: ClarifyToAgentNode): ClarifyToAgentSessionMode {
+  return node.sessionModeForAnswerer ?? 'isolated'
+}
+
+/**
  * RFC-023 + RFC-056: classify an edge as a "clarify-channel" edge — the kind
  * that connects the self-clarify cycle or the cross-clarify cycle.
  */
@@ -719,4 +734,82 @@ export function buildCrossClarifyAutoEdges(
       target: { nodeId: questionerNodeId, portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
     },
   ]
+}
+
+// --- RFC-W004 clarify-to-agent edges ------------------------------------------
+//
+// Same reverse-drag mechanism as RFC-056: dragging from a to-agent node's
+// input handle onto agent-single B auto-mints TWO edges (B.__clarify__ ->
+// newNode.questions / newNode.to_questioner -> B.__clarify_response__). The
+// THIRD edge - newNode.to_answerer -> answererA.__clarify_request__ - is
+// wired MANUALLY by the user (mirrors cross-clarify's manual to_designer
+// edge; buildToAgentAnswererEdge below is the helper the canvas uses for
+// that single-edge drop).
+
+/**
+ * RFC-W004: locate the to-agent node attached to a given questioner B via the
+ * auto-edge `B.__clarify__ -> newNode.questions`. Mirrors
+ * `findCrossClarifyNodeForQuestioner`. Returns the to-agent node id or
+ * undefined when B has no to-agent channel.
+ */
+export function findToAgentNodeForQuestioner(
+  definition: WorkflowDefinition,
+  questionerNodeId: string,
+): string | undefined {
+  const edges = definition.edges ?? []
+  const nodes = definition.nodes ?? []
+  for (const e of edges) {
+    if (e.source.nodeId !== questionerNodeId) continue
+    if (e.source.portName !== CLARIFY_SOURCE_PORT_NAME) continue
+    if (e.target.portName !== TO_AGENT_CLARIFY_INPUT_PORT_NAME) continue
+    const tgt = nodes.find((n) => n.id === e.target.nodeId)
+    if (tgt?.kind === 'clarify-to-agent') return tgt.id
+  }
+  return undefined
+}
+
+/**
+ * RFC-W004: helper for the canvas reverse-drag interaction. Returns the two
+ * auto-edges to splice into definition.edges when the user drags from a
+ * to-agent node's input handle onto questioner agent B. The two edges mirror
+ * RFC-056 cross-clarify (B asks via __clarify__; the answer returns via
+ * to_questioner -> __clarify_response__). to_answerer is NOT auto-built -
+ * it is a manual edge to answerer A (see buildToAgentAnswererEdge).
+ */
+export function buildToAgentAutoEdges(
+  questionerNodeId: string,
+  toAgentNodeId: string,
+): WorkflowEdge[] {
+  const base = `e_${questionerNodeId}_${toAgentNodeId}`
+  return [
+    {
+      id: `${base}_clarify`,
+      source: { nodeId: questionerNodeId, portName: CLARIFY_SOURCE_PORT_NAME },
+      target: { nodeId: toAgentNodeId, portName: TO_AGENT_CLARIFY_INPUT_PORT_NAME },
+    },
+    {
+      id: `${base}_to_questioner`,
+      source: { nodeId: toAgentNodeId, portName: TO_AGENT_OUT_TO_QUESTIONER_PORT },
+      target: { nodeId: questionerNodeId, portName: CLARIFY_RESPONSE_TARGET_PORT_NAME },
+    },
+  ]
+}
+
+/**
+ * RFC-W004: helper for the canvas MANUAL drag from a to-agent node's
+ * `to_answerer` output handle onto answerer agent A. Returns the single edge
+ * to splice into definition.edges. The answerer's `__clarify_request__`
+ * system input port is registered on agent-single (nodePorts.ts) so this edge
+ * validates cleanly; it is only visible on the canvas while ≥1 such edge
+ * exists (mirrors cross-clarify's __external_feedback__ registration).
+ */
+export function buildToAgentAnswererEdge(
+  toAgentNodeId: string,
+  answererNodeId: string,
+): WorkflowEdge {
+  return {
+    id: `e_${toAgentNodeId}_${answererNodeId}_to_answerer`,
+    source: { nodeId: toAgentNodeId, portName: TO_AGENT_OUT_TO_ANSWERER_PORT },
+    target: { nodeId: answererNodeId, portName: TO_AGENT_CLARIFY_REQUEST_PORT },
+  }
 }
