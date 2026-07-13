@@ -813,3 +813,69 @@ export function buildToAgentAnswererEdge(
     target: { nodeId: answererNodeId, portName: TO_AGENT_CLARIFY_REQUEST_PORT },
   }
 }
+
+// --- RFC-W004 Clarify Request prompt block (answerer A side) -----------------
+//
+// When answerer A is re-spawned (cause=clarify-to-agent-answer) to answer B's
+// questions, the scheduler injects a `## Clarify Request` block into A's
+// prompt carrying B's question list + the protocol directive: A MUST answer
+// via a <workflow-clarify-answer> envelope, OR escalate to a human via a
+// <workflow-clarify> envelope (A's own RFC-023 self-clarify channel). The two
+// are mutually exclusive per run (proposal A5); emitting <workflow-output>
+// alone fails the run (proposal A6 - timeout-no-answer).
+
+/** The stable heading of the Clarify Request block. Exported so the golden
+ *  test locks it and the scheduler references one constant. Mirrors
+ *  FLAT_CLARIFY_QUEUE_BLOCK_TITLE. */
+export const CLARIFY_REQUEST_BLOCK_TITLE = '## Clarify Request' as const
+
+/** One source of questions put to A. Multiple to-agent nodes can target the
+ *  same A (multi-source aggregation, proposal S7); each source renders as a
+ *  `### From '<questionerNodeId>'` sub-section. */
+export interface ClarifyRequestSource {
+  /** The questioner B's node id (for the sub-section heading). */
+  questionerNodeId: string
+  /** B's questions for A (already parsed + truncated, 1+ items). */
+  questions: ClarifyQuestion[]
+}
+
+function renderClarifyRequestQuestion(q: ClarifyQuestion): string {
+  const kindLabel = q.kind === 'single' ? 'single-choice' : 'multi-choice'
+  const opts = q.options
+    .map((o) => (o.recommended ? `${o.label} [recommended]` : o.label))
+    .join(', ')
+  const lines = [`  - id: ${q.id}`, `    title: ${q.title}`, `    type: ${kindLabel}`]
+  if (opts.length > 0) lines.push(`    options: ${opts}`)
+  return lines.join('\n')
+}
+
+/**
+ * Render the Clarify Request block for answerer A. One sub-section per source
+ * (questioner B), sorted by questionerNodeId for deterministic output. Empty
+ * sources -> undefined (no block). The protocol directive is appended once at
+ * the tail (independent of source count).
+ *
+ * Pure over input - the scheduler / runner compose the sources and call this;
+ * no DB / edges consulted here.
+ */
+export function buildClarifyRequestBlock(sources: ClarifyRequestSource[]): string | undefined {
+  const real = sources.filter((s) => s.questions.length > 0)
+  if (real.length === 0) return undefined
+  const sorted = [...real].sort((a, b) => a.questionerNodeId.localeCompare(b.questionerNodeId))
+  const sections = sorted.map((s) => {
+    const items = s.questions.map(renderClarifyRequestQuestion).join('\n')
+    return `### From '${s.questionerNodeId}'\n${items}`
+  })
+  const directive = [
+    'You are being asked a clarification question by the downstream agent(s) above.',
+    'Answer ALL of them in ONE response. Emit your answer as:',
+    '<workflow-clarify-answer>',
+    '{ "markdown": "<your answer markdown, addressing every question>" }',
+    '</workflow-clarify-answer>',
+    'If you genuinely cannot answer a question (you also do not know), instead emit',
+    'a <workflow-clarify> envelope to ask a human (your self-clarify channel).',
+    'You MUST emit exactly one of these two envelopes this run. Emitting <workflow-output>',
+    'alone, or emitting both envelopes, will FAIL this run.',
+  ].join('\n')
+  return [CLARIFY_REQUEST_BLOCK_TITLE, '', ...sections, '', directive].join('\n')
+}

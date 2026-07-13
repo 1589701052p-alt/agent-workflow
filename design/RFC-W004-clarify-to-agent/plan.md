@@ -39,13 +39,15 @@ deliverable：
 测试：
 - `tests/shared/clarify-answer-envelope.test.ts`：schema happy / malformed / 缺 markdown / 空 markdown；protocol block 文本 grep 锁（`<workflow-clarify-answer>` / `## Clarify Request` 出现）。
 
-### T4 shared lifecycle awaiting_answer + BUILTIN_VARS
-依赖：无（lifecycle 独立）。
-deliverable：
-- `packages/shared/src/lifecycle.ts`：新增 status `'awaiting_answer'`；合法转移 `pending->awaiting_answer` / `awaiting_answer->answered` / `awaiting_answer->awaiting_human(bubble)` / `awaiting_answer->canceled/failed/interrupted`。
-- `packages/shared/src/prompt.ts`：`BUILTIN_VARS`（`:285-319`）追加 `__clarify_request__` / `__clarify_request_iteration__` / `__clarify_request_questioner__`。
-测试：
-- `tests/shared/lifecycle-awaiting-answer.test.ts`：转移矩阵全笛卡尔积合法/非法；`BUILTIN_VARS` 含 3 新 token 断言。
+### T4 shared lifecycle 决策（复用 awaiting_human，无新状态/token）
+依赖：无。
+
+**设计简化（见 design §2.7 / §6.1）**：to-agent node_run **复用 `awaiting_human` 状态**（mint 用 `park-human` 事件，A 答 -> `done` 用 `resume-clarify` 事件），不新增 `awaiting_human` 状态、不新增 `park-answer`/`resume-answer` 事件、不新增 `{{__clarify_request__}}` 等 builtin token。理由：`awaiting_human` 在 scheduler/stuckTaskDetector/workgroupRunner 有 ~20 触点，新增状态会触发全量扩散 + s12 status-bucket-universe 审计锁翻红；`awaiting_human` 天然覆盖"等答案"语义（人答/agent A 答同构）。UI 区分靠节点 kind（`clarify-to-agent`），不靠状态值。
+
+deliverable：**无 shared 代码改动**（lifecycle/prompt/schemas/task 均不动）。本任务退化为"设计决策记录"--确认 T1-T3 已无 `awaiting_human` 残留、typecheck 全绿即可。
+测试：并入 T1 的 `clarify-to-agent-rfc-w004-shared.test.ts`（NodeKind/行为表/端口，已覆盖）。不再有独立 `lifecycle-awaiting-answer.test.ts`（无新状态可测）。
+
+> 验收对照：proposal A12（原要求 `awaiting_human` 状态）在实现期简化为复用 `awaiting_human`，A13 invariant 改为扫 `clarify_rounds` kind='to-agent' status='awaiting_human' 的 abandoned 升级（T15）。
 
 ### T5 backend DB migration + schema.ts
 依赖：T4（kind 枚举值）。
@@ -87,9 +89,9 @@ deliverable：
 依赖：T5, T3。
 deliverable：
 - `packages/backend/src/services/toAgentClarify.ts`（新建）：
-  - `createToAgentSessionAndTriggerAnswerer`（design §3.1）：解析 to_answerer 找 A + 多源汇总屏障 + mint to-agent node_run `awaiting_answer` + 插 clarify_rounds kind='to-agent' + 广播 created + 触发 A 重跑 cause=`clarify-to-agent-answer`。
+  - `createToAgentSessionAndTriggerAnswerer`（design §3.1）：解析 to_answerer 找 A + 多源汇总屏障 + mint to-agent node_run `awaiting_human` + 插 clarify_rounds kind='to-agent' + 广播 created + 触发 A 重跑 cause=`clarify-to-agent-answer`。
   - `commitToAgentAnswerAndTriggerQuestioner`（design §3.2）：更新 clarify_rounds answered + to-agent node_run answered + 广播 answered + 触发 B 重跑 cause=`clarify-to-agent-questioner-rerun`。
-  - `escalateToHuman`（design §3.3）：A 吐 clarify 时 to-agent 保持 awaiting_answer + 广播 escalated（A 的 self-clarify 走既有 RFC-023 路径）。
+  - `escalateToHuman`（design §3.3）：A 吐 clarify 时 to-agent 保持 awaiting_human + 广播 escalated（A 的 self-clarify 走既有 RFC-023 路径）。
   - `evaluateAnswererRerunReadiness`（多源屏障，对齐 RFC-056 `evaluateDesignerRerunReadiness`）。
 测试：
 - `tests/clarify-to-agent-service.test.ts`：createSession / commitAnswer / escalate / 多源汇总 / answerer-missing / iteration / loop_iter 隔离（≥ 8 case）。
@@ -104,14 +106,14 @@ deliverable：
 ### T11 backend scheduler dispatch 三分流 + frontier
 依赖：T9, T10。
 deliverable：
-- `packages/backend/src/services/scheduler.ts`：clarify dispatch 入口（`:3422-3513`）扩展三分流（self / cross / **to-agent**），to-agent 分流调 `createToAgentSessionAndTriggerAnswerer`；`loadOpenClarify`（`:1238-1271`）扩展收集 awaiting_answer to-agent session 作 frontier 证据；`completed` 判定（`:1605-1614`）不含 awaiting_answer。
+- `packages/backend/src/services/scheduler.ts`：clarify dispatch 入口（`:3422-3513`）扩展三分流（self / cross / **to-agent**），to-agent 分流调 `createToAgentSessionAndTriggerAnswerer`；`loadOpenClarify`（`:1238-1271`）扩展收集 awaiting_human to-agent session 作 frontier 证据；`completed` 判定（`:1605-1614`）不含 awaiting_human。
 测试：
 - `tests/clarify-to-agent-scheduler.test.ts`：B 提问 dispatch / A 回答 dispatch / A 升级 bubble / frontier 不误推 / 多源汇总 / loop max_iter（≥ 6 case）。
 
 ### T12 backend A 回答回流 B + A 升级 bubble
 依赖：T11。
 deliverable：
-- scheduler：A 跑完吐 clarifyAnswer -> `commitToAgentAnswerAndTriggerQuestioner` 回流 B；A 吐 clarify -> `escalateToHuman`（to-agent 保持 awaiting_answer，A 的 self-clarify park awaiting_human）。
+- scheduler：A 跑完吐 clarifyAnswer -> `commitToAgentAnswerAndTriggerQuestioner` 回流 B；A 吐 clarify -> `escalateToHuman`（to-agent 保持 awaiting_human，A 的 self-clarify park awaiting_human）。
 测试：
 - 并入 `tests/clarify-to-agent-scheduler.test.ts`（A 回答回流 + A 升级 bubble 全链断言）。
 
@@ -133,9 +135,9 @@ deliverable：
 ### T15 backend RFC-053 invariant
 依赖：T5, T9。
 deliverable：
-- `packages/backend/src/services/lifecycleInvariants.ts`（或 invariant 扫描处）：daemon 启动 + 每小时扫 `clarify_rounds` kind='to-agent' status='awaiting_answer'，answerer node_run 已终态 -> 升级 `abandoned`。
+- `packages/backend/src/services/lifecycleInvariants.ts`（或 invariant 扫描处）：daemon 启动 + 每小时扫 `clarify_rounds` kind='to-agent' status='awaiting_human'，answerer node_run 已终态 -> 升级 `abandoned`。
 测试：
-- `tests/clarify-to-agent-abandoned-invariant.test.ts`：awaiting_answer + answerer failed -> abandoned；扫描幂等（≥ 3 case）。
+- `tests/clarify-to-agent-abandoned-invariant.test.ts`：awaiting_human + answerer failed -> abandoned；扫描幂等（≥ 3 case）。
 
 ### T16 撤 PR-1 T8 守卫
 依赖：T11-T15。
@@ -158,7 +160,7 @@ deliverable：
 依赖：T13, T17。
 deliverable：
 - WS：`/ws/workflows` / per-task 加 3 event `clarify-to-agent.created` / `.answered` / `.escalated`（broadcaster + registry RFC-152）。
-- 前端：to-agent 节点状态色 + awaiting_answer chip + 看板（TaskQuestionList）to-agent 项 chip + flat block 渲染 A 回答（reuse Prose）。
+- 前端：to-agent 节点状态色 + awaiting_human chip + 看板（TaskQuestionList）to-agent 项 chip + flat block 渲染 A 回答（reuse Prose）。
 - `useTaskSync` WS 失效规则加 to-agent。
 测试：
 - `tests/frontend/to-agent-ws.test.tsx`：3 event 失效 + chip 渲染（≥ 3 case）。
@@ -181,7 +183,7 @@ deliverable：
 | A1 S1 happy path e2e | T17 | e2e 全链 task done 无人介入 |
 | A2 Clarify Request 注入 | T13 | A prompt 含 `## Clarify Request` + 问题 + 协议指令 |
 | A3 回答回流 B | T9, T13 | B flat `## Clarify Q&A` 含 A 回答 peer entry |
-| A4 A 升级问人 | T12 | to-agent 保持 awaiting_answer + A self-clarity awaiting_human + 人答后 A 答 B |
+| A4 A 升级问人 | T12 | to-agent 保持 awaiting_human + A self-clarity awaiting_human + 人答后 A 答 B |
 | A5 互斥 answer+clarify | T10 | fail `clarify-to-agent-answer-and-clarify-both-present` |
 | A6 timeout-no-answer | T10 | A 只吐 output -> fail |
 | A7 多源汇总 | T9, T11 | 2 to-agent 指向 A，A 一次重跑答两组 |
@@ -189,8 +191,8 @@ deliverable：
 | A9 multiplicity | T6 | A.`__clarify_request__` ≥2 to-agent -> fail |
 | A10 answerer not ancestor | T6 | warning |
 | A11 self agent | T6 | warning `clarify-to-agent-answerer-self` |
-| A12 awaiting_answer 状态 | T4, T9 | mint/answered/bubble/canceled/failed 转移 |
-| A13 invariant | T15 | awaiting_answer + answerer 终态 -> abandoned |
+| A12 awaiting_human 状态 | T4, T9 | mint/answered/bubble/canceled/failed 转移 |
+| A13 invariant | T15 | awaiting_human + answerer 终态 -> abandoned |
 | A14 inline | T9 | sessionModeForAnswerer + fallback |
 | A15 lifecycle 转移合法 | T4, T6 | s14 守卫放行新转移 |
 | A16 WS 同步 | T18 | tab A/B 同步 |

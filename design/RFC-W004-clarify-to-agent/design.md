@@ -36,7 +36,7 @@ A 重跑产物:
 | scheduler 分支 | `packages/backend/src/services/scheduler.ts`（B 提问 dispatch + A 回答 dispatch） |
 | validator 规则 | `packages/backend/src/services/workflow.validator.ts` |
 | DB migration | `clarify_rounds` 加 kind=`'to-agent'` + 2 列；`node_runs` 加 `to_agent_iteration` |
-| lifecycle 转移 | `packages/shared/src/lifecycle.ts` 加 `awaiting_answer` |
+| lifecycle 转移 | `packages/shared/src/lifecycle.ts` 加 `awaiting_human` |
 | rerun cause | `packages/backend/src/services/clarifyRerunLedger.ts` + `nodeRunMint.ts` |
 | prompt 注入 | `packages/shared/src/prompt.ts` + `packages/backend/src/services/toAgentClarify.ts`（`## Clarify Request` block） |
 | flat block 注入 | `packages/backend/src/services/clarifyQueue.ts`（A 回答作 peer entry） |
@@ -162,20 +162,21 @@ emitting both, or emitting <workflow-output> alone, will fail this run.
 
 **不新建表**：to-agent session 只进 `clarify_rounds`（kind=`'to-agent'`），不碰 legacy `clarify_sessions` / `cross_clarify_sessions` 双写（RFC-058 unified 表是单一事实源）。
 
-### 2.7 lifecycle 转移表扩展
+### 2.7 lifecycle 转移表扩展（设计简化：不新增状态）
 
-`packages/shared/src/lifecycle.ts`，新增 node_run status 值 `awaiting_answer`。合法转移：
+**决策（实现期修订）**：to-agent node_run **复用 `awaiting_human` 状态**，不新增 `awaiting_answer`。
 
-```
-pending         -> awaiting_answer   (to-agent node_run mint)
-awaiting_answer -> answered          (A 吐 <workflow-clarify-answer>)
-awaiting_answer -> awaiting_human    (A 升级问人, bubble; to-agent node_run 保持 awaiting_answer, task 整体 awaiting_human)
-awaiting_answer -> canceled          (task cancel)
-awaiting_answer -> failed            (A retries 耗尽 / timeout-no-answer)
-awaiting_answer -> interrupted       (daemon restart)
-```
+原设计（proposal A12 / 早期 design §2.7）拟新增 `awaiting_answer` 状态。实现时发现 `awaiting_human` 在 scheduler / stuckTaskDetector / workgroupRunner 有 ~20 处触点（bubble、frontier `awaitingHuman` 桶、`loadOpenClarify` 收集），新增 `awaiting_answer` 会触发全量触点扩散 + s12 status-bucket-universe 审计锁翻红，而 `awaiting_human` 天然覆盖语义（"等答案"，无论答者是人还是 agent A）：
 
-`s14` 守卫（`packages/backend/src/services/lifecycleInvariants.ts`）同步放行新转移。`SETTLED_*` / `MERGE_*` 集合（`scheduler.ts:1608-1622` 附近）确认 `awaiting_answer` 不入 completed（scheduler frontier 不误推，见 §3.6）。
+- to-agent node_run mint 时 status=`awaiting_human`（复用 `park-human` 事件）。
+- A 吐 `<workflow-clarify-answer>` -> to-agent 转 `done`（复用 `resume-clarify` 事件）。
+- A 升级问人 -> A 的 self-clarify 也 `awaiting_human`，to-agent 保持 `awaiting_human`；task 整体 park 语义统一。
+- scheduler frontier 的 `awaitingHuman` 桶天然包含 to-agent（零改 `loadOpenClarify` / `deriveFrontier`）。
+- UI 区分靠节点 kind（`clarify-to-agent` vs `clarify`），不靠状态值。
+
+**代价**：`awaiting_human` 在 to-agent 场景字面是"等 agent 答"而非"等人答"，但语义抽象一致（都是等某种答案回填），且 proposal A12 的状态区分用 chip + 节点 kind 已足够。这是面向代码最合理的简化（记忆 `prefer-correct-over-minimal`）。
+
+**lifecycle 转移零新增**：`park-human`（pending|running -> awaiting_human）+ `resume-clarify`（awaiting_human -> done）已存在，to-agent 直接复用。`mark-failed` / `cancel-by-supersede` 的 awaiting_* 列表无需扩展（已含 awaiting_human）。
 
 ### 2.8 rerun cause 扩展
 
@@ -215,12 +216,12 @@ if (crossNode) { /* 既有 cross 路径 */ }
 
 1. 解析 `to_agent.to_answerer` 边找到 A（answererNodeId）。找不到 -> `clarify-to-agent-answerer-missing-at-runtime` fail B 的 node_run。
 2. **多源汇总屏障**（对齐 RFC-056 `evaluateDesignerRerunReadiness`，`crossClarify.ts:339-416`）：收集所有指向同一 A 的 to-agent 节点的 latest session，检查是否都已 resolve（answered/abandoned）或本批将一起触发。**只有当 A 当前没有正在跑的 answer run 时才触发 A 重跑**，避免 A 被连续触发多次。多个 to-agent 待答时，A 一次重跑 prompt 含所有问题（按 nodeId 字典序拼 `## Clarify Request` 子段，见 §3.4）。
-3. mint to-agent node_run（status=`awaiting_answer`，cause=`to-agent-park`）。
-4. 插入 `clarify_rounds`（kind=`'to-agent'`，`askingNodeId`=B，`intermediaryNodeId`=to-agent，`answererNodeId`=A，`status`=`awaiting_answer`，`questionsJson`=B 的 questions，`answersJson`=NULL）。
+3. mint to-agent node_run（status=`awaiting_human`，cause=`to-agent-park`）。
+4. 插入 `clarify_rounds`（kind=`'to-agent'`，`askingNodeId`=B，`intermediaryNodeId`=to-agent，`answererNodeId`=A，`status`=`awaiting_human`，`questionsJson`=B 的 questions，`answersJson`=NULL）。
 5. 广播 `clarify-to-agent.created` WS。
 6. **触发 A 重跑**（cause=`clarify-to-agent-answer`）：roll back 到 A 的 `pre_snapshot`（对齐 RFC-023 `triggerAgentRerunFromClarify`，`clarify.ts` triggerAgentRerunFromClarify；**不 roll back worktree 若 A 需保留草稿**--design 决策：A 回答重跑 roll back，与 self-clarify 一致，A 的产出通过 `## Prior Output` block 注入对齐 RFC-056 patch 2026-06-22）。
 7. A 重跑 prompt 注入 `## Clarify Request` block（§6）+ 协议指令。
-8. 返回 `{ kind: 'awaiting_answer' }`，scheduler 据此不推进 B 的下游。
+8. 返回 `{ kind: 'awaiting_human' }`，scheduler 据此不推进 B 的下游。
 
 ### 3.2 A 回答 -> 回流 B
 
@@ -238,7 +239,7 @@ if (tag === 'workflow-clarify-answer') {
 **互斥校验**（reuse RFC-023 `clarify-and-output-both-present` 逻辑）：
 - A 同回复同时含 `<workflow-output>` + `<workflow-clarify-answer>` -> fail `clarify-to-agent-answer-and-output-both-present`。
 - A 同回复同时含 `<workflow-clarify-answer>` + `<workflow-clarify>` -> fail `clarify-to-agent-answer-and-clarify-both-present`（proposal A5）。
-- A 同回复只含 `<workflow-output>`（既不答也不问）-> 检测 to-agent session 仍 `awaiting_answer` -> fail `clarify-to-agent-timeout-no-answer`（proposal A6）。
+- A 同回复只含 `<workflow-output>`（既不答也不问）-> 检测 to-agent session 仍 `awaiting_human` -> fail `clarify-to-agent-timeout-no-answer`（proposal A6）。
 
 scheduler 检测 `lastResult.clarifyAnswer !== undefined`：
 
@@ -251,7 +252,7 @@ if (lastResult.clarifyAnswer) {
 
 `commitToAgentAnswerAndTriggerQuestioner`（`toAgentClarify.ts`）：
 
-1. 找到 A 本次回答对应的 to-agent session（按 answererNodeId=A + awaiting_answer + 本次 A run 关联）。**多源**：若 A 一次回答覆盖多个 to-agent session，按回答内容拆分或统一注入（v1：A 一次 answer envelope 回答所有指向它的 awaiting to-agent session，markdown 整体注入每个 B 的 flat block；per-question 拆分留后续延展）。
+1. 找到 A 本次回答对应的 to-agent session（按 answererNodeId=A + awaiting_human + 本次 A run 关联）。**多源**：若 A 一次回答覆盖多个 to-agent session，按回答内容拆分或统一注入（v1：A 一次 answer envelope 回答所有指向它的 awaiting to-agent session，markdown 整体注入每个 B 的 flat block；per-question 拆分留后续延展）。
 2. 更新 `clarify_rounds`：`answersJson`=answer.markdown，`status`=`answered`，`answererNodeRunId`=A run id，`answeredAt`=now。
 3. to-agent node_run -> `answered`（lifecycle 转移）。
 4. 广播 `clarify-to-agent.answered` WS。
@@ -263,16 +264,16 @@ if (lastResult.clarifyAnswer) {
 A 重跑吐 `<workflow-clarify>`（而非 answer）：
 
 1. scheduler 检测 A 的 `__clarify__` 出边。**若 A 挂了 self-clarify 节点**（A.`__clarify__` -> self-clarify），走 RFC-023 self-clarify 路径（既有 `:3469-3512`）：mint A 的 self-clarify session（kind=`'self'`，`askingNodeId`=A），A 的 self-clarify node_run `awaiting_human`，task 顶层 `awaiting_human`。
-2. **to-agent session 保持 `awaiting_answer`**（A 还没答 B，只是先问人）。广播 `clarify-to-agent.escalated` WS。
+2. **to-agent session 保持 `awaiting_human`**（A 还没答 B，只是先问人）。广播 `clarify-to-agent.escalated` WS。
 3. 人答 A（`POST /api/clarify/:A的self-clarify nodeRunId/answers`，既有路由）-> A 带 self-clarify 答案重跑（cause=`clarify-answer`，RFC-023 既有）-> A 这次清楚吐 `<workflow-clarify-answer>` -> 走 §3.2 回流 B。
 
-**关键**：A 升级问人期间，to-agent session 不变（`awaiting_answer`），scheduler 的 `loadOpenClarify`（`scheduler.ts:1238-1271`）扩展收集 to-agent `awaiting_answer` session 作为 frontier 证据，阻止 task 误判完成。
+**关键**：A 升级问人期间，to-agent session 不变（`awaiting_human`），scheduler 的 `loadOpenClarify`（`scheduler.ts:1238-1271`）扩展收集 to-agent `awaiting_human` session 作为 frontier 证据，阻止 task 误判完成。
 
 ### 3.4 多源汇总
 
 多个 to-agent 指向同一 A（proposal S7）：
 
-- B1、B2 各自反问 -> 两个 to-agent session `awaiting_answer`。
+- B1、B2 各自反问 -> 两个 to-agent session `awaiting_human`。
 - `createToAgentSessionAndTriggerAnswerer` 的多源屏障（§3.1.2）：A 当前无正在跑的 answer run -> 触发**一次** A 重跑，prompt 的 `## Clarify Request` 段含两个 source 子段（按 to-agent nodeId 字典序，每段冠以 `### From '{questionerNodeId}'`）。
 - A 一次 `<workflow-clarify-answer>` 回答 -> `commitToAgentAnswerAndTriggerQuestioner` 把回答注入每个 to-agent session（markdown 整体），两个 B 各自重跑。
 - 若 A 升级问人，A 的 self-clarify 一次问人覆盖所有 source 的问题（self-clarify 既有逻辑）。
@@ -290,13 +291,13 @@ A 重跑吐 `<workflow-clarify>`（而非 answer）：
 
 ```ts
 // 既有: 收集 awaiting_human 的 self/cross session
-// 新增: 收集 awaiting_answer 的 to-agent session (answerer A 未吐回答前, task 不算完成)
+// 新增: 收集 awaiting_human 的 to-agent session (answerer A 未吐回答前, task 不算完成)
 const toAgentSessions = await db.select({ ... }).from(clarifyRounds)
-  .where(and(eq(clarifyRounds.kind, 'to-agent'), eq(clarifyRounds.status, 'awaiting_answer')))
+  .where(and(eq(clarifyRounds.kind, 'to-agent'), eq(clarifyRounds.status, 'awaiting_human')))
 toAgentSessions.forEach(s => clarifyNodeIds.add(s.intermediaryNodeId))
 ```
 
-`scheduler.ts:1605-1614` 的 completed 判定：`awaiting_answer` 不入 `completed`（对齐 `awaiting_human` 处理，`:1606-1614` 既有 isNodeRunFresh + mergeState 门 + 不含 awaiting_*）。
+`scheduler.ts:1605-1614` 的 completed 判定：`awaiting_human` 不入 `completed`（对齐 `awaiting_human` 处理，`:1606-1614` 既有 isNodeRunFresh + mergeState 门 + 不含 awaiting_*）。
 
 ## 4. envelope 解析细节
 
@@ -312,7 +313,7 @@ const CLARIFY_ANSWER_ENVELOPE_TAG = 'workflow-clarify-answer'
 ```
 
 **互斥校验时机**：runner 解析完所有 envelope 后，在 to-agent answerer run 的上下文里校验：
-- 若 A 是 to-agent answerer（其 `__clarify_request__` 有入边）且本次 run 关联 awaiting_answer session：
+- 若 A 是 to-agent answerer（其 `__clarify_request__` 有入边）且本次 run 关联 awaiting_human session：
   - 有 `clarifyAnswer` + 有 `output` -> fail `clarify-to-agent-answer-and-output-both-present`
   - 有 `clarifyAnswer` + 有 `clarify` -> fail `clarify-to-agent-answer-and-clarify-both-present`
   - 无 `clarifyAnswer` + 无 `clarify` + 有 `output` -> fail `clarify-to-agent-timeout-no-answer`
@@ -347,31 +348,25 @@ const CLARIFY_ANSWER_ENVELOPE_TAG = 'workflow-clarify-answer'
 
 ## 6. prompt 注入
 
-### 6.1 A 侧：`## Clarify Request` block（新增）
+### 6.1 A 侧：`## Clarify Request` block（auto-append only）
 
-`packages/shared/src/prompt.ts` `BUILTIN_VARS`（`:285-319`）追加：
+**决策（实现期修订）**：**不引入新 `{{__clarify_request__}}` 等 builtin token**，A 侧注入纯走 auto-append。原设计（早期 design §6.1）拟加 3 个 token，实现时发现 RFC-132/148 已把所有 clarify 注入统一成无 token 的 flat block（`__clarify_questions__` 等已在 `DEPRECATED_PROMPT_TOKENS`），加 token 与该哲学相悖且增加 `BUILTIN_VARS` + validator `prompt-template-unresolved` 维护面。
 
-```ts
-'__clarify_request__',
-'__clarify_request_iteration__',
-'__clarify_request_questioner__',
-```
-
-`renderUserPrompt`（`prompt.ts` `:503-511` 附近）扩展：A 是 to-agent answerer 重跑时（cause=`clarify-to-agent-answer`），注入 `ClarifyRequestPromptContext`：
+机制：A 是 to-agent answerer 重跑时（cause=`clarify-to-agent-answer`），scheduler 组装 `ClarifyRequestSource[]`（B 的问题列表 + questionerNodeId），调 `buildClarifyRequestBlock`（T3 已实现，`shared/clarify.ts`）渲染成 `## Clarify Request` markdown 段，在 `renderUserPrompt` 末尾 auto-append（对齐 RFC-023 `## Clarify Q&A` auto-append + `prompt.ts:461` `PROMPT_INJECTED_PORT_NAMES`：`__clarify_request__` 已在该 skip 集合，故不再为空端口头 auto-append）。
 
 ```ts
-interface ClarifyRequestPromptContext {
-  questionsMarkdown: string  // B 的问题清单 markdown (per-question id/title/kind/options)
-  iteration: number           // A 被反问轮次 (to_agent_iteration)
-  questionerNodeIds: string[] // 提问方 B 列表 (多源时多个)
+// scheduler 组装 + 注入（T13 wire）：
+const block = buildClarifyRequestBlock(sources)  // sources 已按 questionerNodeId 字典序排
+if (block !== undefined) {
+  // append to A's user prompt (mirrors flat Clarify Q&A auto-append path)
 }
 ```
 
-未引用 `{{__clarify_request__}}` 时 auto-append `## Clarify Request` 段（含协议指令 + 问题清单），对齐 RFC-023 `## Clarify Q&A` auto-append 机制（`prompt.ts:461` `PROMPT_INJECTED_PORT_NAMES`）。
+`buildClarifyRequestBlock` 是纯函数（T3 已测），输入 `ClarifyRequestSource[]`，输出含问题清单 + `<workflow-clarify-answer>` 协议指令的 markdown 段。空 sources -> undefined（不注入）。
 
-### 6.2 A 侧：既有 token 不受影响
+### 6.2 A 侧：self-clarify 通道独立
 
-A 同时挂 self-clarify 时，A 的 self-clarify 重跑（cause=`clarify-answer`）走 RFC-023 `{{__clarify_questions__}}` / `{{__clarify_answers__}}` / `{{__clarify_iteration__}}` / `{{__clarify_remaining__}}`，与本 RFC to-agent token 独立（两套字段独立，对齐 RFC-056 designer self+cross 共存设计，proposal A12/S12 同构）。
+A 同时挂 self-clarify 时，A 的 self-clarify 重跑（cause=`clarify-answer`）走 RFC-023 flat `## Clarify Q&A` block（与人答 Q&A 同面），与本 RFC `## Clarify Request` block 独立（两段并存，对齐 RFC-056 designer self+cross 共存设计，proposal A12/S12 同构）。两套 rerun cause 独立（`clarify-answer` vs `clarify-to-agent-answer`），不互污染。
 
 ### 6.3 B 侧：flat `## Clarify Q&A` block（复用）
 
@@ -403,9 +398,9 @@ B 重跑 prompt 段顺序：
 | `clarify-to-agent-timeout-no-answer` | A 只吐 output 不答不问 | fail A + retries |
 | `clarify-and-output-both-present` (reuse) | A 的 self-clarify 路径互斥 | reuse RFC-023 |
 | `inline-clarify-to-agent-fallback-to-isolated` | inline 模式缺 sessionId / session-not-found | 退 isolated + warning, task 不 fail |
-| `clarify-to-agent-abandoned` | A fail / task fail 时 awaiting_answer session 升级 abandoned | invariant 扫描 + UI chip |
+| `clarify-to-agent-abandoned` | A fail / task fail 时 awaiting_human session 升级 abandoned | invariant 扫描 + UI chip |
 
-**RFC-053 invariant**（新建 `tests/clarify-to-agent-abandoned-invariant.test.ts`）：daemon 启动 + 每小时扫 `clarify_rounds` kind=`'to-agent'` status=`awaiting_answer`，若 answerer node_run 已终态（failed/canceled）-> 升级 session `abandoned`。
+**RFC-053 invariant**（新建 `tests/clarify-to-agent-abandoned-invariant.test.ts`）：daemon 启动 + 每小时扫 `clarify_rounds` kind=`'to-agent'` status=`awaiting_human`，若 answerer node_run 已终态（failed/canceled）-> 升级 session `abandoned`。
 
 ## 8. 测试策略
 
@@ -414,7 +409,7 @@ B 重跑 prompt 段顺序：
 - `buildToAgentAutoEdges`（§2.4）：纯函数，2 条边形态断言。
 - `ClarifyAnswerEnvelopeSchema`（§2.5）：纯 schema，happy / malformed / 缺 markdown case。
 - `buildClarifyRequestBlock`（§6.1）：纯函数，单源 / 多源 / 空 questions 边界。
-- lifecycle 转移矩阵（§2.7）：`awaiting_answer` 全笛卡尔积合法/非法转移。
+- lifecycle 转移矩阵（§2.7）：`awaiting_human` 全笛卡尔积合法/非法转移。
 - `isClarifyRerunCause`（§2.8）：新 cause 映射 TRUE/FALSE。
 
 ### 8.2 集成断言
@@ -438,7 +433,7 @@ B 重跑 prompt 段顺序：
 | `tests/clarify-to-agent-prompt-injection.test.ts` | 5 | `## Clarify Request` 单源/多源 + 3 token grep + auto-append |
 | `tests/clarify-to-agent-service.test.ts` | 8 | createSession / commitAnswer / escalate / 多源 / abandoned / answerer-missing / iteration / loop_iter 隔离 |
 | `tests/clarify-to-agent-scheduler.test.ts` | 6 | B dispatch / A dispatch / bubble / frontier 不误推 / 多源汇总 / loop max_iter |
-| `tests/clarify-to-agent-lifecycle.test.ts` | 5 | awaiting_answer 转移矩阵 + s14 守卫 + invariant |
+| `tests/clarify-to-agent-lifecycle.test.ts` | 5 | awaiting_human 转移矩阵 + s14 守卫 + invariant |
 | `tests/clarify-to-agent-validator-rules.test.ts` | 9 | 9 规则覆盖 |
 | `tests/clarify-to-agent-inline-fallback.test.ts` | 3 | inline happy / 缺 sessionId / session-not-found |
 
@@ -455,8 +450,8 @@ frontend（≥ +12）：canvas drag 3 / Inspector 3 / 节点渲染 2 / 看板 ch
 | `shared/schemas/workflow.ts` NodeKind 联合 | 追加值 | 低（追加，不改既有） |
 | `shared/nodePorts.ts` agent-single systemInputs | 追加端口 | 中（影响所有 agent-single 端口计算，需确认既有 caller 容忍新端口） |
 | `shared/clarify.ts` buildToAgentAutoEdges + isClarifyChannelEdge | 新增函数 + 扩展 | 低 |
-| `shared/prompt.ts` BUILTIN_VARS + renderUserPrompt | 追加 token + 分支 | 低 |
-| `shared/lifecycle.ts` awaiting_answer | 新增状态 + 转移 | 中（s14 守卫 / SETTLED 集合） |
+| `shared/prompt.ts` renderUserPrompt | 追加 `## Clarify Request` auto-append 分支（无新 token） | 低 |
+| `shared/lifecycle.ts` awaiting_human | 新增状态 + 转移 | 中（s14 守卫 / SETTLED 集合） |
 | `backend/services/runner.ts` envelope 解析 | 新增 tag 分支 | 低 |
 | `backend/services/scheduler.ts` clarify dispatch | 新增三分流 | 中（既有 self/cross 分流不动，新分流在前） |
 | `backend/services/workflow.validator.ts` §4e + multiplicity | 新增段 + 扩展 | 低 |
@@ -469,7 +464,7 @@ frontend（≥ +12）：canvas drag 3 / Inspector 3 / 节点渲染 2 / 看板 ch
 
 ## 10. 实现顺序建议（plan.md 细化）
 
-1. shared 层：NodeKind + 端口常量 + nodePorts + buildToAgentAutoEdges + envelope schema + lifecycle awaiting_answer + BUILTIN_VARS。
+1. shared 层：NodeKind + 端口常量 + nodePorts + buildToAgentAutoEdges + envelope schema + `buildClarifyRequestBlock`（lifecycle 复用 `awaiting_human`，不新增状态/token，见 §2.7 / §6.1）。
 2. backend DB：migration + schema.ts。
 3. backend service：`toAgentClarify.ts`。
 4. backend runner：envelope 解析 + 互斥校验。
