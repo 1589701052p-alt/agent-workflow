@@ -108,6 +108,16 @@ describe("RFC-060 PR-E — 'agent-multi' grep guard", () => {
           const isLegacyStubReference =
             file.endsWith('nodePalette.ts') && line.includes("kind === 'agent-multi'")
           if (isLegacyStubReference) continue
+          // RFC-W004: word-boundary token check. The substring `agent-multi`
+          // appears inside `agent-multiple` (e.g. the to-agent multiplicity
+          // error codes `clarify-to-agent-multiple-questioners` /
+          // `-answerers`), which is NOT the legacy `agent-multi` NodeKind this
+          // guard targets. Match `agent-multi` only as a complete hyphenated
+          // token (followed by a non-word char) so `agent-multiple` /
+          // `agent-multiplicity` no longer false-positive. A real
+          // `'agent-multi'` literal or `agent-multi` identifier still has a
+          // word boundary after `multi` and is still caught.
+          if (!/\bagent-multi\b/.test(line)) continue
           offenders.push(`${file.replace(REPO_ROOT + '/', '')}:${i + 1}: ${trimmed}`)
         }
       }
