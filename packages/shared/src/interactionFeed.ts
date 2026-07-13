@@ -130,7 +130,9 @@ export interface FeedOutputInput {
 
 export interface FeedClarifyRoundInput {
   id: string
-  kind: 'self' | 'cross'
+  /** self (RFC-023) / cross (RFC-056) / to-agent (RFC-W004). The feed surfaces
+   *  every clarify family's interaction; to-agent rendering lands in PR-2. */
+  kind: 'self' | 'cross' | 'to-agent'
   /** The agent node that asked (askingNodeId). */
   askingNodeId: string
   /** The clarify / clarify-cross-agent node's run (jump target for the detail page). */

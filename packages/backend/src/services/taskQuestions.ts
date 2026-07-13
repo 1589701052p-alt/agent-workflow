@@ -130,6 +130,11 @@ function graphForRound(round: ClarifyRoundRow) {
  *  sealRoundQuestions. */
 export function reconcileRoundEntriesTx(tx: DbTxSync, round: ClarifyRoundRow): void {
   if (round.status === 'canceled' || round.status === 'abandoned') return
+  // RFC-W004: to-agent rounds (B reverse-asks upstream A; A answers directly via
+  // <workflow-clarify-answer>) have NO human board entry - the answerer is an
+  // agent, not a human. Skip reconcile for them (PR-1 stub; PR-2 wires the
+  // answerer run). Also narrows `round.kind` to the board kinds below.
+  if (round.kind === 'to-agent') return
   const questions = parseQuestions(round.questionsJson)
   if (questions.length === 0) return
   const desired = reconcileDesiredEntries({
