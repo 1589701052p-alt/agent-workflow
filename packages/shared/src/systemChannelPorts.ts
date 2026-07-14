@@ -37,6 +37,8 @@ import {
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
+  TO_AGENT_CLARIFY_REQUEST_PORT,
+  TO_AGENT_OUT_TO_ANSWERER_PORT,
 } from './schemas/workflow'
 
 export interface SystemChannelPortSpec {
@@ -82,6 +84,26 @@ export const SYSTEM_CHANNEL_PORTS = {
   [CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT]: {
     side: 'source',
     promptInjected: false,
+    dataflow: 'never',
+  },
+  // RFC-W004 clarify-to-agent family - mirrors cross-clarify's two-port
+  // pair. `to_answerer` is the manual-edge source carrying the question
+  // payload to answerer A's `__clarify_request__` target port; A's answer
+  // is NOT pushed over this edge (A's rerun is triggered out-of-band by
+  // services/toAgentClarify.ts), so dataflow is 'never'. A's answer flows
+  // back to B via the existing `to_questioner -> __clarify_response__`
+  // pair (shared with cross-clarify), so no new return port is needed.
+  [TO_AGENT_OUT_TO_ANSWERER_PORT]: {
+    side: 'source',
+    promptInjected: false,
+    dataflow: 'never',
+  },
+  [TO_AGENT_CLARIFY_REQUEST_PORT]: {
+    side: 'target',
+    // Content arrives via the dedicated `## Clarify Request` prompt block
+    // (renderUserPrompt when A reruns as answerer), so auto-append skips
+    // the empty `## __clarify_request__` header.
+    promptInjected: true,
     dataflow: 'never',
   },
 } as const satisfies Record<string, SystemChannelPortSpec>

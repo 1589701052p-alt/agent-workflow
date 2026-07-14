@@ -61,6 +61,9 @@ const GATE2_EXPECTED: Record<RerunCause, boolean> = {
   'review-park': false,
   'clarify-park': false,
   'cross-clarify-park': false,
+  'clarify-to-agent-park': false, // RFC-W004 to-agent park (awaiting_human) - not an answer rerun
+  'clarify-to-agent-answer': false, // RFC-W004 answerer A is a fresh rollback run -> gate-3 path, NOT gate-2 (mirrors cross-clarify-answer)
+  'clarify-to-agent-questioner-rerun': true, // RFC-W004 B resumes its session carrying A's answer - same resume semantics as cross-clarify-questioner-rerun
   'retry-node': false,
   'retry-node-cascade': false,
   'fanout-shard': false,
@@ -90,9 +93,13 @@ describe('RFC-098 WP-10 — gate-2 (isClarifyRerun) × cause truth table', () =>
     })
   }
 
-  test('exactly two causes open gate-2', () => {
+  test('exactly the answer-carrying causes open gate-2', () => {
     const open = RERUN_CAUSES.filter((c) => isClarifyRerunCause(c))
-    expect(open.sort()).toEqual(['clarify-answer', 'cross-clarify-questioner-rerun'])
+    expect(open.sort()).toEqual([
+      'clarify-answer',
+      'clarify-to-agent-questioner-rerun',
+      'cross-clarify-questioner-rerun',
+    ])
   })
 
   test('NULL / undefined (pre-0044 legacy rows across a daemon upgrade) gate FALSE', () => {

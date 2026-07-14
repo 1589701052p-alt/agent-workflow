@@ -70,7 +70,7 @@ describe('declaredPorts — 逐 kind 表值锁', () => {
     expect(d.dataOutputs).toEqual([])
   })
 
-  test('agent-single：dataOutputs 带 outputKinds kind；系统口三件套恒在', () => {
+  test('agent-single：dataOutputs 带 outputKinds kind；系统口四件套恒在', () => {
     const a = agent('writer', {
       outputs: ['doc', 'sig'],
       outputKinds: { doc: 'path<md>', sig: 'signal' },
@@ -82,7 +82,15 @@ describe('declaredPorts — 逐 kind 表值锁', () => {
       { name: 'sig', kind: 'signal' },
     ])
     expect(names(d.systemOutputs)).toEqual(['__clarify__'])
-    expect(names(d.systemInputs)).toEqual(['__clarify_response__', '__external_feedback__'])
+    // RFC-W004: __clarify_request__ (to-agent answerer port) joins the
+    // always-declared system input set on agent-single, mirroring
+    // __external_feedback__ (cross-clarify designer port). Canvas still
+    // hides the Handle until a to_answerer edge exists (edge-derived render).
+    expect(names(d.systemInputs)).toEqual([
+      '__clarify_response__',
+      '__external_feedback__',
+      '__clarify_request__',
+    ])
     // agent 不在册 ⇒ 数据口为空（渲染由调用点的边容错兜底），系统口仍在。
     const orphan = { id: 'w2', kind: 'agent-single', agentName: 'ghost' }
     const d2 = declaredPorts(orphan as never, defOf([orphan]), new Map())

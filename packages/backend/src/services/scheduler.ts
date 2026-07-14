@@ -2223,7 +2223,7 @@ async function resolveMergeConflicts(
   return { allResolved, detail: parts.join('; ') }
 }
 
-async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
+export async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<OneNodeResult> {
   const { db, task, taskId, definition, opts, inputsMap, globalSem, writeSem, log } = state
   const { node, iteration } = args
 
@@ -2397,6 +2397,23 @@ async function runOneNode(state: SchedulerState, args: OneNodeArgs): Promise<One
     // dispatcher marks this node "scheduled for this pass"; the lifecycle
     // hand-off to awaiting_human happens later via the runner path.
     return { kind: 'ok', summary: '', message: '' }
+  }
+
+  if (node.kind === 'clarify-to-agent') {
+    // RFC-W004 PR-1 stub guard: the to-agent runtime (B reverse-asks A; A
+    // answers via <workflow-clarify-answer>; the answer flows back to B -
+    // services/toAgentClarify.ts) lands in PR-2. Until then a dispatched
+    // to-agent node CANNOT run: fail the node_run explicitly so a saved-but-
+    // unrunnable to-agent workflow surfaces a clear error at execution time
+    // instead of silently parking / no-op'ing. The validator does NOT block
+    // saving / editing (designer can draw + configure the node); this guard
+    // only blocks execution. Mirrors RFC-167 PR-1's workgroup-dynamic-not-
+    // implemented shape (since removed once that runtime landed).
+    return {
+      kind: 'failed',
+      summary: `clarify-to-agent node '${node.id}' runtime is not implemented yet (RFC-W004 PR-2); the node can be drawn and saved but not executed`,
+      message: 'to-agent-runtime-not-implemented',
+    }
   }
 
   if (node.kind === 'input') {

@@ -160,6 +160,19 @@ export const PALETTE_DESCRIPTORS = {
     // `cross-clarify-manual-edge-missing` cover the gap.
     makeDefaults: () => ({ title: '', description: '' }),
   },
+  'clarify-to-agent': {
+    section: 'human',
+    glyph: '⚡',
+    // RFC-W004 to-agent node - questioner B reverse-drag + manual to_answerer
+    // wire to answerer A. i18n labels live under `clarifyToAgent.canvas.*`.
+    // Glyph ⚡ keeps the clarify family (RFC-023 self / RFC-056 cross / W004
+    // to-agent) visually uniform in the palette sidebar - palette-icon-coverage
+    // gates the leading glyph to the eight kind-icons set.
+    labelKey: 'clarifyToAgent.canvas.paletteLabel',
+    descKey: 'clarifyToAgent.canvas.paletteHint',
+    idPrefix: 'to_agent_clarify',
+    makeDefaults: () => ({ title: '', description: '' }),
+  },
 } as const satisfies Record<NodeKind, PaletteDescriptor>
 
 /** Canvas chip / palette leading icon per kind — one projection of the

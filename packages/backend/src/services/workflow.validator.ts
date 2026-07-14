@@ -35,6 +35,9 @@ import {
   CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT,
   BUILTIN_VARS,
   CLARIFY_SOURCE_PORT_NAME,
+  TO_AGENT_OUT_TO_ANSWERER_PORT,
+  TO_AGENT_OUT_TO_QUESTIONER_PORT,
+  TO_AGENT_CLARIFY_REQUEST_PORT,
   countFanoutAggregators,
   declaredPorts,
   isClarifyChannelEdge,
@@ -408,8 +411,10 @@ export function validateWorkflowDef(
         nodeById.get(srcWrapper)?.kind === 'wrapper-fanout' &&
         src.kind !== 'clarify' &&
         src.kind !== 'clarify-cross-agent' &&
+        src.kind !== 'clarify-to-agent' &&
         tgt.kind !== 'clarify' &&
-        tgt.kind !== 'clarify-cross-agent'
+        tgt.kind !== 'clarify-cross-agent' &&
+        tgt.kind !== 'clarify-to-agent'
       ) {
         const tgtAgent = agentByName.get(readString(tgt, 'agentName') ?? '')
         const targetIsAggregator = tgt.kind === 'agent-single' && tgtAgent?.role === 'aggregator'
@@ -455,6 +460,12 @@ export function validateWorkflowDef(
     // down. Strip any edge touching a clarify-cross-agent node from the DAG
     // check the same way RFC-023 clarify edges are stripped above.
     if (srcNode.kind === 'clarify-cross-agent' || tgtNode.kind === 'clarify-cross-agent') continue
+    // RFC-W004: clarify-to-agent forms the same intentional feedback cycle -
+    // B.__clarify__ -> to-agent.questions, to-agent.to_questioner ->
+    // B.__clarify_response__ loops back, and to-agent.to_answerer ->
+    // A.__clarify_request__ parks A (out-of-band, not a data dependency). Strip
+    // edges touching a clarify-to-agent node from the DAG check too.
+    if (srcNode.kind === 'clarify-to-agent' || tgtNode.kind === 'clarify-to-agent') continue
     filtered.push({ from: edge.source.nodeId, to: edge.target.nodeId })
   }
   if (
@@ -496,6 +507,9 @@ export function validateWorkflowDef(
       // as topologicalOrder).
       if (s.kind === 'clarify' || t.kind === 'clarify') continue
       if (s.kind === 'clarify-cross-agent' || t.kind === 'clarify-cross-agent') continue
+      // RFC-W004: clarify-to-agent channel edges are out-of-band feedback
+      // (B->to-agent->B + to_answerer->A.__clarify_request__), same as above.
+      if (s.kind === 'clarify-to-agent' || t.kind === 'clarify-to-agent') continue
       if (isClarifyChannelEdge(edge)) continue
       dataEdges.push({ from: edge.source.nodeId, to: edge.target.nodeId })
     }
@@ -1250,6 +1264,145 @@ export function validateWorkflowDef(
     }
   }
 
+  // 4e. clarify-to-agent (RFC-W004) -----------------------------------------
+  // B reverse-asks upstream A; A answers via <workflow-clarify-answer>. The
+  // node has 1 in (`questions` <- B.__clarify__) + 2 out (`to_answerer` ->
+  // A.__clarify_request__ MANUAL edge; `to_questioner` -> B.__clarify_response__
+  // auto-edge). Mirrors §4d cross-clarify with answerer A in designer's role,
+  // EXCEPT A's edge is a manual drag (not auto-built) and the ancestor relation
+  // is "A is an upstream ancestor of B" (A produced what B is questioning).
+  {
+    const reverseAdjTa = new Map<string, string[]>()
+    for (const e of edges) {
+      const list = reverseAdjTa.get(e.target.nodeId) ?? []
+      list.push(e.source.nodeId)
+      reverseAdjTa.set(e.target.nodeId, list)
+    }
+    const taLoopMembership = buildLoopMembership(nodes)
+    for (const node of nodes) {
+      if (node.kind !== 'clarify-to-agent') continue
+
+      // inbound on 'questions' <- B.__clarify__
+      const inboundOnQuestions = edges.filter(
+        (e) => e.target.nodeId === node.id && e.target.portName === 'questions',
+      )
+      const questionerCandidateIds = new Set<string>()
+      const questionerAgentNamesById = new Map<string, string | undefined>()
+      let questionerId: string | undefined
+      let questionerAgentName: string | undefined
+      if (inboundOnQuestions.length === 0) {
+        issues.push({
+          code: 'clarify-to-agent-input-source-missing',
+          message: `clarify-to-agent node '${node.id}' has no inbound edge on 'questions' port; reverse-drag from the input handle onto an agent-single questioner (B) to wire it`,
+          pointer: node.id,
+        })
+      } else {
+        for (const e of inboundOnQuestions) {
+          const src = nodeById.get(e.source.nodeId)
+          if (src === undefined) {
+            issues.push({
+              code: 'clarify-to-agent-input-source-missing',
+              message: `clarify-to-agent node '${node.id}' inbound edge references unknown node '${e.source.nodeId}'`,
+              pointer: node.id,
+            })
+            continue
+          }
+          if (src.kind !== 'agent-single') {
+            issues.push({
+              code: 'clarify-to-agent-target-not-agent-single',
+              message: `clarify-to-agent node '${node.id}' must connect to an agent-single questioner (got kind '${src.kind}' on '${src.id}')`,
+              pointer: node.id,
+            })
+            continue
+          }
+          questionerCandidateIds.add(src.id)
+          questionerAgentNamesById.set(src.id, readString(src, 'agentName'))
+        }
+        // >=2 questioners -> clarify-to-agent-multiple-questioners (multiplicity
+        // pre-pass). Pick dict-min for stable downstream evaluation.
+        if (questionerCandidateIds.size >= 1) {
+          questionerId = [...questionerCandidateIds].sort()[0]
+          questionerAgentName = questionerAgentNamesById.get(questionerId!)
+        }
+      }
+
+      // outgoing edges MUST originate from to_answerer / to_questioner only.
+      const outboundEdges = edges.filter((e) => e.source.nodeId === node.id)
+      for (const e of outboundEdges) {
+        if (
+          e.source.portName !== TO_AGENT_OUT_TO_ANSWERER_PORT &&
+          e.source.portName !== TO_AGENT_OUT_TO_QUESTIONER_PORT
+        ) {
+          issues.push({
+            code: 'clarify-to-agent-has-downstream',
+            message: `clarify-to-agent node '${node.id}' has an outgoing edge from non-system port '${e.source.portName}'; only 'to_answerer' and 'to_questioner' are allowed`,
+            pointer: node.id,
+          })
+        }
+      }
+
+      // `to_answerer` wired? (warning - without it A is never triggered to answer)
+      const toAnswererOut = outboundEdges.filter(
+        (e) => e.source.portName === TO_AGENT_OUT_TO_ANSWERER_PORT,
+      )
+      if (toAnswererOut.length === 0) {
+        issues.push({
+          code: 'clarify-to-agent-answerer-edge-missing',
+          message: `clarify-to-agent node '${node.id}' has no outbound edge on 'to_answerer' port; the answerer A will never be triggered to produce an answer`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // warning: not inside a wrapper-loop (mirrors cross-clarify-no-iteration-cap).
+      // Without an enclosing loop's max_iterations B may keep reverse-asking A
+      // indefinitely (A->self-clarify->human->A answers->B->... never converges).
+      if (!taLoopMembership.has(node.id)) {
+        issues.push({
+          code: 'clarify-to-agent-no-iteration-cap',
+          message: `clarify-to-agent node '${node.id}' is not inside a wrapper-loop - B may keep reverse-asking indefinitely; consider wrapping in a wrapper-loop with max_iterations`,
+          pointer: node.id,
+          severity: 'warning',
+        })
+      }
+
+      // ancestor relation for each to_answerer target (warning if A is not an
+      // upstream ancestor of questioner B - the answer feedback loop may not close).
+      if (questionerId !== undefined) {
+        const ancestors = collectReachableUpstream(questionerId, reverseAdjTa)
+        for (const e of toAnswererOut) {
+          if (e.target.nodeId === questionerId) continue // self = handled below
+          if (!ancestors.has(e.target.nodeId)) {
+            issues.push({
+              code: 'clarify-to-agent-answerer-not-ancestor',
+              message: `clarify-to-agent node '${node.id}' to_answerer target '${e.target.nodeId}' is not a topological upstream ancestor of questioner '${questionerId}'; the answer feedback loop may not close`,
+              pointer: node.id,
+              severity: 'warning',
+            })
+          }
+        }
+      }
+
+      // answerer === questioner same agent.md -> warning to consider RFC-023.
+      if (questionerAgentName !== undefined && questionerAgentName.length > 0) {
+        for (const e of toAnswererOut) {
+          const tgt = nodeById.get(e.target.nodeId)
+          if (tgt === undefined) continue
+          if (tgt.kind !== 'agent-single') continue
+          const answererAgentName = readString(tgt, 'agentName')
+          if (answererAgentName === questionerAgentName) {
+            issues.push({
+              code: 'clarify-to-agent-answerer-self',
+              message: `clarify-to-agent node '${node.id}' wires the same agent '${answererAgentName}' as both answerer and questioner; consider RFC-023 self-clarify instead`,
+              pointer: node.id,
+              severity: 'warning',
+            })
+          }
+        }
+      }
+    }
+  }
+
   // 4d-bis. clarify / cross-clarify channel system-port edge integrity ------
   // The answer-injection target ports (`__clarify_response__`,
   // `__external_feedback__`) and the cross output source ports (`to_questioner`,
@@ -1275,7 +1428,12 @@ export function validateWorkflowDef(
     if (edge.source.portName !== CLARIFY_SOURCE_PORT_NAME || edge.target.portName !== 'questions')
       continue
     const tgtKind = nodeById.get(edge.target.nodeId)?.kind
-    if (tgtKind !== 'clarify' && tgtKind !== 'clarify-cross-agent') continue
+    if (
+      tgtKind !== 'clarify' &&
+      tgtKind !== 'clarify-cross-agent' &&
+      tgtKind !== 'clarify-to-agent'
+    )
+      continue
     const set = clarifyAskersByNode.get(edge.target.nodeId) ?? new Set<string>()
     set.add(edge.source.nodeId)
     clarifyAskersByNode.set(edge.target.nodeId, set)
@@ -1292,7 +1450,9 @@ export function validateWorkflowDef(
     // hand-edited `cross.to_designer → review.__external_feedback__` would pass
     // and the runtime would try to rerun a non-agent node as the designer.
     if (
-      (tp === CLARIFY_RESPONSE_TARGET_PORT_NAME || tp === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT) &&
+      (tp === CLARIFY_RESPONSE_TARGET_PORT_NAME ||
+        tp === CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT ||
+        tp === TO_AGENT_CLARIFY_REQUEST_PORT) &&
       tgt !== undefined &&
       tgt.kind !== 'agent-single'
     ) {
@@ -1307,11 +1467,12 @@ export function validateWorkflowDef(
     if (tp === CLARIFY_RESPONSE_TARGET_PORT_NAME) {
       const okSource =
         (src.kind === 'clarify' && sp === 'answers') ||
-        (src.kind === 'clarify-cross-agent' && sp === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT)
+        (src.kind === 'clarify-cross-agent' && sp === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT) ||
+        (src.kind === 'clarify-to-agent' && sp === TO_AGENT_OUT_TO_QUESTIONER_PORT)
       if (!okSource) {
         issues.push({
           code: 'system-port-illegal-source',
-          message: `edge '${edge.id}': port '__clarify_response__' on '${edge.target.nodeId}' may only be fed by a clarify node's 'answers' port or a clarify-cross-agent node's 'to_questioner' port (got '${edge.source.nodeId}.${sp}', kind '${src.kind}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+          message: `edge '${edge.id}': port '__clarify_response__' on '${edge.target.nodeId}' may only be fed by a clarify node's 'answers' port or a clarify-cross-agent / clarify-to-agent node's 'to_questioner' port (got '${edge.source.nodeId}.${sp}', kind '${src.kind}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
           pointer: edge.target.nodeId,
         })
       } else {
@@ -1340,6 +1501,21 @@ export function validateWorkflowDef(
         })
       }
     }
+    // RFC-W004: answerer A's `__clarify_request__` injection port may ONLY be fed
+    // by a clarify-to-agent node's `to_answerer` port (the manual edge). A stray
+    // plain-DATA edge here is stripped by buildScopeUpstreams (A's rerun is
+    // triggered out-of-band by services/toAgentClarify.ts), so any other source
+    // makes A a false dispatch root - same shape as `__external_feedback__` above.
+    if (tp === TO_AGENT_CLARIFY_REQUEST_PORT) {
+      const ok = src.kind === 'clarify-to-agent' && sp === TO_AGENT_OUT_TO_ANSWERER_PORT
+      if (!ok) {
+        issues.push({
+          code: 'system-port-illegal-source',
+          message: `edge '${edge.id}': port '__clarify_request__' on '${edge.target.nodeId}' may only be fed by a clarify-to-agent node's 'to_answerer' port (got '${edge.source.nodeId}.${sp}', kind '${src.kind}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+          pointer: edge.target.nodeId,
+        })
+      }
+    }
     // (c) the clarify / cross-clarify `questions` input may ONLY be fed by an
     // agent's `__clarify__` port. Runtime channel discovery keys on the
     // `__clarify__` source port, so a normal output (or a clarify node) wired
@@ -1349,7 +1525,9 @@ export function validateWorkflowDef(
     // drop onto a `questions` handle.
     if (
       tp === 'questions' &&
-      (tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') &&
+      (tgt?.kind === 'clarify' ||
+        tgt?.kind === 'clarify-cross-agent' ||
+        tgt?.kind === 'clarify-to-agent') &&
       sp !== CLARIFY_SOURCE_PORT_NAME
     ) {
       issues.push({
@@ -1364,11 +1542,16 @@ export function validateWorkflowDef(
     // a dangling ask channel the runtime never discovers.
     if (
       sp === CLARIFY_SOURCE_PORT_NAME &&
-      !((tgt?.kind === 'clarify' || tgt?.kind === 'clarify-cross-agent') && tp === 'questions')
+      !(
+        (tgt?.kind === 'clarify' ||
+          tgt?.kind === 'clarify-cross-agent' ||
+          tgt?.kind === 'clarify-to-agent') &&
+        tp === 'questions'
+      )
     ) {
       issues.push({
         code: 'system-port-illegal-target',
-        message: `edge '${edge.id}': the '__clarify__' ask port on '${edge.source.nodeId}' may only feed a clarify / clarify-cross-agent node's 'questions' port (got target '${edge.target.nodeId}.${tp}')`,
+        message: `edge '${edge.id}': the '__clarify__' ask port on '${edge.source.nodeId}' may only feed a clarify / clarify-cross-agent / clarify-to-agent node's 'questions' port (got target '${edge.target.nodeId}.${tp}')`,
         pointer: edge.source.nodeId,
       })
     }
@@ -1393,11 +1576,28 @@ export function validateWorkflowDef(
     // wrong-source-node and wrong-target gaps.
     if (
       sp === CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT &&
-      !(src.kind === 'clarify-cross-agent' && tp === CLARIFY_RESPONSE_TARGET_PORT_NAME)
+      !(
+        (src.kind === 'clarify-cross-agent' || src.kind === 'clarify-to-agent') &&
+        tp === CLARIFY_RESPONSE_TARGET_PORT_NAME
+      )
     ) {
       issues.push({
         code: 'system-port-illegal-target',
-        message: `edge '${edge.id}': reserved port 'to_questioner' on '${edge.source.nodeId}' (kind '${src.kind}') may only appear as a clarify-cross-agent node feeding a questioner's '__clarify_response__' port (got target '${edge.target.nodeId}.${tp}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+        message: `edge '${edge.id}': reserved port 'to_questioner' on '${edge.source.nodeId}' (kind '${src.kind}') may only appear as a clarify-cross-agent / clarify-to-agent node feeding a questioner's '__clarify_response__' port (got target '${edge.target.nodeId}.${tp}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
+        pointer: edge.source.nodeId,
+      })
+    }
+    // RFC-W004: the to-agent `to_answerer` reserved output SOURCE port may ONLY
+    // appear as the canonical `clarify-to-agent -> answerer.__clarify_request__`
+    // edge (the manual answerer drag). Gated on the PORT NAME, not src.kind -
+    // same rationale as `to_questioner` / `to_designer` above.
+    if (
+      sp === TO_AGENT_OUT_TO_ANSWERER_PORT &&
+      !(src.kind === 'clarify-to-agent' && tp === TO_AGENT_CLARIFY_REQUEST_PORT)
+    ) {
+      issues.push({
+        code: 'system-port-illegal-target',
+        message: `edge '${edge.id}': reserved port 'to_answerer' on '${edge.source.nodeId}' (kind '${src.kind}') may only appear as a clarify-to-agent node feeding an answerer's '__clarify_request__' port (got target '${edge.target.nodeId}.${tp}'); a plain data edge here is silently dropped by the scheduler and makes '${edge.target.nodeId}' a false dispatch root`,
         pointer: edge.source.nodeId,
       })
     }
@@ -1756,7 +1956,12 @@ export function validateAgentClarifyMultiplicity(args: {
   // folded — they share predicate structure; the code/message branch by
   // NodeKind to preserve byte-level message templates from RFC-063.
   for (const node of args.nodes) {
-    if (node.kind !== 'clarify' && node.kind !== 'clarify-cross-agent') continue
+    if (
+      node.kind !== 'clarify' &&
+      node.kind !== 'clarify-cross-agent' &&
+      node.kind !== 'clarify-to-agent'
+    )
+      continue
     const sourceAgents = new Set<string>()
     for (const e of args.edges) {
       if (e.target.nodeId !== node.id) continue
@@ -1778,10 +1983,46 @@ export function validateAgentClarifyMultiplicity(args: {
         message: `clarify node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one agent may be attached to a clarify node`,
         pointer: node.id,
       })
-    } else {
+    } else if (node.kind === 'clarify-cross-agent') {
       issues.push({
         code: 'cross-clarify-multiple-questioners',
         message: `clarify-cross-agent node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one questioner agent allowed per cross-clarify node`,
+        pointer: node.id,
+      })
+    } else {
+      issues.push({
+        code: 'clarify-to-agent-multiple-questioners',
+        message: `clarify-to-agent node '${node.id}' has inbound 'questions' edges from multiple agents (${sorted.join(', ')}); only one questioner agent allowed per to-agent node (multiple B reverse-asking the same A is multi-source aggregation and uses SEPARATE to-agent nodes)`,
+        pointer: node.id,
+      })
+    }
+  }
+
+  // Rule 4 (RFC-W004): a single clarify-to-agent node's `to_answerer` output may
+  // target at most ONE answerer agent (A). Multiple answerers on one to-agent
+  // node split answer attribution ambiguously. The INVERSE shape - multiple
+  // to-agent nodes pointing at the same A - is multi-source aggregation
+  // (design §3.4 / proposal S7: B1+B2 reverse-ask A, A reruns once with both
+  // questions) and is ALLOWED; it is NOT flagged here, because each to-agent's
+  // OWN to_answerer target set stays size 1. (The proposal's A9 "A targeted by
+  // >=2 to-agent -> fail" is overridden by design §3.4 + §5 multiplicity
+  // correction - design.md wins per CLAUDE.md precedence.)
+  for (const node of args.nodes) {
+    if (node.kind !== 'clarify-to-agent') continue
+    const answererTargetIds = new Set<string>()
+    for (const e of args.edges) {
+      if (e.source.nodeId !== node.id) continue
+      if (e.source.portName !== TO_AGENT_OUT_TO_ANSWERER_PORT) continue
+      const tgt = nodesById.get(e.target.nodeId)
+      if (tgt === undefined) continue // unknown-target reported elsewhere
+      if (tgt.kind !== 'agent-single') continue // non-agent target reported elsewhere
+      answererTargetIds.add(tgt.id)
+    }
+    if (answererTargetIds.size > 1) {
+      const sorted = [...answererTargetIds].sort()
+      issues.push({
+        code: 'clarify-to-agent-multiple-answerers',
+        message: `clarify-to-agent node '${node.id}' has 'to_answerer' edges to multiple agents (${sorted.join(', ')}); only one answerer agent allowed per to-agent node (multiple B reverse-asking the same A is multi-source aggregation and is allowed)`,
         pointer: node.id,
       })
     }

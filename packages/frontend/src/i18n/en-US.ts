@@ -2415,6 +2415,9 @@ export const enUS: Resources = {
   crossClarifyNode: {
     label: 'cross-clarify',
   },
+  clarifyToAgentNode: {
+    label: 'to-agent clarify',
+  },
   errors: {
     'http-401': 'Unauthorized — please sign in again.',
     'http-404': 'Not found.',
@@ -2593,6 +2596,43 @@ export const enUS: Resources = {
       error: {
         targetNotAgentSingle: 'Cross-clarify target must be an agent-single node (v1 limitation).',
         designerNotAgentSingle: 'to_designer must target an agent-single node.',
+      },
+    },
+  },
+  clarifyToAgent: {
+    inspector: {
+      title: 'To-Agent Clarify',
+      sessionModeForAnswerer: 'Answerer rerun session',
+      sessionModeIsolated: 'Isolated (fresh)',
+      sessionModeInline: 'Inline (resume)',
+      sessionModeHint:
+        'Inline lets the answerer (A) rerun reuse the prior opencode session; falls back to isolated on auth/session errors.',
+      fieldLinkedQuestioner: 'Linked questioner (B)',
+      linkedQuestionerMissing:
+        'Not linked to any questioner yet - drag from the input handle onto the questioner agent (B) to wire it.',
+      linkedQuestionerHint:
+        'The agent (B) reverse-asking A; only one questioner is allowed per to-agent node.',
+      fieldLinkedAnswerer: 'Linked answerer (A)',
+      linkedAnswererMissing:
+        'Not linked to any answerer yet - drag from the to_answerer handle onto the upstream answerer agent (A); without it A will never be triggered to answer.',
+      linkedAnswererHint:
+        'The upstream agent (A) that answers B; typically a topological ancestor of B.',
+      fieldInLoop: 'Wrapped in a loop',
+      inLoopYes: '✔ Inside a wrapper-loop - reverse-ask rounds are capped by max_iterations.',
+      inLoopNo:
+        '⚠ Not inside a wrapper-loop - B may keep reverse-asking indefinitely; consider wrapping in one.',
+    },
+    canvas: {
+      paletteLabel: 'to-agent clarify',
+      paletteHint:
+        'Drag onto a questioner agent (B); then connect to_answerer -> an upstream answerer agent (A).',
+      handleLabel: {
+        toQuestioner: '-> B',
+        toAnswerer: '-> A',
+      },
+      error: {
+        targetNotAgentSingle: 'To-agent questioner (B) must be an agent-single node.',
+        answererNotAgentSingle: 'to_answerer must target an agent-single node (A).',
       },
     },
   },

@@ -1465,7 +1465,7 @@ export const clarifyRounds = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => tasks.id, { onDelete: 'cascade' }),
-    kind: text('kind', { enum: ['self', 'cross'] }).notNull(),
+    kind: text('kind', { enum: ['self', 'cross', 'to-agent'] }).notNull(),
     // For kind='self' agent-multi this is the shard child node_run id;
     // for kind='cross' this is the questioner's node_run id.
     askingNodeId: text('asking_node_id').notNull(),
@@ -1481,8 +1481,18 @@ export const clarifyRounds = sqliteTable(
       .references(() => nodeRuns.id, { onDelete: 'cascade' }),
     // Designer node id receiving External Feedback. NULL when kind='self'
     // (the asking agent itself is the consumer) or when manual edge missing
-    // at cross-clarify spawn time.
+    // at cross-clarify spawn time. NULL for kind='to-agent' (to-agent has no
+    // designer consumer; the answerer is tracked in answerer_node_id).
     targetConsumerNodeId: text('target_consumer_node_id'),
+    // RFC-W004: answerer agent A node id (kind='to-agent' only). NULL for
+    // kind='self'/'cross'. A is the agent that ANSWERS B's questions (vs
+    // cross-clarify's designer which CONSUMES human answers).
+    answererNodeId: text('answerer_node_id'),
+    // RFC-W004: answerer A's node_run id that produced the
+    // <workflow-clarify-answer>. NULL until A answers. NULL for self/cross.
+    answererNodeRunId: text('answerer_node_run_id').references(() => nodeRuns.id, {
+      onDelete: 'cascade',
+    }),
     // wrapper-loop iter (RFC-056 partial persistence). 0 for kind='self' or
     // cross outside a loop.
     loopIter: integer('loop_iter').notNull().default(0),
@@ -1540,6 +1550,8 @@ export const clarifyRounds = sqliteTable(
       t.targetConsumerNodeId,
       t.status,
     ),
+    // RFC-W004: lookup of pending to-agent rounds for a given answerer A.
+    answererIdx: index('idx_clarify_rounds_answerer').on(t.answererNodeId, t.status),
   }),
 )
 

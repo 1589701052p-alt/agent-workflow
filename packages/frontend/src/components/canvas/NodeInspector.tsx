@@ -22,6 +22,7 @@ import { PromptPreview } from './PromptPreview'
 import { AgentSingleEdit } from './inspector/AgentSingleEdit'
 import { ClarifyEdit } from './inspector/ClarifyEdit'
 import { CrossClarifyEdit } from './inspector/CrossClarifyEdit'
+import { ToAgentClarifyEdit } from './inspector/ToAgentClarifyEdit'
 import { InputEdit } from './inspector/InputEdit'
 import { OutputEdit } from './inspector/OutputEdit'
 import { ReviewEdit } from './inspector/ReviewEdit'
@@ -58,6 +59,10 @@ const KIND_INSPECTORS = {
   review: ReviewEdit,
   clarify: ClarifyEdit,
   'clarify-cross-agent': CrossClarifyEdit,
+  // RFC-W004 PR-1: to-agent temporarily reuses the cross-clarify inspector
+  // (same 1-in/2-out shape + sessionMode segmented). T7 ships the dedicated
+  // ToAgentClarifyEdit with answerer-side labeling (to_answerer / A).
+  'clarify-to-agent': ToAgentClarifyEdit,
 } as const satisfies Record<NodeKind, FC<EditProps>>
 
 export function NodeInspector({ definition, selectedNodeId, agents, onChange, onClose }: Props) {

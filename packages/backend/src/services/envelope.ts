@@ -30,7 +30,9 @@ import {
   getHandlerForParsedKind,
   formatPortValidationErrCode,
   parseKind,
+  ClarifyAnswerEnvelopeSchema,
   type AgentOutputKind,
+  type ClarifyAnswerEnvelope,
   type ValidateIO,
 } from '@agent-workflow/shared'
 import { ValidationError } from '@/util/errors'
@@ -157,6 +159,11 @@ const NODE_VALIDATE_IO: ValidateIO = {
 
 const ENVELOPE_RE = /<workflow-output>([\s\S]*?)<\/workflow-output>/g
 const CLARIFY_ENVELOPE_RE = /<workflow-clarify>([\s\S]*?)<\/workflow-clarify>/g
+// RFC-W004: answerer A's answer envelope. Disjoint from CLARIFY_ENVELOPE_RE:
+// the opening tag is `<workflow-clarify-answer>` (after `clarify` comes `-`,
+// not `>`), so `<workflow-clarify>` never matches it and vice-versa - no need
+// to disambiguate by node kind at the regex layer.
+const CLARIFY_ANSWER_ENVELOPE_RE = /<workflow-clarify-answer>([\s\S]*?)<\/workflow-clarify-answer>/g
 // Accept both "name" and 'name' attribute quotes. Tolerant of arbitrary
 // whitespace inside the opening tag. RFC-103 T6: matches only the OPENING tag;
 // each port's content is delimited by the next opening tag (container-based,
@@ -308,6 +315,137 @@ export function extractClarifyEnvelopeBody(stdout: string): string | null {
   // last[1] is the captured body between the open / close tags.
   const body = (last[1] ?? '').trim()
   return body
+}
+
+/**
+ * Extract the JSON body inside the LAST
+ * `<workflow-clarify-answer>...</workflow-clarify-answer>` block, mirroring
+ * {@link extractClarifyEnvelopeBody}. Returns null when no answer block is
+ * present. The returned string is trimmed but otherwise verbatim; the caller
+ * ({@link analyzeToAgentAnswererReply}) does the JSON.parse + zod validation.
+ *
+ * RFC-W004: only answerer A (a node re-spawned with cause='clarify-to-agent-
+ * answer') is expected to emit this envelope. On any other run the tag, if
+ * present, is simply ignored (detectEnvelopeKind does not recognize it, so a
+ * stray answer envelope on a normal run degrades to 'none' -> envelope-missing).
+ */
+export function extractClarifyAnswerEnvelopeBody(stdout: string): string | null {
+  const matches = [...stdout.matchAll(CLARIFY_ANSWER_ENVELOPE_RE)]
+  if (matches.length === 0) return null
+  const last = matches[matches.length - 1]
+  if (!last) return null
+  return (last[1] ?? '').trim()
+}
+
+// ---------------------------------------------------------------------------
+// RFC-W004: to-agent answerer reply analysis (design §4 mutual exclusion).
+// ---------------------------------------------------------------------------
+
+/**
+ * The four machine-readable failure codes a to-agent answerer run can stamp
+ * (declared in the shared FAILURE_CODES taxonomy). Mirrors the RFC-023
+ * clarify/output family but for the `<workflow-clarify-answer>` envelope.
+ */
+export type ToAgentAnswerFailureCode =
+  | 'clarify-to-agent-answer-malformed'
+  | 'clarify-to-agent-answer-and-output-both'
+  | 'clarify-to-agent-answer-and-clarify-both'
+  | 'clarify-to-agent-timeout-no-answer'
+
+/**
+ * Outcome of analyzing answerer A's stdout under the to-agent 3-way mutex
+ * (design §4: answer / clarify / output are mutually exclusive per answerer
+ * run - A MUST emit exactly one of `<workflow-clarify-answer>` (answer B) or
+ * `<workflow-clarify>` (escalate to a human via A's self-clarify); emitting
+ * `<workflow-output>` alone, or any pair, fails the run).
+ *
+ *  - 'answer' -> A answered; the runner stamps `result.clarifyAnswer` and the
+ *    run stays 'done' (outputs empty). The scheduler routes this to
+ *    `commitToAgentAnswerAndTriggerQuestioner` (T12).
+ *  - 'fail'    -> one of the four mutex violations; the runner fails the run
+ *    with the given code + message (retriable; FOLLOWUP_POLICY re-nudges A,
+ *    wording refined in T13).
+ *  - 'defer'   -> A emitted no answer envelope; defer to the RFC-023 dispatch:
+ *    clarify-only means A escalates (existing 'clarify' branch -> result.clarify
+ *    -> scheduler routes to escalateToHuman, T12), clarify+output reuses
+ *    `clarify-and-output-both`, none reuses `envelope-missing`.
+ *
+ * Pure over stdout - the runner composes the to-agent answerer context and
+ * calls this only when the run is an answerer rerun (T11 passes the signal).
+ */
+export type ToAgentAnswererReply =
+  | { kind: 'answer'; answer: ClarifyAnswerEnvelope }
+  | { kind: 'defer' }
+  | { kind: 'fail'; code: ToAgentAnswerFailureCode; message: string }
+
+/**
+ * Analyze answerer A's stdout under the to-agent answer/clarify/output 3-way
+ * mutex. See {@link ToAgentAnswererReply} for the contract. Checks envelope
+ * PRESENCE first (so a malformed answer body co-emitted with output still
+ * fails as the pair violation, not as malformed - the pair is the primary
+ * offense), then parses a lone answer body.
+ */
+export function analyzeToAgentAnswererReply(stdout: string): ToAgentAnswererReply {
+  const answerBody = extractClarifyAnswerEnvelopeBody(stdout)
+  const hasAnswer = answerBody !== null
+  const detected = detectEnvelopeKind(stdout)
+  const hasOutput = detected === 'output' || detected === 'both'
+  const hasClarify = detected === 'clarify' || detected === 'both'
+
+  if (hasAnswer && hasOutput) {
+    return {
+      kind: 'fail',
+      code: 'clarify-to-agent-answer-and-output-both',
+      message:
+        'clarify-to-agent-answer-and-output-both-present: answerer A emitted both <workflow-clarify-answer> and <workflow-output> in one reply; emit exactly one of <workflow-clarify-answer> (answer) or <workflow-clarify> (escalate), never <workflow-output>',
+    }
+  }
+  if (hasAnswer && hasClarify) {
+    return {
+      kind: 'fail',
+      code: 'clarify-to-agent-answer-and-clarify-both',
+      message:
+        'clarify-to-agent-answer-and-clarify-both-present: answerer A emitted both <workflow-clarify-answer> and <workflow-clarify> in one reply; pick one - answer B via <workflow-clarify-answer>, OR escalate to a human via <workflow-clarify>, not both',
+    }
+  }
+  if (!hasAnswer && !hasClarify && hasOutput) {
+    return {
+      kind: 'fail',
+      code: 'clarify-to-agent-timeout-no-answer',
+      message:
+        'clarify-to-agent-timeout-no-answer: answerer A emitted only <workflow-output> (neither answered B via <workflow-clarify-answer> nor escalated via <workflow-clarify>); answer B or escalate, do not produce workflow output',
+    }
+  }
+  if (hasAnswer) {
+    // answer only -> parse the body. JSON.parse throws on non-JSON garbage.
+    let parsedJson: unknown
+    try {
+      parsedJson = JSON.parse(answerBody)
+    } catch {
+      return {
+        kind: 'fail',
+        code: 'clarify-to-agent-answer-malformed',
+        message:
+          'clarify-to-agent-answer-malformed: <workflow-clarify-answer> body is not valid JSON; expected { "markdown": "<your answer>" }',
+      }
+    }
+    const parsed = ClarifyAnswerEnvelopeSchema.safeParse(parsedJson)
+    if (!parsed.success) {
+      return {
+        kind: 'fail',
+        code: 'clarify-to-agent-answer-malformed',
+        message:
+          'clarify-to-agent-answer-malformed: <workflow-clarify-answer> body is missing the required non-empty "markdown" string field; expected { "markdown": "<your answer>" }',
+      }
+    }
+    return { kind: 'answer', answer: parsed.data }
+  }
+  // No answer envelope. Defer to the RFC-023 dispatch:
+  //  - clarify-only     -> existing 'clarify' branch (A escalates; result.clarify
+  //                       set, scheduler routes to escalateToHuman in T12)
+  //  - clarify + output -> existing 'both' branch (clarify-and-output-both)
+  //  - none             -> existing 'none' branch (envelope-missing)
+  return { kind: 'defer' }
 }
 
 /**

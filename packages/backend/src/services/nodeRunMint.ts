@@ -237,8 +237,8 @@ export function schedulerMintCause(
 
 /**
  * RFC-098 WP-10 T-c — gate-2 (`isClarifyRerun`) cause set. TRUE only for the
- * two rerun kinds whose prompt/session semantics are "the SAME logical round
- * continues after a human answered":
+ * rerun kinds whose prompt/session semantics are "the SAME logical round
+ * continues after an answer was injected" (RFC-023 / RFC-056 / RFC-W004):
  *   - 'clarify-answer'                  — RFC-023 self-clarify answer rerun
  *   - 'cross-clarify-questioner-rerun'  — questioner stop / reject / continue
  *     rerun (deliberately minted at retryIndex 0 pre-WP-10 to ride the same
@@ -259,7 +259,11 @@ export function schedulerMintCause(
  * and latest-directive application for that one boundary dispatch.
  */
 export function isClarifyRerunCause(cause: string | null | undefined): boolean {
-  return cause === 'clarify-answer' || cause === 'cross-clarify-questioner-rerun'
+  return (
+    cause === 'clarify-answer' ||
+    cause === 'cross-clarify-questioner-rerun' ||
+    cause === 'clarify-to-agent-questioner-rerun'
+  )
 }
 
 /** RFC-112/113: the frozen runtime snapshot a node_run dispatches/resumes on. */

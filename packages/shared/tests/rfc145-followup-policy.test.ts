@@ -26,7 +26,7 @@ const RENDER_REASONS: readonly EnvelopeFollowupReason[] = [
 ]
 
 describe('RFC-145 FAILURE_CODES — 生产域全集', () => {
-  test('7 值全集（顺序即文档顺序）', () => {
+  test('全集（顺序即文档顺序；RFC-W004 追加 4 个 to-agent answerer 失败码）', () => {
     expect([...FAILURE_CODES]).toEqual([
       'envelope-missing',
       'clarify-and-output-both',
@@ -35,6 +35,11 @@ describe('RFC-145 FAILURE_CODES — 生产域全集', () => {
       'clarify-forbidden',
       'envelope-port-malformed',
       'port-validation-failed',
+      // RFC-W004 T10 (design §7) - to-agent answerer envelope 互斥校验失败码。
+      'clarify-to-agent-answer-and-output-both',
+      'clarify-to-agent-answer-and-clarify-both',
+      'clarify-to-agent-timeout-no-answer',
+      'clarify-to-agent-answer-malformed',
     ])
   })
 })
@@ -54,6 +59,15 @@ describe('RFC-145 FOLLOWUP_POLICY — 7→6 投影表', () => {
     expect(FOLLOWUP_POLICY['clarify-forbidden'].reason).toBe('envelope-missing')
     expect(FOLLOWUP_POLICY['envelope-port-malformed'].reason).toBe('envelope-port-malformed')
     expect(FOLLOWUP_POLICY['port-validation-failed'].reason).toBe('port-validation')
+    // RFC-W004 T10 (design §7): to-agent answerer 互斥失败码占位投影到既有
+    // render reason（T13 扩展 renderer 文案以提到 <workflow-clarify-answer>）。
+    // answer+output / answer+clarify -> both-present（语义：A 同回复合规外的两件）；
+    // timeout-no-answer -> envelope-missing（A 缺了该答的回答信封）；
+    // answer-malformed -> clarify-malformed（answer body 不可解析，对齐 clarify 侧）。
+    expect(FOLLOWUP_POLICY['clarify-to-agent-answer-and-output-both'].reason).toBe('both-present')
+    expect(FOLLOWUP_POLICY['clarify-to-agent-answer-and-clarify-both'].reason).toBe('both-present')
+    expect(FOLLOWUP_POLICY['clarify-to-agent-timeout-no-answer'].reason).toBe('envelope-missing')
+    expect(FOLLOWUP_POLICY['clarify-to-agent-answer-malformed'].reason).toBe('clarify-malformed')
   })
 
   test('reason 值域封闭在 6 值渲染域内；6 值均被至少一个 code 投影到（除非有意留空）', () => {

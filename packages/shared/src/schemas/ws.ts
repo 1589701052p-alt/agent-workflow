@@ -221,6 +221,42 @@ export const TaskWsMessageSchema = z.discriminatedUnion('type', [
     /** Freshly minted questioner rerun row carrying STOP CLARIFYING. */
     questionerNodeRunId: z.string(),
   }),
+  // RFC-W004 to-agent clarify lifecycle (B asks A, A answers B; A escalates to
+  // a human via its own RFC-023 self-clarify channel when it cannot answer).
+  // `sessionId` is the clarify_rounds.id (to-agent has no legacy twin table -
+  // T5 only widened clarify_rounds.kind to 'to-agent'); `nodeRunId` is the
+  // parked to-agent node_run. Mirrors the cross-clarify event shape so the
+  // frontend can treat the two families uniformly.
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify-to-agent.created'),
+    nodeRunId: z.string(),
+    toAgentNodeId: z.string(),
+    sessionId: z.string(),
+    iteration: z.number().int().nonnegative(),
+    sourceQuestionerNodeId: z.string(),
+    answererNodeId: z.string().nullable(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify-to-agent.answered'),
+    nodeRunId: z.string(),
+    sessionId: z.string(),
+    iteration: z.number().int().nonnegative(),
+    /** The answerer A whose run produced the <workflow-clarify-answer>. */
+    answererNodeId: z.string(),
+  }),
+  z.object({
+    id: z.number().int(),
+    type: z.literal('clarify-to-agent.escalated'),
+    nodeRunId: z.string(),
+    sessionId: z.string(),
+    iteration: z.number().int().nonnegative(),
+    /** Answerer A escalated to a human (A emitted <workflow-clarify>, routed
+     *  to A's own RFC-023 self-clarify channel). The to-agent session stays
+     *  awaiting_human until A gets its human answer and re-emits the answer. */
+    answererNodeId: z.string(),
+  }),
 ])
 export type TaskWsMessage = z.infer<typeof TaskWsMessageSchema>
 

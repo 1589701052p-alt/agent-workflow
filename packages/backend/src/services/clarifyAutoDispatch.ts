@@ -270,6 +270,19 @@ export async function autoDispatchClarifyRound(
     )
   }
 
+  // RFC-W004 (PR-1 stub): to-agent rounds (B asks upstream A; A answers directly
+  // via <workflow-clarify-answer>) never go through the human board, so this
+  // quick-channel auto-dispatch does not apply. PR-2 wires the answerer run;
+  // until then to-agent nodes cannot run (T8 runner guard), so this branch is
+  // unreachable - it exists to keep `round.kind` narrowed to the board kinds
+  // after the enum widening.
+  if (round.kind === 'to-agent') {
+    throw new ConflictError(
+      'clarify-to-agent-not-human-board',
+      `clarify round ${originNodeRunId} is kind='to-agent'; to-agent rounds are answered by the upstream agent, not the human board (RFC-W004 PR-2)`,
+    )
+  }
+
   // 1a. The quick channel is a WHOLE-ROUND FINALIZE on a round still AWAITING an answer. Reject an
   //     already-finalized round (status != awaiting_human), mirroring the immediate path's
   //     double-submit rejection (submitClarifyAnswers' `clarify-already-answered`) AND closing the

@@ -99,6 +99,26 @@ export const ClarifyEnvelopeBodySchema = z.object({
 })
 export type ClarifyEnvelopeBody = z.infer<typeof ClarifyEnvelopeBodySchema>
 
+/**
+ * RFC-W004: what `<workflow-clarify-answer>` body JSON.parse must yield.
+ *
+ * Emitted by answerer agent A when it answers questioner B's questions. v1
+ * carries a single markdown blob (A free-form answers all of B's questions in
+ * one response); the whole blob is injected into B's next rerun prompt as a
+ * peer entry in the flat `## Clarify Q&A` block (same surface as human-answered
+ * Q&A - B should not distinguish "answered by A" from "answered by human").
+ *
+ * A structured per-question shape (`{ answers: [{ id, text }] }`) was considered
+ * (proposal §8 / design §2.5) but deferred - the markdown form lets A answer
+ * in its own voice and keeps the B-side injection uniform with self/cross
+ * clarify. If a future RFC needs structured per-question answers, add a
+ * discriminated `shape` field here (additive, no break).
+ */
+export const ClarifyAnswerEnvelopeSchema = z.object({
+  markdown: z.string().min(1),
+})
+export type ClarifyAnswerEnvelope = z.infer<typeof ClarifyAnswerEnvelopeSchema>
+
 /** One user answer for one question. */
 export const ClarifyAnswerSchema = z.object({
   questionId: z.string().min(1),

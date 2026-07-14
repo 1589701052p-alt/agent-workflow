@@ -36,6 +36,10 @@ import {
   CROSS_CLARIFY_OUT_TO_DESIGNER_PORT,
   CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT,
   NODE_KIND,
+  TO_AGENT_CLARIFY_INPUT_PORT_NAME,
+  TO_AGENT_CLARIFY_REQUEST_PORT,
+  TO_AGENT_OUT_TO_ANSWERER_PORT,
+  TO_AGENT_OUT_TO_QUESTIONER_PORT,
   type NodeKind,
 } from './schemas/workflow'
 import { deriveWrapperFanoutOutputs, lookupAgent, type AgentLookup } from './wrapperFanout'
@@ -167,6 +171,7 @@ const PORT_DERIVERS = {
       systemInputs: [
         { name: CLARIFY_RESPONSE_TARGET_PORT_NAME },
         { name: CROSS_CLARIFY_EXTERNAL_FEEDBACK_PORT },
+        { name: TO_AGENT_CLARIFY_REQUEST_PORT },
       ],
       systemOutputs: [{ name: CLARIFY_SOURCE_PORT_NAME }],
     }
@@ -221,6 +226,17 @@ const PORT_DERIVERS = {
     systemOutputs: [
       { name: CROSS_CLARIFY_OUT_TO_DESIGNER_PORT },
       { name: CROSS_CLARIFY_OUT_TO_QUESTIONER_PORT },
+    ],
+  }),
+  'clarify-to-agent': (): DeclaredPorts => ({
+    ...NO_PORTS,
+    // RFC-W004 fixed 1-in/2-out shape (mirrors cross-clarify, but to_answerer
+    // targets the answerer A instead of a designer; A produces a
+    // <workflow-clarify-answer> envelope rather than consuming human answers).
+    systemInputs: [{ name: TO_AGENT_CLARIFY_INPUT_PORT_NAME }],
+    systemOutputs: [
+      { name: TO_AGENT_OUT_TO_ANSWERER_PORT },
+      { name: TO_AGENT_OUT_TO_QUESTIONER_PORT },
     ],
   }),
 } as const satisfies Record<NodeKind, (ctx: DeriverCtx) => DeclaredPorts>
