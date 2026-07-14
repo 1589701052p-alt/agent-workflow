@@ -37,12 +37,11 @@
 //     'clarify-to-agent-answer'); pending to-agent sessions pointing at A
 //     feed the multi-source ## Clarify Request prompt assembly (design §3.4).
 
-import {
-  findToAgentNodesPointingToAnswerer,
-  type ClarifyAnswerEnvelope,
-  type ClarifyQuestion,
-  type ClarifyTruncationWarning,
-  type WorkflowDefinition,
+import type {
+  ClarifyAnswerEnvelope,
+  ClarifyQuestion,
+  ClarifyTruncationWarning,
+  WorkflowDefinition,
 } from '@agent-workflow/shared'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { ulid } from 'ulid'
