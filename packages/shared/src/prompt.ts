@@ -886,6 +886,18 @@ export const FOLLOWUP_POLICY: Record<FailureCode, { reason: EnvelopeFollowupReas
   'clarify-forbidden': { reason: 'envelope-missing' },
   'envelope-port-malformed': { reason: 'envelope-port-malformed' },
   'port-validation-failed': { reason: 'port-validation' },
+  // RFC-W004 to-agent answerer failures (design §7). Mapped to the closest
+  // existing render reason as a PLACEHOLDER: the existing renderEnvelopeFollowup
+  // wording references <workflow-output>/<workflow-clarify> only, so the nudge
+  // is imperfect for the answer envelope until T13 extends the renderer to
+  // mention <workflow-clarify-answer>. The path is dormant until T11 dispatches
+  // to-agent answerer runs; T13 closes the wording gap before e2e. Same-session
+  // follow-up is intended here (mirrors RFC-023 clarify-and-output-both): A gets
+  // re-nudged in-session to emit exactly one of answer/clarify (or escalate).
+  'clarify-to-agent-answer-and-output-both': { reason: 'both-present' },
+  'clarify-to-agent-answer-and-clarify-both': { reason: 'both-present' },
+  'clarify-to-agent-timeout-no-answer': { reason: 'envelope-missing' },
+  'clarify-to-agent-answer-malformed': { reason: 'clarify-malformed' },
 }
 
 export interface EnvelopeFollowupInput {

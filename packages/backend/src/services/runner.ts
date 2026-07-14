@@ -21,8 +21,10 @@ import type {
   ClarifyChannel,
   PromptMode,
   Agent,
+  ClarifyAnswerEnvelope,
   ClarifyPromptContext,
   ClarifyQuestion,
+  ClarifyRequestSource,
   ClarifyTruncationWarning,
   Mcp,
   Plugin,
@@ -48,6 +50,7 @@ import { killProcessTree, fromFileUrl } from '@/util/platform'
 import {
   CLARIFY_FORBIDDEN_PREFIX,
   CLARIFY_REQUIRED_PREFIX,
+  analyzeToAgentAnswererReply,
   detectEnvelopeKind,
   ENVELOPE_PORT_MALFORMED_PREFIX,
   extractClarifyEnvelopeBody,
@@ -173,6 +176,27 @@ export interface RunNodeOptions {
   /** RFC-164: workgroup protocol block replacing the agent-outputs protocol
    *  (threaded to renderUserPrompt.workgroupProtocolBlock; design §5). */
   workgroupProtocolBlock?: string
+  /**
+   * RFC-W004: present iff this dispatch is answerer A's to-agent answer rerun
+   * (cause='clarify-to-agent-answer', minted by toAgentClarify.ts
+   * triggerAnswererRerun). Carries the per-questioner Clarify Request sources
+   * the scheduler composed from every awaiting_human to-agent session pointing
+   * at A (multi-source aggregation, proposal S7 - one A run answers them all).
+   *
+   * Two consumers, both in the runner:
+   *  1. PRESENCE is the signal that gates the to-agent answer/clarify/output
+   *     3-way mutex (analyzeToAgentAnswererReply) BEFORE the RFC-023
+   *     clarify/output dispatch - so a valid `<workflow-clarify-answer>` is not
+   *     misrouted to envelope-missing, and an answer+output pair fails with the
+   *     to-agent code instead of silently parsing the output.
+   *  2. The sources themselves feed renderUserPrompt's `## Clarify Request`
+   *     block (T13 wires the injection; buildClarifyRequestBlock is the pure
+   *     renderer).
+   *
+   * Absent on every other run (A's normal runs, B's runs, followups), so the
+   * existing dispatch is byte-identical for non-answerer runs.
+   */
+  toAgentAnswererSources?: ClarifyRequestSource[]
   /** Skills used by this agent. */
   skills: ResolvedSkill[]
   /**
@@ -390,6 +414,17 @@ export interface RunResult {
     questions: ClarifyQuestion[]
     truncationWarnings: ClarifyTruncationWarning[]
   }
+  /**
+   * RFC-W004: present when this run is answerer A's to-agent answer rerun and A
+   * emitted a valid `<workflow-clarify-answer>` envelope (status will still be
+   * 'done' - A successfully answered B's reverse-ask; `outputs` is empty). The
+   * scheduler reads this and forwards the answer markdown into
+   * `commitToAgentAnswerAndTriggerQuestioner` (T12), which seals the to-agent
+   * round + triggers B's questioner rerun. Mutually exclusive with `clarify`
+   * (A either answers OR escalates via <workflow-clarify>, never both - the
+   * 3-way mutex is enforced by analyzeToAgentAnswererReply).
+   */
+  clarifyAnswer?: ClarifyAnswerEnvelope
 }
 
 // RFC-143 PR-4: pickRuntimeHead moved to ./runtime/head.ts (both drivers select
@@ -1156,9 +1191,39 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   let clarifyResult:
     | { questions: ClarifyQuestion[]; truncationWarnings: ClarifyTruncationWarning[] }
     | undefined
+  // RFC-W004: answerer A's parsed <workflow-clarify-answer> (set only on a
+  // to-agent answerer rerun; see analyzeToAgentAnswererReply).
+  let clarifyAnswerResult: ClarifyAnswerEnvelope | undefined
   if (status === 'done') {
     const accumulatedText = agentText.join('\n')
     const kind = detectEnvelopeKind(accumulatedText)
+    // RFC-W004: when this dispatch is answerer A's to-agent answer rerun
+    // (opts.toAgentAnswererSources set by the scheduler in T11), A's reply must
+    // be exactly one of <workflow-clarify-answer> (answer B) or <workflow-clarify>
+    // (escalate via A's self-clarify). analyzeToAgentAnswererReply enforces the
+    // 3-way answer/clarify/output mutex (design sec.4) and runs BEFORE the
+    // RFC-023 dispatch so a valid answer (which detectEnvelopeKind reports as
+    // 'none' - the answer tag is not recognized there) is not misrouted to
+    // envelope-missing, and an answer+output pair keeps its to-agent failure
+    // code. 'answer' -> stamp clarifyAnswer, run stays 'done' (outputs empty);
+    // 'fail' -> fail with the to-agent code; 'defer' (no answer envelope) ->
+    // fall through to the RFC-023 dispatch unchanged (clarify-only=escalate,
+    // both, none).
+    const toAgentAnswerer = opts.toAgentAnswererSources !== undefined
+    let toAgentResolved = false
+    if (toAgentAnswerer) {
+      const reply = analyzeToAgentAnswererReply(accumulatedText)
+      if (reply.kind === 'answer') {
+        clarifyAnswerResult = reply.answer
+        toAgentResolved = true
+      } else if (reply.kind === 'fail') {
+        status = 'failed'
+        failureCode = reply.code
+        errorMessage = reply.message
+        toAgentResolved = true
+      }
+      // 'defer' -> toAgentResolved stays false -> RFC-023 dispatch runs below.
+    }
     // RFC-100: while mandatory ask-back is ACTIVE (channel wired AND the user
     // has not clicked "Stop clarifying" — RFC-148: directive === 'mandatory'
     // on the clarify-channel ADT), the ONLY valid reply is a
@@ -1170,7 +1235,13 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
     // skipped and the agent finalizes through the normal `<workflow-output>`
     // path below.
     const clarifyActive = clarifyMandatory
-    if (clarifyActive && kind !== 'clarify') {
+    if (toAgentResolved) {
+      // to-agent answer / mutex violation already resolved above; SKIP the
+      // RFC-023 clarify/output dispatch so a valid <workflow-clarify-answer>
+      // is not overwritten with envelope-missing and an answer+output pair
+      // keeps its to-agent failureCode. The 'defer' case (clarify-only=escalate,
+      // clarify+output, none) falls through to the chain below unchanged.
+    } else if (clarifyActive && kind !== 'clarify') {
       status = 'failed'
       failureCode = 'clarify-required'
       errorMessage =
@@ -1476,6 +1547,7 @@ export async function runNode(opts: RunNodeOptions): Promise<RunResult> {
   if (failureCode !== undefined) result.failureCode = failureCode
   if (sessionId !== undefined) result.sessionId = sessionId
   if (clarifyResult !== undefined) result.clarify = clarifyResult
+  if (clarifyAnswerResult !== undefined) result.clarifyAnswer = clarifyAnswerResult
   return result
 }
 

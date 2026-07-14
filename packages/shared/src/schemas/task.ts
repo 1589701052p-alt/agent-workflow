@@ -672,6 +672,23 @@ export const FAILURE_CODES = [
   /** RFC-049 port content validation failed (payload rides in
    *  port_validation_failures_json, NOT in this code). */
   'port-validation-failed',
+  /** RFC-W004: answerer A emitted both <workflow-clarify-answer> and
+   *  <workflow-output> in one reply (design §4 - answer/output/clarify are
+   *  mutually exclusive per answerer run). Mirrors `clarify-and-output-both`
+   *  for the answer envelope. Short form; errorMessage carries the `-present`
+   *  wording, same convention as the RFC-023 sibling. */
+  'clarify-to-agent-answer-and-output-both',
+  /** RFC-W004: answerer A emitted both <workflow-clarify-answer> and
+   *  <workflow-clarify> (answer + escalate) in one reply (proposal A5). */
+  'clarify-to-agent-answer-and-clarify-both',
+  /** RFC-W004: answerer A emitted only <workflow-output> (neither answered
+   *  nor escalated) - proposal A6 "timeout-no-answer". A produced output
+   *  instead of answering B's reverse-ask. */
+  'clarify-to-agent-timeout-no-answer',
+  /** RFC-W004: <workflow-clarify-answer> body present but unparseable / missing
+   *  `markdown` (design §3.2). Mirrors `clarify-questions-malformed` for the
+   *  answer envelope. */
+  'clarify-to-agent-answer-malformed',
 ] as const
 export const FailureCodeSchema = z.enum(FAILURE_CODES)
 export type FailureCode = z.infer<typeof FailureCodeSchema>
