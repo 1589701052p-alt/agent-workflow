@@ -809,6 +809,31 @@ export function findAnswererNodeForToAgent(
 }
 
 /**
+ * RFC-W004: enumerate every to-agent node whose `to_answerer` manual edge
+ * targets `answererNodeId` (the inverse of {@link findAnswererNodeForToAgent}).
+ * Mirrors {@link findCrossClarifyNodesPointingToDesigner}; used by the
+ * multi-source aggregation barrier `evaluateAnswererRerunReadiness` to
+ * collect all to-agent sessions pointing at one answerer A. Returned in
+ * definition node order for stable multi-source `## Clarify Request` assembly.
+ */
+export function findToAgentNodesPointingToAnswerer(
+  definition: WorkflowDefinition,
+  answererNodeId: string,
+): string[] {
+  const edges = definition.edges ?? []
+  const targeting = new Set<string>()
+  for (const e of edges) {
+    if (e.target.nodeId !== answererNodeId) continue
+    if (e.target.portName !== TO_AGENT_CLARIFY_REQUEST_PORT) continue
+    if (e.source.portName !== TO_AGENT_OUT_TO_ANSWERER_PORT) continue
+    targeting.add(e.source.nodeId)
+  }
+  const order = new Map<string, number>()
+  ;(definition.nodes ?? []).forEach((n, idx) => order.set(n.id, idx))
+  return Array.from(targeting).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+}
+
+/**
  * RFC-W004: helper for the canvas reverse-drag interaction. Returns the two
  * auto-edges to splice into definition.edges when the user drags from a
  * to-agent node's input handle onto questioner agent B. The two edges mirror
