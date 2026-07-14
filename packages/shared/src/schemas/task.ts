@@ -593,6 +593,14 @@ export const RERUN_CAUSES = [
   'clarify-park',
   /** RFC-056 cross-clarify node parked at awaiting_human. */
   'cross-clarify-park',
+  /** RFC-W004 to-agent clarify node parked at awaiting_human (B asked A). */
+  'clarify-to-agent-park',
+  /** RFC-W004 to-agent answerer A rerun to answer B's question
+   *  (rolls back to A's pre_snapshot, fresh answer run). */
+  'clarify-to-agent-answer',
+  /** RFC-W004 questioner B rerun carrying A's answer (resumes B's session
+   *  to produce final output with the answer injected as flat Q&A). */
+  'clarify-to-agent-questioner-rerun',
   /** User-picked retryNode target placeholder row (task.ts). */
   'retry-node',
   /** Downstream cascade placeholder minted by retryNode (task.ts). */
